@@ -92,3 +92,41 @@ def test_resolve_path_missing_exits(monkeypatch):
     monkeypatch.delenv("DARKROOM_OUTPUT", raising=False)
     with pytest.raises(SystemExit):
         resolve_path(None, "DARKROOM_OUTPUT", {}, "output_path", "output")
+
+
+from archive_ingest import resolve_filter, KNOWN_FILTERS
+
+
+def test_resolve_filter_known():
+    # When filter is already detected, return it unchanged
+    assert resolve_filter("L-Pro", interactive=False) == ("L-Pro", False)
+    assert resolve_filter("L-Extreme", interactive=False) == ("L-Extreme", False)
+
+
+def test_resolve_filter_non_interactive_unknown():
+    # No TTY: return NoFilter with needs_review=True
+    result = resolve_filter(None, interactive=False)
+    assert result == ("NoFilter", True)
+
+
+def test_resolve_filter_interactive_chooses_from_list(monkeypatch):
+    # Simulate user entering "1" to choose L-Pro
+    monkeypatch.setattr("builtins.input", lambda _: "1")
+    filter_, needs_review = resolve_filter(None, interactive=True, context="M 51 on 2026-02-28")
+    assert filter_ == KNOWN_FILTERS[0]
+    assert needs_review is False
+
+
+def test_resolve_filter_interactive_empty_input_gives_nofilter(monkeypatch):
+    monkeypatch.setattr("builtins.input", lambda _: "")
+    filter_, needs_review = resolve_filter(None, interactive=True, context="M 51 on 2026-02-28")
+    assert filter_ == "NoFilter"
+    assert needs_review is False
+
+
+def test_resolve_filter_interactive_manual_entry(monkeypatch):
+    inputs = iter([str(len(KNOWN_FILTERS) + 1), "AstronomikL2"])
+    monkeypatch.setattr("builtins.input", lambda _: next(inputs))
+    filter_, needs_review = resolve_filter(None, interactive=True, context="M 51 on 2026-02-28")
+    assert filter_ == "AstronomikL2"
+    assert needs_review is False

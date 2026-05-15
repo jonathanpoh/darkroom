@@ -96,6 +96,56 @@ def cal_dest_rel(
 
 
 # ---------------------------------------------------------------------------
+# Filter prompt
+# ---------------------------------------------------------------------------
+
+KNOWN_FILTERS = ["L-Pro", "L-Extreme", "AstronomikL2", "BaaderNeodymium", "OmegonHelievo"]
+
+
+def resolve_filter(
+    detected: str | None,
+    interactive: bool,
+    context: str = "",
+) -> tuple[str, bool]:
+    """Return (filter_str, needs_review).
+
+    If filter is already detected, returns it directly. If missing and interactive,
+    prompts the user. If missing and non-interactive, returns ('NoFilter', True).
+    """
+    if detected is not None:
+        return detected, False
+
+    if not interactive:
+        return "NoFilter", True
+
+    if context:
+        print(f"\nNo filter detected for: {context}")
+    else:
+        print("\nNo filter detected.")
+
+    for i, f in enumerate(KNOWN_FILTERS, 1):
+        print(f"  {i}) {f}")
+    print(f"  {len(KNOWN_FILTERS) + 1}) Enter manually")
+    print("  [Enter] NoFilter")
+
+    while True:
+        try:
+            raw = input("> ").strip()
+            if not raw:
+                return "NoFilter", False
+            n = int(raw)
+            if 1 <= n <= len(KNOWN_FILTERS):
+                return KNOWN_FILTERS[n - 1], False
+            if n == len(KNOWN_FILTERS) + 1:
+                manual = input("Filter name: ").strip()
+                return (manual or "NoFilter"), False
+        except ValueError:
+            print("Please enter a number.")
+        except EOFError:
+            return "NoFilter", False
+
+
+# ---------------------------------------------------------------------------
 # Placeholders for later tasks
 # ---------------------------------------------------------------------------
 
