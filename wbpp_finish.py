@@ -152,6 +152,8 @@ def cmd_finish(
     master_dir = wbpp_target / "master"
     processed_dir = wbpp_target / "processed"
 
+    if not wbpp_target.exists():
+        sys.exit(f"WBPP target dir not found: {wbpp_target}")
     if not master_dir.exists():
         sys.exit(f"master/ not found in {wbpp_target}")
     if not processed_dir.exists():
