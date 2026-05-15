@@ -130,3 +130,78 @@ def test_resolve_filter_interactive_manual_entry(monkeypatch):
     filter_, needs_review = resolve_filter(None, interactive=True, context="M 51 on 2026-02-28")
     assert filter_ == "AstronomikL2"
     assert needs_review is False
+
+
+from archive_ingest import build_session_entry, existing_catalog_sessions, make_cal_set_id
+from darkroom.scanner import Session
+
+
+def _make_session(filter_="L-Pro", n_files=3) -> Session:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        files = []
+        for i in range(n_files):
+            f = Path(tmpdir) / f"Light_M 81_180.0s_Bin1_585MC_gain200_20260219-220{i:02d}00_-20.0C_L-Pro_{i+1:04d}.fit"
+            f.touch()
+            files.append(f)
+        return Session(
+            target="M 81", obs_date="2026-02-19", ota="FRA400",
+            camera="ZWO ASI585MC Pro", filter=filter_, gain=200,
+            temperature_c=-20.0, exposure_sec=180.0, ra_deg=148.888,
+            dec_deg=69.065, files=files,
+        )
+
+
+def test_build_session_entry_new():
+    session = _make_session()
+    output = Path("/staging")
+    entry = build_session_entry(session, output, catalog_sessions={}, interactive=False)
+
+    assert entry["session_id"] == "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    assert entry["status"] == "new"
+    assert entry["needs_review"] is False
+    assert entry["filter"] == "L-Pro"
+    assert entry["frame_count"] == 3
+    assert len(entry["files"]) == 3
+    assert all(f["copy"] is True for f in entry["files"])
+    assert entry["lights_rel_path"] == "04_Deep Sky Objects/M 81/2026-02-19_FRA400_ZWOASI585MCPro_L-Pro/Lights"
+
+
+def test_build_session_entry_existing_same_count():
+    session = _make_session()
+    output = Path("/staging")
+    catalog = {"M81_20260219_FRA400_ZWOASI585MCPro_L-Pro": 3}
+    entry = build_session_entry(session, output, catalog_sessions=catalog, interactive=False)
+
+    assert entry["status"] == "existing"
+    assert entry["files"] == []
+
+
+def test_build_session_entry_no_filter_non_interactive():
+    session = _make_session(filter_=None)
+    output = Path("/staging")
+    entry = build_session_entry(session, output, catalog_sessions={}, interactive=False)
+
+    assert entry["needs_review"] is True
+    assert entry["filter"] is None
+    assert "UnknownFilter" in entry["session_id"]
+
+
+def test_build_session_entry_no_filter_interactive(monkeypatch):
+    monkeypatch.setattr("builtins.input", lambda _: "1")  # choose L-Pro
+    session = _make_session(filter_=None)
+    output = Path("/staging")
+    entry = build_session_entry(session, output, catalog_sessions={}, interactive=True)
+
+    assert entry["needs_review"] is False
+    assert entry["filter"] == "L-Pro"
+    assert entry["session_id"].endswith("_L-Pro")
+
+
+def test_existing_catalog_sessions_empty_when_no_db(tmp_path):
+    result = existing_catalog_sessions(tmp_path / "nonexistent.db")
+    assert result == {}
+
+
+def test_make_cal_set_id():
+    result = make_cal_set_id("Flat", "ZWO ASI585MC Pro", 200, 1.35, -20.0, "2026-02-20")
+    assert result == "Flat_ZWOASI585MCPro_1.35s_200g_-20C_2026-02-20"

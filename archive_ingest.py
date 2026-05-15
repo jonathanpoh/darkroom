@@ -146,6 +146,107 @@ def resolve_filter(
 
 
 # ---------------------------------------------------------------------------
+# Catalog helpers
+# ---------------------------------------------------------------------------
+
+def existing_catalog_sessions(catalog_path: Path) -> dict[str, int]:
+    """Return {session_id: frame_count} for all sessions in the catalog."""
+    if not catalog_path.exists():
+        return {}
+    with sqlite3.connect(catalog_path) as conn:
+        rows = conn.execute("SELECT session_id, frame_count FROM sessions").fetchall()
+    return {r[0]: r[1] for r in rows}
+
+
+def make_cal_set_id(
+    frame_type: str,
+    camera: str,
+    gain: int,
+    exposure_sec: float,
+    temperature_c: float,
+    capture_date: str,
+) -> str:
+    """Build a calibration set primary key."""
+    slug = camera_slug(camera)
+    temp_str = f"{int(temperature_c)}C"
+    return f"{frame_type}_{slug}_{exposure_sec:.3g}s_{gain}g_{temp_str}_{capture_date}"
+
+
+# ---------------------------------------------------------------------------
+# Manifest entry builders
+# ---------------------------------------------------------------------------
+
+def build_session_entry(
+    session: Session,
+    output: Path,
+    catalog_sessions: dict[str, int],
+    interactive: bool,
+) -> dict:
+    """Build one sessions[] manifest entry for the given Session."""
+    filter_, needs_review = resolve_filter(
+        session.filter,
+        interactive=interactive,
+        context=f"{session.target} on {session.obs_date}",
+    )
+
+    # Pass None for filter when unknown so make_session_id uses "UnknownFilter"
+    session_id = make_session_id(
+        session.target,
+        session.obs_date,
+        session.ota,
+        session.camera,
+        None if needs_review else filter_,
+    )
+    dest_rel = session_dest_rel(
+        session.target, session.obs_date, session.ota, session.camera,
+        None if needs_review else filter_,
+    )
+    dest_abs = output / dest_rel
+
+    existing = catalog_sessions.get(session_id)
+    if existing is None:
+        status = "new"
+        file_entries = [
+            {"src": str(f), "dst": str(dest_rel / f.name), "copy": True}
+            for f in sorted(session.files)
+        ]
+    elif existing == len(session.files):
+        status = "existing"
+        file_entries = []
+    else:
+        status = "topup"
+        existing_names = (
+            {p.name for p in dest_abs.iterdir() if p.is_file()}
+            if dest_abs.exists()
+            else set()
+        )
+        file_entries = [
+            {"src": str(f), "dst": str(dest_rel / f.name), "copy": True}
+            for f in sorted(session.files)
+            if f.name not in existing_names
+        ]
+
+    return {
+        "session_id": session_id,
+        "target": session.target,
+        "obs_date": session.obs_date,
+        "ota": session.ota,
+        "camera": session.camera,
+        "filter": None if needs_review else filter_,
+        "gain": session.gain,
+        "temperature_c": session.temperature_c,
+        "exposure_sec": session.exposure_sec,
+        "frame_count": len(session.files),
+        "ra_deg": session.ra_deg,
+        "dec_deg": session.dec_deg,
+        "needs_review": needs_review,
+        "status": status,
+        "lights_rel_path": str(dest_rel),
+        "files": file_entries,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Placeholders for later tasks
 # ---------------------------------------------------------------------------
 
