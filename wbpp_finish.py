@@ -2,6 +2,7 @@
 """wbpp_finish.py — Copy WBPP stacks back to the NAS archive and clean up working dirs."""
 from __future__ import annotations
 
+import argparse
 import os
 import re
 import sys
@@ -135,3 +136,87 @@ def _confirm_and_delete(dirs: list[Path], label: str, *, dry_run: bool) -> None:
             print(f"  Deleted: {d.name}")
         except FileNotFoundError:
             print(f"  Already gone: {d.name}")
+
+
+# ── main command ──────────────────────────────────────────────────────────────
+
+def cmd_finish(
+    *,
+    output: Path,
+    wbpp_root: Path,
+    target: str,
+    dry_run: bool,
+) -> None:
+    slug = _target_slug(target)
+    wbpp_target = wbpp_root / slug
+    master_dir = wbpp_target / "master"
+    processed_dir = wbpp_target / "processed"
+
+    if not master_dir.exists():
+        sys.exit(f"master/ not found in {wbpp_target}")
+    if not processed_dir.exists():
+        sys.exit(f"processed/ not found in {wbpp_target}")
+
+    date_str = _find_master_date(master_dir)
+    dest = _build_dest(output, target, date_str)
+
+    print(f"Destination: {dest}")
+
+    print("\nCopying master/")
+    _copy_flat(master_dir, dest / "master", dry_run=dry_run)
+
+    processed_files = [f for f in processed_dir.iterdir() if f.is_file()]
+    if not processed_files:
+        print("\nWarning: processed/ is empty — skipping")
+    else:
+        print("\nCopying processed/")
+        _copy_flat(processed_dir, dest / "processed", dry_run=dry_run)
+
+    print(f'\nDone. Remember to mark "{target}" as processed in darkroom-catalog once that command is implemented.')
+
+    _confirm_and_delete(
+        _list_intermediates(wbpp_target),
+        "Intermediate directories to delete",
+        dry_run=dry_run,
+    )
+    _confirm_and_delete(
+        _list_outputs(wbpp_target),
+        "Working output directories to delete (master/ and processed/)",
+        dry_run=dry_run,
+    )
+
+
+# ── argument parsing ──────────────────────────────────────────────────────────
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        description="Copy WBPP stacks to the NAS archive and clean up working dirs."
+    )
+    p.add_argument("--target", metavar="NAME", required=True, help='Target name (e.g. "M 81")')
+    p.add_argument("--output", metavar="PATH",
+                   help="Archive root — same value as wbpp_prep.py --output")
+    p.add_argument("--wbpp", metavar="PATH", default="./WBPP",
+                   help="Root for WBPP target dirs (default: ./WBPP)")
+    p.add_argument("--dry-run", action="store_true",
+                   help="Print what would be copied/deleted without making changes")
+    return p
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+
+    output = resolve_path(args.output, "DARKROOM_OUTPUT", "output_path")
+    if output is None:
+        sys.exit("Error: --output / DARKROOM_OUTPUT / darkroom.toml output_path required")
+
+    cmd_finish(
+        output=output,
+        wbpp_root=Path(args.wbpp),
+        target=args.target,
+        dry_run=args.dry_run,
+    )
+
+
+if __name__ == "__main__":
+    main()
