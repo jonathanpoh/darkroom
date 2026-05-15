@@ -1,5 +1,7 @@
 # archive_ingest.py Implementation Plan
 
+> **Historical (2026-05-15).** Implemented. Module now lives at `darkroom/ingest.py`; CLI is `darkroom ingest`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Implement `darkroom/scanner.py` and `archive_ingest.py` to scan an ASIAir Autorun/Plan folder, generate a reviewed YAML manifest, and copy files to a staging directory while registering sessions in `astro_catalog.db`.

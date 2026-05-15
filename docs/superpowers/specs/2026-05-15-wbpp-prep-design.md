@@ -1,5 +1,7 @@
 # wbpp_prep.py — Design Spec
 
+> **Historical (2026-05-15).** Module now lives at `darkroom/prep.py`; CLI is `darkroom wbpp`. See top-level `README.md` and `CLAUDE.md`.
+
 **Date:** 2026-05-15
 **Status:** Approved, pending implementation
 

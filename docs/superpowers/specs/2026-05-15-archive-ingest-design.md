@@ -1,5 +1,7 @@
 # archive_ingest.py — Design Spec
 
+> **Historical (2026-05-15).** Module now lives at `darkroom/ingest.py`; CLI is `darkroom ingest`. See top-level `README.md` and `CLAUDE.md`.
+
 **Date:** 2026-05-15
 **Status:** Approved, pending implementation
 

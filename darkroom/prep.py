@@ -1,17 +1,20 @@
-#!/usr/bin/env python3
-"""wbpp_prep.py — Prepare WBPP symlink sessions from archived catalog data."""
+"""darkroom.prep — Prepare WBPP symlink sessions from archived catalog data."""
 from __future__ import annotations
 
 import argparse
-import os
 import sys
-import tomllib
+from datetime import date as Date
 from itertools import groupby
 from pathlib import Path
 
-from datetime import date as Date
-
-from darkroom.catalog import find_darks, find_flat_darks, find_flats, query_all_sessions, query_sessions
+from darkroom.catalog import (
+    find_darks,
+    find_flat_darks,
+    find_flats,
+    query_all_sessions,
+    query_sessions,
+)
+from darkroom.config import resolve_path
 from darkroom.wbpp import (
     clear_sessions,
     discover_darks,
@@ -22,37 +25,6 @@ from darkroom.wbpp import (
     make_symlinks,
     next_session_num,
 )
-
-
-# ── config resolution ─────────────────────────────────────────────────────────
-
-def _load_toml(path: Path) -> dict:
-    try:
-        with open(path, "rb") as f:
-            return tomllib.load(f)
-    except FileNotFoundError:
-        return {}
-
-
-def _find_toml() -> dict:
-    for candidate in [Path("darkroom.toml"), Path.home() / ".config" / "darkroom" / "darkroom.toml"]:
-        cfg = _load_toml(candidate)
-        if cfg:
-            return cfg
-    return {}
-
-
-def resolve_path(flag_val: str | None, env_var: str, toml_key: str) -> Path | None:
-    """Resolve a path: CLI flag → env var → toml."""
-    if flag_val:
-        return Path(flag_val)
-    env = os.environ.get(env_var)
-    if env:
-        return Path(env)
-    cfg = _find_toml()
-    if toml_key in cfg:
-        return Path(cfg[toml_key])
-    return None
 
 
 # ── --list ────────────────────────────────────────────────────────────────────
@@ -249,28 +221,8 @@ def cmd_prep(
 
 # ── argument parsing ──────────────────────────────────────────────────────────
 
-def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(
-        description="Prepare WBPP symlink sessions from the astro catalog."
-    )
-    p.add_argument("--list", action="store_true", help="List sessions from catalog")
-    p.add_argument("--target", metavar="NAME", help='Target name (e.g. "M 81")')
-    p.add_argument("--date", metavar="YYYY-MM-DD", help="Restrict --target to one night")
-    p.add_argument("--session", metavar="ID", help="Select single session by catalog ID")
-    p.add_argument("--overwrite", action="store_true",
-                   help="Clear and regenerate target WBPP dir before creating symlinks")
-    p.add_argument("--output", metavar="PATH",
-                   help="Archive root (lights and cal paths resolve here)")
-    p.add_argument("--catalog", metavar="PATH", help="Path to astro_catalog.db")
-    p.add_argument("--wbpp", metavar="PATH", default="./WBPP",
-                   help="Root for WBPP output dirs (default: ./WBPP)")
-    return p
-
-
-def main() -> None:
-    parser = build_parser()
-    args = parser.parse_args()
-
+def run(args: argparse.Namespace) -> None:
+    """Entry point invoked by darkroom.cli."""
     catalog = resolve_path(args.catalog, "DARKROOM_CATALOG", "catalog_path")
     if catalog is None:
         sys.exit("Error: --catalog / DARKROOM_CATALOG / darkroom.toml catalog_path required")
@@ -280,19 +232,16 @@ def main() -> None:
         return
 
     if not args.target and not args.session:
-        parser.print_help()
-        sys.exit(1)
+        sys.exit("Error: specify --target or --session (or --list to browse)")
 
     output = resolve_path(args.output, "DARKROOM_OUTPUT", "output_path")
     if output is None:
         sys.exit("Error: --output / DARKROOM_OUTPUT / darkroom.toml output_path required")
 
-    wbpp_root = Path(args.wbpp)
-
     cmd_prep(
         catalog=catalog,
         output=output,
-        wbpp_root=wbpp_root,
+        wbpp_root=Path(args.wbpp),
         target=args.target,
         obs_date=args.date,
         session_id=args.session,
@@ -300,5 +249,22 @@ def main() -> None:
     )
 
 
-if __name__ == "__main__":
-    main()
+def add_subparser(subparsers) -> None:
+    p = subparsers.add_parser(
+        "wbpp",
+        help="Prepare a WBPP symlink session from the catalog",
+        description="Build SESSION_N symlink dirs under <wbpp>/<target>/ for PixInsight WBPP.",
+    )
+    p.add_argument("--list", action="store_true", help="List sessions from catalog")
+    p.add_argument("--target", metavar="NAME", help='Target name (e.g. "M 81")')
+    p.add_argument("--date", metavar="YYYY-MM-DD", help="Restrict --target to one night")
+    p.add_argument("--session", metavar="ID", help="Select single session by catalog ID")
+    p.add_argument("--overwrite", action="store_true",
+                   help="Clear and regenerate target WBPP dir before creating symlinks")
+    p.add_argument("--output", metavar="PATH",
+                   help="Archive root (env: DARKROOM_OUTPUT)")
+    p.add_argument("--catalog", metavar="PATH",
+                   help="astro_catalog.db (env: DARKROOM_CATALOG)")
+    p.add_argument("--wbpp", metavar="PATH", default="./WBPP",
+                   help="Root for WBPP output dirs (default: ./WBPP)")
+    p.set_defaults(func=run)

@@ -16,7 +16,7 @@ import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from fits_cataloger import parse_ota as _fits_parse_ota
+from darkroom.cataloger import parse_ota as _fits_parse_ota
 
 TEMP_RE = re.compile(r"^-?\d+\.?\d*C$")
 EXPOSURE_RE = re.compile(r"_(\d+\.?\d*(?:ms|s))_")

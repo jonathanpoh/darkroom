@@ -1,49 +1,16 @@
-#!/usr/bin/env python3
-"""wbpp_finish.py — Copy WBPP stacks back to the NAS archive and clean up working dirs."""
+"""darkroom.finish — Copy WBPP stacks back to the NAS archive and clean up working dirs."""
 from __future__ import annotations
 
 import argparse
-import os
 import re
 import sqlite3
 import sys
 import shutil
-import tomllib
 from datetime import datetime
 from pathlib import Path
 
-from fits_cataloger import mark_processed
-
-
-# ── config resolution (mirrors wbpp_prep.py) ──────────────────────────────────
-
-def _load_toml(path: Path) -> dict:
-    try:
-        with open(path, "rb") as f:
-            return tomllib.load(f)
-    except FileNotFoundError:
-        return {}
-
-
-def _find_toml() -> dict:
-    for candidate in [Path("darkroom.toml"), Path.home() / ".config" / "darkroom" / "darkroom.toml"]:
-        cfg = _load_toml(candidate)
-        if cfg:
-            return cfg
-    return {}
-
-
-def resolve_path(flag_val: str | None, env_var: str, toml_key: str) -> Path | None:
-    """Resolve a path: CLI flag → env var → toml."""
-    if flag_val:
-        return Path(flag_val)
-    env = os.environ.get(env_var)
-    if env:
-        return Path(env)
-    cfg = _find_toml()
-    if toml_key in cfg:
-        return Path(cfg[toml_key])
-    return None
+from darkroom.cataloger import mark_processed
+from darkroom.config import resolve_path
 
 
 def _target_slug(target: str) -> str:
@@ -268,27 +235,8 @@ def cmd_finish(
 
 # ── argument parsing ──────────────────────────────────────────────────────────
 
-def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(
-        description="Copy WBPP stacks to the NAS archive and clean up working dirs."
-    )
-    p.add_argument("--target", metavar="NAME", required=True, help='Target name (e.g. "M 81")')
-    p.add_argument("--output", metavar="PATH",
-                   help="Archive root — same value as wbpp_prep.py --output")
-    p.add_argument("--catalog", metavar="PATH", help="Path to astro_catalog.db")
-    p.add_argument("--wbpp", metavar="PATH", default="./WBPP",
-                   help="Root for WBPP target dirs (default: ./WBPP)")
-    p.add_argument("--date", metavar="YYYY-MM-DD",
-                   help="Override the auto-derived processing date for the _Processed/<date>/ folder")
-    p.add_argument("--dry-run", action="store_true",
-                   help="Print what would be copied/deleted without making changes")
-    return p
-
-
-def main() -> None:
-    parser = build_parser()
-    args = parser.parse_args()
-
+def run(args: argparse.Namespace) -> None:
+    """Entry point invoked by darkroom.cli."""
     output = resolve_path(args.output, "DARKROOM_OUTPUT", "output_path")
     if output is None:
         sys.exit("Error: --output / DARKROOM_OUTPUT / darkroom.toml output_path required")
@@ -307,5 +255,21 @@ def main() -> None:
     )
 
 
-if __name__ == "__main__":
-    main()
+def add_subparser(subparsers) -> None:
+    p = subparsers.add_parser(
+        "finish",
+        help="Copy WBPP stacks to the archive and mark sessions processed",
+        description="Copy master/ and processed/ to <output>/04_Deep Sky Objects/<target>/_Processed/<date>/, then mark each session as processed in the catalog.",
+    )
+    p.add_argument("--target", metavar="NAME", required=True, help='Target name (e.g. "M 81")')
+    p.add_argument("--output", metavar="PATH",
+                   help="Archive root (env: DARKROOM_OUTPUT)")
+    p.add_argument("--catalog", metavar="PATH",
+                   help="astro_catalog.db (env: DARKROOM_CATALOG)")
+    p.add_argument("--wbpp", metavar="PATH", default="./WBPP",
+                   help="Root for WBPP target dirs (default: ./WBPP)")
+    p.add_argument("--date", metavar="YYYY-MM-DD",
+                   help="Override the auto-derived processing date")
+    p.add_argument("--dry-run", action="store_true",
+                   help="Print what would be copied/deleted without making changes")
+    p.set_defaults(func=run)

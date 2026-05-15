@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+
+# macOS
+.DS_Store
+
+# Project work dirs (transient — not part of source)
+WBPP/
+staging/
+
+# Local config (use darkroom.toml.example as template)
+darkroom.toml

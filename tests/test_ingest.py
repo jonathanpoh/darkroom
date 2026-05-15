@@ -6,13 +6,12 @@ import pytest
 
 
 # Import functions that will exist after implementation
-from archive_ingest import (
+from darkroom.ingest import (
     camera_slug,
     session_dest_rel,
     cal_dest_rel,
-    load_config,
-    resolve_path,
 )
+from darkroom.config import find_toml, resolve_path
 
 
 def test_camera_slug():
@@ -55,46 +54,52 @@ def test_cal_dest_rel_bias():
     assert result == Path("00_Calibration/Bias/ZWOASI585MCPro/Raw")
 
 
-def test_load_config_missing_returns_empty(tmp_path, monkeypatch):
+def test_find_toml_missing_returns_empty(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path))
-    assert load_config() == {}
+    assert find_toml() == {}
 
 
-def test_load_config_reads_project_toml(tmp_path, monkeypatch):
+def test_find_toml_reads_flat_keys(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "darkroom.toml").write_text(
-        '[darkroom]\noutput_path = "/staging"\ncatalog_path = "/catalog.db"\n'
+        'output_path = "/staging"\ncatalog_path = "/catalog.db"\n'
     )
-    config = load_config()
-    assert config["darkroom"]["output_path"] == "/staging"
+    assert find_toml()["output_path"] == "/staging"
+
+
+def test_find_toml_reads_section(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "darkroom.toml").write_text(
+        '[darkroom]\noutput_path = "/staging"\n'
+    )
+    assert find_toml()["output_path"] == "/staging"
 
 
 def test_resolve_path_from_cli():
-    result = resolve_path("/from/cli", "DARKROOM_OUTPUT", {}, "output_path", "output")
-    assert result == Path("/from/cli")
+    assert resolve_path("/from/cli", "DARKROOM_OUTPUT", "output_path") == Path("/from/cli")
 
 
 def test_resolve_path_from_env(monkeypatch):
     monkeypatch.setenv("DARKROOM_OUTPUT", "/from/env")
-    result = resolve_path(None, "DARKROOM_OUTPUT", {}, "output_path", "output")
-    assert result == Path("/from/env")
+    assert resolve_path(None, "DARKROOM_OUTPUT", "output_path") == Path("/from/env")
 
 
-def test_resolve_path_from_config(monkeypatch):
+def test_resolve_path_from_toml(tmp_path, monkeypatch):
     monkeypatch.delenv("DARKROOM_OUTPUT", raising=False)
-    config = {"darkroom": {"output_path": "/from/config"}}
-    result = resolve_path(None, "DARKROOM_OUTPUT", config, "output_path", "output")
-    assert result == Path("/from/config")
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "darkroom.toml").write_text('output_path = "/from/toml"\n')
+    assert resolve_path(None, "DARKROOM_OUTPUT", "output_path") == Path("/from/toml")
 
 
-def test_resolve_path_missing_exits(monkeypatch):
+def test_resolve_path_missing_returns_none(tmp_path, monkeypatch):
     monkeypatch.delenv("DARKROOM_OUTPUT", raising=False)
-    with pytest.raises(SystemExit):
-        resolve_path(None, "DARKROOM_OUTPUT", {}, "output_path", "output")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert resolve_path(None, "DARKROOM_OUTPUT", "output_path") is None
 
 
-from archive_ingest import resolve_filter, KNOWN_FILTERS
+from darkroom.ingest import resolve_filter, KNOWN_FILTERS
 
 
 def test_resolve_filter_known():
@@ -132,7 +137,7 @@ def test_resolve_filter_interactive_manual_entry(monkeypatch):
     assert needs_review is False
 
 
-from archive_ingest import build_session_entry, existing_catalog_sessions, make_cal_set_id
+from darkroom.ingest import build_session_entry, existing_catalog_sessions, make_cal_set_id
 from darkroom.scanner import Session
 
 
@@ -207,7 +212,7 @@ def test_make_cal_set_id():
     assert result == "Flat_ZWOASI585MCPro_1.35s_200g_-20C_2026-02-20"
 
 
-from archive_ingest import build_cal_entry
+from darkroom.ingest import build_cal_entry
 from darkroom.scanner import CalibrationGroup
 
 

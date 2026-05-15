@@ -121,12 +121,12 @@ wheels = [
 ]
 
 [[package]]
-name = "darkroom-ingest"
+name = "darkroom"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "astropy" },
-    { name = "fits-cataloger" },
+    { name = "datasette" },
     { name = "pyyaml" },
 ]
 
@@ -138,7 +138,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "astropy", specifier = ">=5.0" },
-    { name = "fits-cataloger", editable = "../darkroom-catalog" },
+    { name = "datasette", specifier = ">=0.65" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },
 ]
@@ -174,23 +174,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/80/26/80b5480921d71891b
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a1/3a/ffa1259fc018f3bb0e6e8444982909a449478ede805def5593319ff3f732/datasette-0.65.2-py3-none-any.whl", hash = "sha256:d4f342a5c86d073bbb1880a9df792354cae4f951e427b57586713eff1896507f", size = 397412, upload-time = "2025-11-05T18:23:23.916Z" },
 ]
-
-[[package]]
-name = "fits-cataloger"
-version = "0.1.0"
-source = { editable = "../darkroom-catalog" }
-dependencies = [
-    { name = "astropy" },
-    { name = "datasette" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "astropy", specifier = ">=5.0" },
-    { name = "datasette", specifier = ">=0.65" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
-]
-provides-extras = ["dev"]
 
 [[package]]
 name = "flexcache"

@@ -1,63 +1,34 @@
-#!/usr/bin/env python3
-"""archive_ingest.py — Copy a completed ASIAir session into canonical archive structure."""
+"""darkroom.ingest — Copy a completed ASIAir session into canonical archive structure."""
 
 from __future__ import annotations
 
 import argparse
-import os
 import re
 import shutil
 import sqlite3
 import sys
-import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 import yaml
-from fits_cataloger import (
+
+from darkroom.cataloger import (
     init_db,
     make_session_id,
     upsert_calibration_set,
     upsert_session,
 )
-
+from darkroom.config import resolve_path
 from darkroom.scanner import CalibrationGroup, Session, ScanResult, scan_source
 
 
-# ---------------------------------------------------------------------------
-# Config
-# ---------------------------------------------------------------------------
-
-def load_config() -> dict:
-    """Load darkroom.toml from project dir or ~/.config/darkroom/."""
-    for p in [
-        Path("darkroom.toml"),
-        Path.home() / ".config" / "darkroom" / "darkroom.toml",
-    ]:
-        if p.exists():
-            with open(p, "rb") as f:
-                return tomllib.load(f)
-    return {}
-
-
-def resolve_path(
-    cli_val: str | None,
-    env_key: str,
-    config: dict,
-    config_key: str,
-    label: str,
-) -> Path:
-    """Resolve a path from CLI → env var → config, exit with error if missing."""
-    val = cli_val or os.environ.get(env_key) or config.get("darkroom", {}).get(config_key)
-    if not val:
-        print(
-            f"Error: {label} path required. Use --{label}, {env_key} env var, "
-            f"or set {config_key} in darkroom.toml",
-            file=sys.stderr,
+def _require_path(cli_val, env_var, toml_key, label) -> Path:
+    p = resolve_path(cli_val, env_var, toml_key)
+    if p is None:
+        sys.exit(
+            f"Error: --{label} / {env_var} / darkroom.toml {toml_key} required"
         )
-        sys.exit(1)
-    return Path(val)
+    return p
 
 
 # ---------------------------------------------------------------------------
@@ -333,11 +304,11 @@ def build_manifest(
     }
 
 
-def cmd_scan(args: argparse.Namespace, config: dict, *, write_file: bool) -> None:
+def cmd_scan(args: argparse.Namespace, *, write_file: bool) -> None:
     """Handle --dry-run and --manifest modes."""
     source = Path(args.source)
-    output = resolve_path(args.output, "DARKROOM_OUTPUT", config, "output_path", "output")
-    catalog = resolve_path(args.catalog, "DARKROOM_CATALOG", config, "catalog_path", "catalog")
+    output = _require_path(args.output, "DARKROOM_OUTPUT", "output_path", "output")
+    catalog = _require_path(args.catalog, "DARKROOM_CATALOG", "catalog_path", "catalog")
     interactive = sys.stdin.isatty()
 
     if not source.exists():
@@ -358,7 +329,7 @@ def cmd_scan(args: argparse.Namespace, config: dict, *, write_file: bool) -> Non
         )
         print(f"Manifest written to {dest}")
         if needs_review:
-            print(f"  {needs_review} item(s) need filter review — run: archive_ingest.py --review {dest}")
+            print(f"  {needs_review} item(s) need filter review — run: darkroom ingest --review {dest}")
     else:
         print(yaml_str)
 
@@ -367,7 +338,7 @@ def cmd_scan(args: argparse.Namespace, config: dict, *, write_file: bool) -> Non
 # Stubs for later tasks
 # ---------------------------------------------------------------------------
 
-def cmd_review(args: argparse.Namespace, config: dict) -> None:
+def cmd_review(args: argparse.Namespace) -> None:
     """Interactively resolve needs_review items in a saved manifest file."""
     manifest_path = Path(args.review)
     if not manifest_path.exists():
@@ -431,7 +402,7 @@ def cmd_review(args: argparse.Namespace, config: dict) -> None:
         print("No items needed review.")
 
 
-def cmd_commit(args: argparse.Namespace, config: dict) -> None:
+def cmd_commit(args: argparse.Namespace) -> None:
     """Execute a manifest: copy files and register in catalog."""
     if args.commit is True:
         # No manifest file given — scan and commit in one step
@@ -439,8 +410,8 @@ def cmd_commit(args: argparse.Namespace, config: dict) -> None:
             print("Error: --commit without a file requires --source", file=sys.stderr)
             sys.exit(1)
         source = Path(args.source)
-        output = resolve_path(args.output, "DARKROOM_OUTPUT", config, "output_path", "output")
-        catalog = resolve_path(args.catalog, "DARKROOM_CATALOG", config, "catalog_path", "catalog")
+        output = _require_path(args.output, "DARKROOM_OUTPUT", "output_path", "output")
+        catalog = _require_path(args.catalog, "DARKROOM_CATALOG", "catalog_path", "catalog")
         interactive = sys.stdin.isatty()
         scan = scan_source(source)
         manifest = build_manifest(scan, source, output, catalog, interactive)
@@ -463,7 +434,7 @@ def cmd_commit(args: argparse.Namespace, config: dict) -> None:
         print("Error: manifest has unresolved needs_review items:", file=sys.stderr)
         for item in flagged:
             print(f"  - {item}", file=sys.stderr)
-        print("Run: archive_ingest.py --review <manifest>", file=sys.stderr)
+        print("Run: darkroom ingest --review <manifest>", file=sys.stderr)
         sys.exit(1)
 
     init_db(catalog)
@@ -543,41 +514,45 @@ def cmd_commit(args: argparse.Namespace, config: dict) -> None:
     print(f"Done: {files_copied} files copied, {files_skipped} skipped, {catalog_entries} catalog entries written")
 
 
-def main() -> None:
-    parser = _build_parser()
-    args = parser.parse_args()
-    config = load_config()
-
+def run(args: argparse.Namespace) -> None:
+    """Entry point invoked by darkroom.cli."""
     if args.dry_run:
         if not args.source:
-            parser.error("--dry-run requires --source")
-        cmd_scan(args, config, write_file=False)
+            sys.exit("Error: --dry-run requires --source")
+        cmd_scan(args, write_file=False)
     elif args.manifest:
         if not args.source:
-            parser.error("--manifest requires --source")
-        cmd_scan(args, config, write_file=True)
+            sys.exit("Error: --manifest requires --source")
+        cmd_scan(args, write_file=True)
     elif args.review:
-        cmd_review(args, config)
+        cmd_review(args)
     elif args.commit is not None:
-        cmd_commit(args, config)
+        cmd_commit(args)
     else:
-        parser.print_help()
+        sys.exit(
+            "Error: select a mode — --dry-run | --manifest FILE | --review FILE | --commit [FILE]"
+        )
 
 
-def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Archive ASIAir session to canonical folder structure."
+def add_subparser(subparsers) -> None:
+    p = subparsers.add_parser(
+        "ingest",
+        help="Archive a completed ASIAir session into the NAS",
+        description="Copy ASIAir source files into the canonical archive structure and register sessions in the catalog.",
     )
-    parser.add_argument("--source", required=False, metavar="PATH")
-    parser.add_argument("--output", metavar="PATH")
-    parser.add_argument("--catalog", metavar="PATH")
-    mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--dry-run", action="store_true")
-    mode.add_argument("--manifest", metavar="FILE")
-    mode.add_argument("--review", metavar="FILE")
-    mode.add_argument("--commit", nargs="?", const=True, metavar="FILE")
-    return parser
-
-
-if __name__ == "__main__":
-    main()
+    p.add_argument("--source", metavar="PATH",
+                   help="ASIAir Autorun/ folder")
+    p.add_argument("--output", metavar="PATH",
+                   help="Archive root (env: DARKROOM_OUTPUT)")
+    p.add_argument("--catalog", metavar="PATH",
+                   help="astro_catalog.db (env: DARKROOM_CATALOG)")
+    mode = p.add_mutually_exclusive_group()
+    mode.add_argument("--dry-run", action="store_true",
+                      help="Scan and print manifest to stdout, do not write")
+    mode.add_argument("--manifest", metavar="FILE",
+                      help="Scan and write manifest to FILE for review")
+    mode.add_argument("--review", metavar="FILE",
+                      help="Interactively resolve needs_review items in FILE")
+    mode.add_argument("--commit", nargs="?", const=True, metavar="FILE",
+                      help="Execute FILE (or scan+commit if no FILE given)")
+    p.set_defaults(func=run)

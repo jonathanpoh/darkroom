@@ -1,0 +1,20 @@
+# darkroom.toml — config for the `darkroom` CLI.
+#
+# Resolution order for every shared path: CLI flag → environment variable → this file.
+# Drop this file at one of:
+#   ./darkroom.toml                         (project-local)
+#   ~/.config/darkroom/darkroom.toml        (user-global)
+#
+# Either flat keys (below) or a [darkroom] section table are accepted.
+
+# Path to the SQLite catalog. Used by every subcommand. (env: DARKROOM_CATALOG)
+catalog_path = "/Volumes/Astrophotography/astro_catalog.db"
+
+# NAS archive root — contains 04_Deep Sky Objects/, 00_Calibration/, etc.
+# Used by `darkroom ingest`, `darkroom finish`. (env: DARKROOM_OUTPUT)
+output_path = "/Volumes/Astrophotography"
+
+# Optional: equivalent section-table form. Pick one style and stick with it.
+# [darkroom]
+# catalog_path = "/Volumes/Astrophotography/astro_catalog.db"
+# output_path  = "/Volumes/Astrophotography"

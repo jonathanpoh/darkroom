@@ -1,5 +1,7 @@
 # wbpp_finish.py Design
 
+> **Historical (2026-05-15).** Module now lives at `darkroom/finish.py`; CLI is `darkroom finish`. See top-level `README.md` and `CLAUDE.md`.
+
 ## Goal
 
 After PixInsight WBPP completes and the user has processed the stack, copy the stacked masters and processed output back to the NAS archive, then clean up the local WBPP working directory.

@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from astropy.time import Time
-from fits_cataloger import (
+from darkroom.cataloger import (
     FITSHeaderExtractor,
     _normalize_camera,
     _round_exposure,
