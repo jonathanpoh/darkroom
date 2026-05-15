@@ -299,14 +299,101 @@ def build_cal_entry(
 
 
 # ---------------------------------------------------------------------------
-# Placeholders for later tasks
+# Manifest assembly
 # ---------------------------------------------------------------------------
+
+def build_manifest(
+    scan: ScanResult,
+    source: Path,
+    output: Path,
+    catalog: Path,
+    interactive: bool,
+) -> dict:
+    """Build the full manifest dict from a ScanResult."""
+    catalog_sessions = existing_catalog_sessions(catalog)
+
+    session_entries = [
+        build_session_entry(s, output, catalog_sessions, interactive)
+        for s in scan.sessions
+    ]
+    cal_entries = [
+        build_cal_entry(g, output, interactive)
+        for g in scan.calibration
+    ]
+
+    return {
+        "meta": {
+            "source": str(source),
+            "output": str(output),
+            "catalog": str(catalog),
+            "generated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+        },
+        "sessions": session_entries,
+        "calibration": cal_entries,
+    }
+
+
+def cmd_scan(args: argparse.Namespace, config: dict, *, write_file: bool) -> None:
+    """Handle --dry-run and --manifest modes."""
+    source = Path(args.source)
+    output = resolve_path(args.output, "DARKROOM_OUTPUT", config, "output_path", "output")
+    catalog = resolve_path(args.catalog, "DARKROOM_CATALOG", config, "catalog_path", "catalog")
+    interactive = sys.stdin.isatty()
+
+    if not source.exists():
+        print(f"Error: source path does not exist: {source}", file=sys.stderr)
+        sys.exit(1)
+
+    scan = scan_source(source)
+    manifest = build_manifest(scan, source, output, catalog, interactive)
+
+    yaml_str = yaml.dump(manifest, default_flow_style=False, sort_keys=False, allow_unicode=True)
+
+    if write_file:
+        dest = Path(args.manifest)
+        dest.write_text(yaml_str)
+        needs_review = sum(
+            1 for e in manifest["sessions"] + manifest["calibration"]
+            if e.get("needs_review")
+        )
+        print(f"Manifest written to {dest}")
+        if needs_review:
+            print(f"  {needs_review} item(s) need filter review — run: archive_ingest.py --review {dest}")
+    else:
+        print(yaml_str)
+
+
+# ---------------------------------------------------------------------------
+# Stubs for later tasks
+# ---------------------------------------------------------------------------
+
+def cmd_review(args: argparse.Namespace, config: dict) -> None:
+    raise NotImplementedError("--review not yet implemented")
+
+
+def cmd_commit(args: argparse.Namespace, config: dict) -> None:
+    raise NotImplementedError("--commit not yet implemented")
+
 
 def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
     config = load_config()
-    print("archive_ingest: not fully implemented yet")
+
+    if args.dry_run:
+        if not args.source:
+            parser.error("--dry-run requires --source")
+        cmd_scan(args, config, write_file=False)
+    elif args.manifest:
+        if not args.source:
+            parser.error("--manifest requires --source")
+        cmd_scan(args, config, write_file=True)
+    elif args.review:
+        cmd_review(args, config)
+    elif args.commit is not None:
+        cmd_commit(args, config)
+    else:
+        parser.print_help()
 
 
 def _build_parser() -> argparse.ArgumentParser:
