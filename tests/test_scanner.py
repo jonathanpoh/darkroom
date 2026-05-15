@@ -122,3 +122,100 @@ def test_scan_source_empty_source():
         result = scan_source(Path(tmpdir))
     assert result.sessions == []
     assert result.calibration == []
+
+
+def dark_meta(filename_stem: str, exposure: float, date_obs: str = "2026-02-20T09:20:00") -> dict:
+    return {
+        "filename_stem": filename_stem,
+        "file_path": "",
+        "date_obs": date_obs,
+        "exposure": exposure,
+        "camera": "ZWO ASI585MC Pro",
+        "gain": 200,
+        "temperature": -20.0,
+        "object": "",
+        "filter_header": None,
+        "imagetyp": "Dark Frame",
+        "focallen": 400,
+        "ra_deg": None,
+        "dec_deg": None,
+    }
+
+
+def test_scan_calibration_dark_classified():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        source = Path(tmpdir)
+        dark_dir = source / "Dark"
+        dark_dir.mkdir(parents=True)
+        f = dark_dir / "Dark_180.0s_Bin1_585MC_gain200_20260220-092000_-20.0C_0001.fit"
+        f.touch()
+
+        with patch("darkroom.scanner.FITSHeaderExtractor.extract_metadata",
+                   return_value={**dark_meta(f.stem, 180.0), "file_path": str(f)}):
+            result = scan_source(source)
+
+    assert len(result.calibration) == 1
+    assert result.calibration[0].frame_type == "Dark"
+    assert result.calibration[0].exposure_sec == 180.0
+    assert result.calibration[0].capture_date == "2026-02-20"
+
+
+def test_scan_calibration_flatdark_reclassified():
+    # Short darks (< 10s) in the Dark/ folder are reclassified as FlatDark
+    with tempfile.TemporaryDirectory() as tmpdir:
+        source = Path(tmpdir)
+        dark_dir = source / "Dark"
+        dark_dir.mkdir(parents=True)
+        f = dark_dir / "Dark_1.35s_Bin1_585MC_gain200_20260220-093000_-20.0C_0001.fit"
+        f.touch()
+
+        with patch("darkroom.scanner.FITSHeaderExtractor.extract_metadata",
+                   return_value={**dark_meta(f.stem, 1.35), "file_path": str(f)}):
+            result = scan_source(source)
+
+    assert len(result.calibration) == 1
+    assert result.calibration[0].frame_type == "FlatDark"
+
+
+def test_scan_calibration_flat_with_filter():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        source = Path(tmpdir)
+        flat_dir = source / "Flat"
+        flat_dir.mkdir(parents=True)
+        f = flat_dir / "Flat_1.35s_Bin1_585MC_gain200_20260220-090000_-20.0C_L-Pro_0001.fit"
+        f.touch()
+
+        meta = {
+            **dark_meta(f.stem, 1.35, "2026-02-20T09:00:00"),
+            "file_path": str(f),
+            "imagetyp": "Flat Frame",
+        }
+        with patch("darkroom.scanner.FITSHeaderExtractor.extract_metadata", return_value=meta):
+            result = scan_source(source)
+
+    assert len(result.calibration) == 1
+    cal = result.calibration[0]
+    assert cal.frame_type == "Flat"
+    assert cal.filter == "L-Pro"
+    assert cal.exposure_sec == 1.35
+
+
+def test_scan_calibration_groups_same_params():
+    # Two files with identical params land in one CalibrationGroup
+    with tempfile.TemporaryDirectory() as tmpdir:
+        source = Path(tmpdir)
+        dark_dir = source / "Dark"
+        dark_dir.mkdir(parents=True)
+        f1 = dark_dir / "Dark_180.0s_Bin1_585MC_gain200_20260220-092000_-20.0C_0001.fit"
+        f2 = dark_dir / "Dark_180.0s_Bin1_585MC_gain200_20260220-093000_-20.0C_0002.fit"
+        f1.touch()
+        f2.touch()
+
+        def mock_extract(path):
+            return {**dark_meta(path.stem, 180.0), "file_path": str(path)}
+
+        with patch("darkroom.scanner.FITSHeaderExtractor.extract_metadata", side_effect=mock_extract):
+            result = scan_source(source)
+
+    assert len(result.calibration) == 1
+    assert len(result.calibration[0].files) == 2
