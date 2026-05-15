@@ -72,13 +72,19 @@ def _copy_flat(src_dir: Path, dest_dir: Path, *, dry_run: bool) -> int:
     count = 0
     for f in files:
         dest = dest_dir / f.name
-        if dest.exists():
-            print(f"  skip (exists): {f.name}")
-            continue
+        if dest.exists() and not dest.is_file():
+            sys.exit(f"Collision: {dest} exists but is not a file — aborting")
         if dry_run:
-            print(f"  [dry-run] {f} → {dest}")
+            if dest.exists():
+                print(f"  [dry-run] skip (exists): {f.name}")
+            else:
+                print(f"  [dry-run] {f} → {dest}")
+                count += 1
         else:
-            shutil.copy2(f, dest)
-            print(f"  {f.name} → {dest}")
-        count += 1
+            if dest.exists():
+                print(f"  skip (exists): {f.name}")
+            else:
+                shutil.copy2(f, dest)
+                print(f"  {f.name} → {dest}")
+                count += 1
     return count

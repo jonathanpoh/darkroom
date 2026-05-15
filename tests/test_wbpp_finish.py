@@ -75,3 +75,14 @@ def test_copy_flat_dry_run_does_not_copy(tmp_path):
     count = _copy_flat(src, dest, dry_run=True)
     assert count == 1
     assert not dest.exists()
+
+
+def test_copy_flat_ignores_subdirs(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "subdir").mkdir()
+    touch(src / "file.xisf")
+    dest = tmp_path / "dest"
+    count = _copy_flat(src, dest, dry_run=False)
+    assert count == 1
+    assert not (dest / "subdir").exists()
