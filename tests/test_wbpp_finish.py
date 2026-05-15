@@ -1,8 +1,12 @@
 import pytest
 from datetime import date
 from pathlib import Path
+from unittest.mock import patch
 
-from wbpp_finish import _find_master_date, _build_dest, _copy_flat
+from wbpp_finish import (
+    _find_master_date, _build_dest, _copy_flat,
+    _list_intermediates, _list_outputs, _confirm_and_delete,
+)
 
 
 def touch(p: Path, content: bytes = b"") -> Path:
@@ -86,3 +90,69 @@ def test_copy_flat_ignores_subdirs(tmp_path):
     count = _copy_flat(src, dest, dry_run=False)
     assert count == 1
     assert not (dest / "subdir").exists()
+
+
+def test_list_intermediates_returns_existing(tmp_path):
+    (tmp_path / "calibrated").mkdir()
+    (tmp_path / "debayered").mkdir()
+    (tmp_path / "SESSION_1").mkdir()
+    (tmp_path / "SESSION_2").mkdir()
+    (tmp_path / "master").mkdir()        # should NOT appear
+    (tmp_path / "processed").mkdir()     # should NOT appear
+    result = _list_intermediates(tmp_path)
+    names = {p.name for p in result}
+    assert "calibrated" in names
+    assert "debayered" in names
+    assert "SESSION_1" in names
+    assert "SESSION_2" in names
+    assert "master" not in names
+    assert "processed" not in names
+
+
+def test_list_intermediates_skips_missing(tmp_path):
+    (tmp_path / "SESSION_1").mkdir()
+    result = _list_intermediates(tmp_path)
+    assert len(result) == 1
+    assert result[0].name == "SESSION_1"
+
+
+def test_list_outputs_returns_master_and_processed(tmp_path):
+    (tmp_path / "master").mkdir()
+    (tmp_path / "processed").mkdir()
+    result = _list_outputs(tmp_path)
+    names = {p.name for p in result}
+    assert names == {"master", "processed"}
+
+
+def test_list_outputs_skips_missing(tmp_path):
+    (tmp_path / "master").mkdir()
+    result = _list_outputs(tmp_path)
+    assert len(result) == 1
+    assert result[0].name == "master"
+
+
+def test_confirm_and_delete_dry_run_does_not_delete(tmp_path):
+    d = tmp_path / "calibrated"
+    d.mkdir()
+    _confirm_and_delete([d], "Intermediates", dry_run=True)
+    assert d.exists()
+
+
+def test_confirm_and_delete_yes_deletes(tmp_path):
+    d = tmp_path / "calibrated"
+    d.mkdir()
+    with patch("builtins.input", return_value="yes"):
+        _confirm_and_delete([d], "Intermediates", dry_run=False)
+    assert not d.exists()
+
+
+def test_confirm_and_delete_no_skips(tmp_path):
+    d = tmp_path / "calibrated"
+    d.mkdir()
+    with patch("builtins.input", return_value=""):
+        _confirm_and_delete([d], "Intermediates", dry_run=False)
+    assert d.exists()
+
+
+def test_confirm_and_delete_empty_list(tmp_path):
+    _confirm_and_delete([], "Intermediates", dry_run=False)  # should not raise

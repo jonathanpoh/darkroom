@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 import shutil
 import tomllib
@@ -88,3 +89,46 @@ def _copy_flat(src_dir: Path, dest_dir: Path, *, dry_run: bool) -> int:
                 print(f"  {f.name} → {dest}")
                 count += 1
     return count
+
+
+# ── cleanup helpers ──────────────────────────────────────────────────────────
+
+_INTERMEDIATE_NAMES = {"calibrated", "debayered", "fastIntegration", "logs"}
+
+
+def _list_intermediates(wbpp_target_dir: Path) -> list[Path]:
+    """Return existing intermediate dirs (named dirs + SESSION_N dirs) inside wbpp_target_dir."""
+    result = []
+    for p in wbpp_target_dir.iterdir():
+        if p.is_dir() and (p.name in _INTERMEDIATE_NAMES or re.fullmatch(r"SESSION_\d+", p.name)):
+            result.append(p)
+    return sorted(result)
+
+
+def _list_outputs(wbpp_target_dir: Path) -> list[Path]:
+    """Return existing master/ and processed/ dirs inside wbpp_target_dir."""
+    result = []
+    for name in ("master", "processed"):
+        p = wbpp_target_dir / name
+        if p.exists():
+            result.append(p)
+    return result
+
+
+def _confirm_and_delete(dirs: list[Path], label: str, *, dry_run: bool) -> None:
+    """List dirs, prompt for confirmation, delete if confirmed. No-op if dirs is empty."""
+    if not dirs:
+        return
+    print(f"\n{label}:")
+    for d in dirs:
+        print(f"  {d}")
+    if dry_run:
+        print("  [dry-run] would delete above")
+        return
+    answer = input("Delete these directories? [yes/N] ").strip()
+    if answer != "yes":
+        print("  Skipped.")
+        return
+    for d in dirs:
+        shutil.rmtree(d)
+        print(f"  Deleted: {d.name}")
