@@ -470,8 +470,16 @@ def cmd_commit(args: argparse.Namespace, config: dict) -> None:
     files_copied = 0
     files_skipped = 0
 
+    all_entries = manifest.get("sessions", []) + manifest.get("calibration", [])
+    total_to_copy = sum(
+        1 for e in all_entries
+        if e.get("status") != "existing"
+        for f in e.get("files", [])
+        if f.get("copy")
+    )
+
     # Copy files
-    for entry in manifest.get("sessions", []) + manifest.get("calibration", []):
+    for entry in all_entries:
         if entry.get("status") == "existing":
             continue
         for f in entry.get("files", []):
@@ -486,6 +494,10 @@ def cmd_commit(args: argparse.Namespace, config: dict) -> None:
                 continue
             shutil.copy2(src, dst)
             files_copied += 1
+            print(f"\rCopying: {files_copied}/{total_to_copy}", end="", flush=True)
+
+    if total_to_copy:
+        print()
 
     # Upsert catalog entries
     catalog_entries = 0
