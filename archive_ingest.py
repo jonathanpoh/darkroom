@@ -246,6 +246,58 @@ def build_session_entry(
     }
 
 
+def build_cal_entry(
+    group: CalibrationGroup,
+    output: Path,
+    interactive: bool,
+) -> dict:
+    """Build one calibration[] manifest entry for the given CalibrationGroup."""
+    # Filter resolution only matters for Flat/FlatDark
+    if group.frame_type in ("Flat", "FlatDark"):
+        filter_, needs_review = resolve_filter(
+            group.filter,
+            interactive=interactive,
+            context=f"{group.frame_type} on {group.capture_date}",
+        )
+    else:
+        filter_ = group.filter
+        needs_review = False
+
+    set_id = make_cal_set_id(
+        group.frame_type, group.camera, group.gain,
+        group.exposure_sec, group.temperature_c, group.capture_date,
+    )
+    dest_rel = cal_dest_rel(
+        group.frame_type, group.camera, group.ota, filter_, group.capture_date
+    )
+    dest_abs = output / dest_rel
+
+    file_entries = []
+    for f in sorted(group.files):
+        dest_file = dest_abs / f.name
+        file_entries.append({
+            "src": str(f),
+            "dst": str(dest_rel / f.name),
+            "copy": not dest_file.exists(),
+        })
+
+    return {
+        "set_id": set_id,
+        "frame_type": group.frame_type,
+        "camera": group.camera,
+        "ota": group.ota,
+        "filter": None if needs_review else filter_,
+        "gain": group.gain,
+        "exposure_sec": group.exposure_sec,
+        "temperature_c": group.temperature_c,
+        "capture_date": group.capture_date,
+        "frame_count": len(group.files),
+        "needs_review": needs_review,
+        "folder_rel_path": str(dest_rel),
+        "files": file_entries,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Placeholders for later tasks
 # ---------------------------------------------------------------------------

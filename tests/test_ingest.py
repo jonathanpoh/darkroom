@@ -205,3 +205,62 @@ def test_existing_catalog_sessions_empty_when_no_db(tmp_path):
 def test_make_cal_set_id():
     result = make_cal_set_id("Flat", "ZWO ASI585MC Pro", 200, 1.35, -20.0, "2026-02-20")
     assert result == "Flat_ZWOASI585MCPro_1.35s_200g_-20C_2026-02-20"
+
+
+from archive_ingest import build_cal_entry
+from darkroom.scanner import CalibrationGroup
+
+
+def _make_cal_group(frame_type="Flat", filter_="L-Pro", n_files=2) -> CalibrationGroup:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        files = []
+        for i in range(n_files):
+            f = Path(tmpdir) / f"Flat_1.35s_Bin1_585MC_gain200_20260220-09{i:02d}00_-20.0C_L-Pro_{i+1:04d}.fit"
+            f.touch()
+            files.append(f)
+        return CalibrationGroup(
+            frame_type=frame_type, camera="ZWO ASI585MC Pro", ota="FRA400",
+            filter=filter_, gain=200, exposure_sec=1.35, temperature_c=-20.0,
+            capture_date="2026-02-20", files=files,
+        )
+
+
+def test_build_cal_entry_flat_all_new(tmp_path):
+    group = _make_cal_group()
+    entry = build_cal_entry(group, output=tmp_path, interactive=False)
+
+    assert entry["set_id"] == "Flat_ZWOASI585MCPro_1.35s_200g_-20C_2026-02-20"
+    assert entry["frame_type"] == "Flat"
+    assert entry["filter"] == "L-Pro"
+    assert entry["needs_review"] is False
+    assert entry["folder_rel_path"] == "00_Calibration/Flats/FRA400_ZWOASI585MCPro_L-Pro/2026-02-20"
+    assert len(entry["files"]) == 2
+    assert all(f["copy"] is True for f in entry["files"])
+
+
+def test_build_cal_entry_files_already_at_dest(tmp_path):
+    group = _make_cal_group(n_files=1)
+    dest_dir = tmp_path / "00_Calibration" / "Flats" / "FRA400_ZWOASI585MCPro_L-Pro" / "2026-02-20"
+    dest_dir.mkdir(parents=True)
+    # Pre-create the file at destination
+    (dest_dir / group.files[0].name).touch()
+
+    entry = build_cal_entry(group, output=tmp_path, interactive=False)
+
+    assert len(entry["files"]) == 1
+    assert entry["files"][0]["copy"] is False
+
+
+def test_build_cal_entry_dark_no_filter():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        group = CalibrationGroup(
+            frame_type="Dark", camera="ZWO ASI585MC Pro", ota="FRA400",
+            filter=None, gain=200, exposure_sec=180.0, temperature_c=-20.0,
+            capture_date="2026-02-20",
+            files=[Path(tmpdir) / "Dark_180.0s_Bin1_585MC_gain200_20260220-092000_-20.0C_0001.fit"],
+        )
+        group.files[0].touch()
+        entry = build_cal_entry(group, output=Path(tmpdir) / "out", interactive=False)
+
+    assert entry["needs_review"] is False
+    assert entry["folder_rel_path"] == "00_Calibration/Darks/ZWOASI585MCPro"
