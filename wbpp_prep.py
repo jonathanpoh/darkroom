@@ -13,10 +13,12 @@ from datetime import date as Date
 
 from darkroom.catalog import find_darks, find_flat_darks, find_flats, query_all_sessions, query_sessions
 from darkroom.wbpp import (
+    clear_sessions,
     discover_darks,
     discover_flat_darks,
     discover_flat_files,
     discover_lights,
+    find_real_files,
     make_symlinks,
     next_session_num,
 )
@@ -87,13 +89,13 @@ def _overwrite_target_dir(target_dir: Path) -> None:
     If real (non-symlink) files are found, warns and requires 'yes' confirmation.
     Deletes only SESSION_N subdirs — target_dir itself is preserved.
     """
-    from darkroom.wbpp import clear_sessions, find_real_files
-
     real_files = find_real_files(target_dir)
     if real_files:
         print(f"WARNING: Real files found in {target_dir}/ (not symlinks):")
         for f in real_files:
             print(f"  {f}")
+        if not sys.stdin.isatty():
+            sys.exit("Aborted: real files found and no TTY to confirm deletion.")
         answer = input(
             "\nThese will be permanently deleted. Type 'yes' to continue, or press Enter to abort: "
         ).strip()
