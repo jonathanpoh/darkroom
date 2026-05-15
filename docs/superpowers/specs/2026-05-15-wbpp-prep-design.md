@@ -14,8 +14,8 @@ never writes to the catalog, and never modifies the archive.
 
 ```
 wbpp_prep.py --list [--target "M 81"]
-wbpp_prep.py --target "M 81" [--date 2026-02-19]
-wbpp_prep.py --session M81_20260219_FRA400_ZWOASI585MCPro_L-Pro
+wbpp_prep.py --target "M 81" [--date 2026-02-19] [--overwrite]
+wbpp_prep.py --session M81_20260219_FRA400_ZWOASI585MCPro_L-Pro [--overwrite]
              [--output <path>] [--catalog <path>] [--wbpp <path>]
 ```
 
@@ -25,6 +25,7 @@ wbpp_prep.py --session M81_20260219_FRA400_ZWOASI585MCPro_L-Pro
 | `--target <name>` | Target name as stored in catalog (e.g. `"M 81"`) |
 | `--date <YYYY-MM-DD>` | Restrict `--target` to one imaging night |
 | `--session <id>` | Select a single session by catalog ID |
+| `--overwrite` | Clear and regenerate the target's WBPP dir before creating symlinks |
 | `--output <path>` | Archive root — lights and calibration paths resolve against this |
 | `--catalog <path>` | Path to `astro_catalog.db` |
 | `--wbpp <path>` | Root for WBPP output dirs (default: `./WBPP`) |
@@ -160,6 +161,31 @@ Missing calibration warnings appear inline:
 ```
   Flats/FILTER_L-Pro/       0 symlinks  [no flats found — skipped]
 ```
+
+## --overwrite Behaviour
+
+When `--overwrite` is given, the target WBPP directory (`<--wbpp>/<TargetSlug>/`)
+is cleared and fully regenerated before creating new symlinks.
+
+**Safety check — performed before any deletion:**
+
+Recursively scan the target dir for any entry that is not a symlink (i.e. a real
+file or a non-empty real directory). If any are found, print a warning and prompt
+for confirmation:
+
+```
+WARNING: Real files found in WBPP/M81/ (not symlinks):
+  WBPP/M81/SESSION_1/Lights/FILTER_L-Pro/stacked_result.xisf
+  WBPP/M81/notes.txt
+
+These will be permanently deleted. Type 'yes' to continue, or press Enter to abort:
+```
+
+If the user does not type `yes`, abort without touching anything.
+
+If confirmed (or if no real files were found), delete all `SESSION_*`
+subdirectories inside the target dir, then proceed with fresh symlink generation.
+The target dir itself (`<TargetSlug>/`) is not deleted — only its contents.
 
 ## Workflow
 
