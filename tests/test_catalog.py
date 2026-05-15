@@ -174,6 +174,15 @@ def test_find_flat_darks_exposure_tolerance(tmp_path):
     assert len(rows) == 1
 
 
+def test_find_flat_darks_date_plus_one(tmp_path):
+    db = make_db(tmp_path)
+    # FlatDark is on 2026-02-20; passing flat_capture_date=2026-02-19 (flat_date+1 fallback)
+    rows = find_flat_darks(db, camera="ZWO ASI585MC Pro",
+                           flat_exposure_sec=1.35, flat_capture_date="2026-02-19")
+    assert len(rows) == 1
+    assert rows[0]["capture_date"] == "2026-02-20"
+
+
 def test_find_flat_darks_no_match(tmp_path):
     db = make_db(tmp_path)
     rows = find_flat_darks(db, camera="ZWO ASI585MC Pro",
