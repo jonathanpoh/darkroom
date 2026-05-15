@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+import shutil
 import tomllib
 from datetime import datetime
 from pathlib import Path
@@ -59,3 +60,25 @@ def _find_master_date(master_dir: Path) -> str:
 def _build_dest(output: Path, target: str, date_str: str) -> Path:
     """Return <output>/04_Deep Sky Objects/<target>/_Processed/<date_str>."""
     return output / "04_Deep Sky Objects" / target / "_Processed" / date_str
+
+
+def _copy_flat(src_dir: Path, dest_dir: Path, *, dry_run: bool) -> int:
+    """Copy all files from src_dir into dest_dir (flat, no subdirs). Returns count copied."""
+    files = sorted(f for f in src_dir.iterdir() if f.is_file())
+    if not files:
+        return 0
+    if not dry_run:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+    count = 0
+    for f in files:
+        dest = dest_dir / f.name
+        if dest.exists():
+            print(f"  skip (exists): {f.name}")
+            continue
+        if dry_run:
+            print(f"  [dry-run] {f} → {dest}")
+        else:
+            shutil.copy2(f, dest)
+            print(f"  {f.name} → {dest}")
+        count += 1
+    return count
