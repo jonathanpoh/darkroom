@@ -368,7 +368,67 @@ def cmd_scan(args: argparse.Namespace, config: dict, *, write_file: bool) -> Non
 # ---------------------------------------------------------------------------
 
 def cmd_review(args: argparse.Namespace, config: dict) -> None:
-    raise NotImplementedError("--review not yet implemented")
+    """Interactively resolve needs_review items in a saved manifest file."""
+    manifest_path = Path(args.review)
+    if not manifest_path.exists():
+        print(f"Error: manifest file not found: {manifest_path}", file=sys.stderr)
+        sys.exit(1)
+
+    manifest = yaml.safe_load(manifest_path.read_text())
+    changed = False
+
+    for entry in manifest.get("sessions", []) + manifest.get("calibration", []):
+        if not entry.get("needs_review"):
+            continue
+
+        is_session = "lights_rel_path" in entry
+        context = (
+            f"{entry['target']} on {entry['obs_date']}"
+            if is_session
+            else f"{entry['frame_type']} on {entry['capture_date']}"
+        )
+        filter_, _ = resolve_filter(None, interactive=True, context=context)
+        entry["filter"] = filter_
+        entry["needs_review"] = False
+
+        if is_session:
+            # Recalculate session_id, lights_rel_path, and all file dst paths
+            new_session_id = make_session_id(
+                entry["target"], entry["obs_date"],
+                entry["ota"], entry["camera"], filter_,
+            )
+            new_dest_rel = session_dest_rel(
+                entry["target"], entry["obs_date"],
+                entry["ota"], entry["camera"], filter_,
+            )
+            entry["session_id"] = new_session_id
+            entry["lights_rel_path"] = str(new_dest_rel)
+            for f in entry.get("files", []):
+                f["dst"] = str(new_dest_rel / Path(f["dst"]).name)
+        else:
+            # Recalculate set_id, folder_rel_path, and all file dst paths
+            new_set_id = make_cal_set_id(
+                entry["frame_type"], entry["camera"], entry["gain"],
+                entry["exposure_sec"], entry["temperature_c"], entry["capture_date"],
+            )
+            new_dest_rel = cal_dest_rel(
+                entry["frame_type"], entry["camera"], entry["ota"],
+                filter_, entry["capture_date"],
+            )
+            entry["set_id"] = new_set_id
+            entry["folder_rel_path"] = str(new_dest_rel)
+            for f in entry.get("files", []):
+                f["dst"] = str(new_dest_rel / Path(f["dst"]).name)
+
+        changed = True
+
+    if changed:
+        manifest_path.write_text(
+            yaml.dump(manifest, default_flow_style=False, sort_keys=False, allow_unicode=True)
+        )
+        print(f"Updated: {manifest_path}")
+    else:
+        print("No items needed review.")
 
 
 def cmd_commit(args: argparse.Namespace, config: dict) -> None:
