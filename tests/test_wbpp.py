@@ -106,6 +106,13 @@ def test_discover_flat_darks_matches_date(tmp_path):
     assert "20260220" in files[0].name
 
 
+def test_discover_flat_darks_wrong_date_excluded(tmp_path):
+    d = tmp_path / "FlatDarks"
+    touch(d / "Dark_1.35s_Bin1_585MC_gain200_20260221-053000_-20.0C_0001.fit")
+    files = discover_flat_darks(d, capture_date=date(2026, 2, 20))
+    assert files == []
+
+
 def test_discover_flat_darks_missing_dir(tmp_path):
     files = discover_flat_darks(tmp_path / "nonexistent", capture_date=date(2026, 2, 20))
     assert files == []
@@ -156,7 +163,7 @@ def test_find_real_files_finds_non_symlinks(tmp_path):
     link.symlink_to(src)
     real = find_real_files(target)
     assert len(real) == 1
-    assert real[0].name == "notes.txt"
+    assert any(r.name == "notes.txt" for r in real)
 
 
 def test_find_real_files_empty_dir(tmp_path):

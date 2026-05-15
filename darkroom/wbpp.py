@@ -29,7 +29,7 @@ def discover_darks(folder: Path, *, exposure_sec: float) -> list[Path]:
     """Return .fit files in folder whose filename exposure matches exposure_sec."""
     if not folder.exists():
         return []
-    target = f"{exposure_sec}s"
+    target = f"{float(exposure_sec)}s"
     result = []
     for f in fits_files(folder):
         exp = parse_exposure(f.stem)
@@ -46,7 +46,11 @@ def discover_flat_files(folder: Path) -> list[Path]:
 
 
 def discover_flat_darks(folder: Path, *, capture_date: date) -> list[Path]:
-    """Return .fit files in folder whose filename datetime matches capture_date."""
+    """Return .fit files in folder whose filename datetime date matches capture_date.
+
+    capture_date should be the flat set's capture_date from the catalog (the date
+    stored in the calibration_sets row), not the imaging night date.
+    """
     if not folder.exists():
         return []
     result = []
