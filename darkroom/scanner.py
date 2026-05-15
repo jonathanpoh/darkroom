@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from astropy.time import Time
 from fits_cataloger import FITSHeaderExtractor, compute_imaging_night, parse_ota
 from darkroom.parse import fits_files, parse_filter
 
@@ -128,7 +129,6 @@ def _scan_calibration(source: Path) -> list[CalibrationGroup]:
             date_obs = meta.get("date_obs", "")
             if date_obs:
                 try:
-                    from astropy.time import Time
                     capture_date = Time(date_obs, format="isot").datetime.strftime("%Y-%m-%d")
                 except Exception:
                     pass
@@ -141,7 +141,7 @@ def _scan_calibration(source: Path) -> list[CalibrationGroup]:
                     filter_ = meta.get("filter_header")
 
             temp_rounded = round(meta["temperature"])
-            key = (frame_type, meta["camera"], meta["gain"], meta["exposure"], temp_rounded, capture_date)
+            key = (frame_type, meta["camera"], parse_ota(meta.get("focallen")), filter_, meta["gain"], meta["exposure"], temp_rounded, capture_date)
 
             if key not in groups:
                 groups[key] = CalibrationGroup(
