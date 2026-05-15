@@ -81,6 +81,27 @@ def _target_slug(target: str) -> str:
     return target.replace(" ", "")
 
 
+def _overwrite_target_dir(target_dir: Path) -> None:
+    """Safely clear SESSION_N dirs in target_dir before regeneration.
+
+    If real (non-symlink) files are found, warns and requires 'yes' confirmation.
+    Deletes only SESSION_N subdirs — target_dir itself is preserved.
+    """
+    from darkroom.wbpp import clear_sessions, find_real_files
+
+    real_files = find_real_files(target_dir)
+    if real_files:
+        print(f"WARNING: Real files found in {target_dir}/ (not symlinks):")
+        for f in real_files:
+            print(f"  {f}")
+        answer = input(
+            "\nThese will be permanently deleted. Type 'yes' to continue, or press Enter to abort: "
+        ).strip()
+        if answer != "yes":
+            sys.exit("Aborted.")
+    clear_sessions(target_dir)
+
+
 def _resolve_flat(cal_rows: list[dict], filter_name: str, obs_date: str) -> dict | None:
     """Prompt user to resolve flat set ambiguity. Returns chosen row or None.
 
@@ -209,8 +230,7 @@ def cmd_prep(
     target_dir.mkdir(parents=True, exist_ok=True)
 
     if overwrite:
-        # Implemented in Task 5 — placeholder
-        pass
+        _overwrite_target_dir(target_dir)
 
     rows_sorted = sorted(rows, key=lambda r: r["obs_date"])
     for night_date, night_rows in groupby(rows_sorted, key=lambda r: r["obs_date"]):
