@@ -165,7 +165,9 @@ def cmd_finish(
     print(f"Destination: {dest}")
 
     print("\nCopying master/")
-    _copy_flat(master_dir, dest / "master", dry_run=dry_run)
+    master_count = _copy_flat(master_dir, dest / "master", dry_run=dry_run)
+    if not dry_run and master_count == 0:
+        sys.exit("Error: master/ contains no .xisf files — aborting (nothing copied)")
 
     processed_files = [f for f in processed_dir.iterdir() if f.is_file()]
     if not processed_files:
