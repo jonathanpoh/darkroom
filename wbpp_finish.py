@@ -102,7 +102,7 @@ def _list_intermediates(wbpp_target_dir: Path) -> list[Path]:
     for p in wbpp_target_dir.iterdir():
         if p.is_dir() and (p.name in _INTERMEDIATE_NAMES or re.fullmatch(r"SESSION_\d+", p.name)):
             result.append(p)
-    return sorted(result)
+    return sorted(result, key=lambda p: p.name)
 
 
 def _list_outputs(wbpp_target_dir: Path) -> list[Path]:
@@ -110,7 +110,7 @@ def _list_outputs(wbpp_target_dir: Path) -> list[Path]:
     result = []
     for name in ("master", "processed"):
         p = wbpp_target_dir / name
-        if p.exists():
+        if p.is_dir():
             result.append(p)
     return result
 
@@ -130,5 +130,8 @@ def _confirm_and_delete(dirs: list[Path], label: str, *, dry_run: bool) -> None:
         print("  Skipped.")
         return
     for d in dirs:
-        shutil.rmtree(d)
-        print(f"  Deleted: {d.name}")
+        try:
+            shutil.rmtree(d)
+            print(f"  Deleted: {d.name}")
+        except FileNotFoundError:
+            print(f"  Already gone: {d.name}")

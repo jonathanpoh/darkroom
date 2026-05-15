@@ -116,6 +116,14 @@ def test_list_intermediates_skips_missing(tmp_path):
     assert result[0].name == "SESSION_1"
 
 
+def test_list_intermediates_includes_all_named(tmp_path):
+    for name in ("calibrated", "debayered", "fastIntegration", "logs"):
+        (tmp_path / name).mkdir()
+    result = _list_intermediates(tmp_path)
+    names = {p.name for p in result}
+    assert names == {"calibrated", "debayered", "fastIntegration", "logs"}
+
+
 def test_list_outputs_returns_master_and_processed(tmp_path):
     (tmp_path / "master").mkdir()
     (tmp_path / "processed").mkdir()
