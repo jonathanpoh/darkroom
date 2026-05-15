@@ -9,7 +9,17 @@ import tomllib
 from itertools import groupby
 from pathlib import Path
 
-from darkroom.catalog import query_all_sessions, query_sessions
+from datetime import date as Date
+
+from darkroom.catalog import find_darks, find_flat_darks, find_flats, query_all_sessions, query_sessions
+from darkroom.wbpp import (
+    discover_darks,
+    discover_flat_darks,
+    discover_flat_files,
+    discover_lights,
+    make_symlinks,
+    next_session_num,
+)
 
 
 # ── config resolution ─────────────────────────────────────────────────────────
@@ -65,6 +75,147 @@ def cmd_list(catalog: Path, target: str | None) -> None:
             )
 
 
+# ── prep helpers ─────────────────────────────────────────────────────────────
+
+def _target_slug(target: str) -> str:
+    return target.replace(" ", "")
+
+
+def _resolve_flat(cal_rows: list[dict], filter_name: str, obs_date: str) -> dict | None:
+    """Prompt user to resolve flat set ambiguity. Returns chosen row or None."""
+    if len(cal_rows) == 0:
+        print(f"  No flats found for {filter_name} within ±1 day of {obs_date}.")
+        input("  [Enter] Proceed without flats")
+        return None
+    if len(cal_rows) == 1:
+        return cal_rows[0]
+    # 2+ matches — prompt
+    print(f"  Multiple flat sets found for {filter_name} near {obs_date}:")
+    for i, row in enumerate(cal_rows, 1):
+        tag = " ← closest" if i == 1 else ""
+        print(f"    {i}) {row['capture_date']} ({row['frame_count']} frames){tag}")
+    raw = input(f"  [1]> ").strip()
+    idx = int(raw) - 1 if raw.isdigit() else 0
+    if 0 <= idx < len(cal_rows):
+        return cal_rows[idx]
+    return cal_rows[0]
+
+
+def _build_night(
+    sessions: list[dict],
+    *,
+    output: Path,
+    catalog: Path,
+    session_dir: Path,
+) -> None:
+    """Build one SESSION_N directory from one or more sessions on the same night."""
+    session_dir.mkdir(parents=True, exist_ok=True)
+
+    # Lights — split by filter
+    for sess in sessions:
+        lights_src = output / sess["lights_path"]
+        filter_name = sess["filter"] or "NoFilter"
+        dest = session_dir / "Lights" / f"FILTER_{filter_name}"
+        files = discover_lights(lights_src)
+        count = make_symlinks(files, dest)
+        print(f"  Lights/FILTER_{filter_name}/    {count} symlinks")
+
+    # Darks — camera/gain/exposure from first session (all sessions same night share params)
+    s0 = sessions[0]
+    dark_rows = find_darks(
+        catalog, camera=s0["camera"], gain=s0["gain"], exposure_sec=s0["exposure_sec"]
+    )
+    dark_count = 0
+    for row in dark_rows:
+        files = discover_darks(output / row["folder_path"], exposure_sec=s0["exposure_sec"])
+        dark_count += make_symlinks(files, session_dir / "Darks")
+    if dark_count == 0:
+        print("  Darks/                    0 symlinks  [no darks found]")
+    else:
+        print(f"  Darks/                    {dark_count} symlinks")
+
+    # Flats + FlatDarks — per filter
+    for sess in sessions:
+        filter_name = sess["filter"] or "NoFilter"
+        obs_date = sess["obs_date"]
+        flat_rows = find_flats(
+            catalog,
+            camera=sess["camera"],
+            ota=sess["ota"],
+            filter_=sess["filter"],
+            obs_date=obs_date,
+        )
+        chosen_flat = _resolve_flat(flat_rows, filter_name, obs_date)
+        if chosen_flat:
+            files = discover_flat_files(output / chosen_flat["folder_path"])
+            flat_count = make_symlinks(files, session_dir / "Flats" / f"FILTER_{filter_name}")
+            print(f"  Flats/FILTER_{filter_name}/      {flat_count} symlinks")
+
+            flat_date = Date.fromisoformat(chosen_flat["capture_date"])
+            fd_rows = find_flat_darks(
+                catalog,
+                camera=sess["camera"],
+                flat_exposure_sec=chosen_flat["exposure_sec"],
+                flat_capture_date=chosen_flat["capture_date"],
+            )
+            fd_count = 0
+            for fd_row in fd_rows:
+                files = discover_flat_darks(
+                    output / fd_row["folder_path"], capture_date=flat_date
+                )
+                fd_count += make_symlinks(files, session_dir / "FlatDarks")
+            if fd_count == 0:
+                print("  FlatDarks/                0 symlinks  [none found — skipped]")
+            else:
+                print(f"  FlatDarks/                {fd_count} symlinks")
+        else:
+            print(f"  Flats/FILTER_{filter_name}/      0 symlinks  [no flats found — skipped]")
+
+
+def cmd_prep(
+    *,
+    catalog: Path,
+    output: Path,
+    wbpp_root: Path,
+    target: str | None,
+    obs_date: str | None,
+    session_id: str | None,
+    overwrite: bool = False,
+) -> None:
+    if session_id:
+        rows = query_sessions(catalog, session_id=session_id)
+        if not rows:
+            sys.exit(f"Session not found: {session_id}")
+        target_name = rows[0]["target"]
+    elif target:
+        rows = query_sessions(catalog, target=target, obs_date=obs_date)
+        if not rows:
+            date_info = f" on {obs_date}" if obs_date else ""
+            sys.exit(f"No sessions found for target '{target}'{date_info}")
+        target_name = target
+    else:
+        sys.exit("Specify --target or --session")
+
+    slug = _target_slug(target_name)
+    target_dir = wbpp_root / slug
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    if overwrite:
+        # Implemented in Task 5 — placeholder
+        pass
+
+    rows_sorted = sorted(rows, key=lambda r: r["obs_date"])
+    for night_date, night_rows in groupby(rows_sorted, key=lambda r: r["obs_date"]):
+        night_sessions = list(night_rows)
+        n = next_session_num(target_dir)
+        session_dir = target_dir / f"SESSION_{n}"
+        filters = ", ".join(s["filter"] or "NoFilter" for s in night_sessions)
+        total_lights = sum(s["frame_count"] for s in night_sessions)
+        print(f"\nSESSION_{n}  ({target_name} · {night_date} · {filters} · {total_lights} lights)")
+        _build_night(night_sessions, output=output, catalog=catalog, session_dir=session_dir)
+        print(f"\nIn PixInsight: WBPP → Add Directory → select {session_dir}/")
+
+
 # ── argument parsing ──────────────────────────────────────────────────────────
 
 def build_parser() -> argparse.ArgumentParser:
@@ -107,8 +258,15 @@ def main() -> None:
 
     wbpp_root = Path(args.wbpp)
 
-    # Implemented in Task 4
-    sys.exit("Prep mode not yet implemented")
+    cmd_prep(
+        catalog=catalog,
+        output=output,
+        wbpp_root=wbpp_root,
+        target=args.target,
+        obs_date=args.date,
+        session_id=args.session,
+        overwrite=args.overwrite,
+    )
 
 
 if __name__ == "__main__":
