@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from wbpp_finish import (
-    _find_master_date, _build_dest, _copy_flat,
+    _find_processing_date, _build_dest, _copy_flat,
     _list_intermediates, _list_outputs, _confirm_and_delete,
 )
 
@@ -15,19 +15,44 @@ def touch(p: Path, content: bytes = b"") -> Path:
     return p
 
 
-def test_find_master_date_returns_today(tmp_path):
+def test_find_processing_date_returns_today(tmp_path):
     master = tmp_path / "master"
+    processed = tmp_path / "processed"
     master.mkdir()
     touch(master / "masterLight_BIN-1_3840x2160_FILTER-L-Extreme_RGB.xisf")
-    result = _find_master_date(master)
+    result = _find_processing_date(master, processed, None)
     assert result == date.today().isoformat()
 
 
-def test_find_master_date_no_file_exits(tmp_path):
+def test_find_processing_date_prefers_processed(tmp_path):
+    import os, time
     master = tmp_path / "master"
+    processed = tmp_path / "processed"
+    master.mkdir(); processed.mkdir()
+    older = master / "masterLight.xisf"
+    newer = processed / "final.xisf"
+    touch(older); touch(newer)
+    # Make master file 2 days older than processed
+    past = time.time() - 2 * 86400
+    os.utime(older, (past, past))
+    result = _find_processing_date(master, processed, None)
+    assert result == date.today().isoformat()
+
+
+def test_find_processing_date_override(tmp_path):
+    master = tmp_path / "master"
+    processed = tmp_path / "processed"
     master.mkdir()
+    touch(master / "masterLight.xisf")
+    assert _find_processing_date(master, processed, "2025-12-31") == "2025-12-31"
+
+
+def test_find_processing_date_no_files_exits(tmp_path):
+    master = tmp_path / "master"
+    processed = tmp_path / "processed"
+    master.mkdir(); processed.mkdir()
     with pytest.raises(SystemExit):
-        _find_master_date(master)
+        _find_processing_date(master, processed, None)
 
 
 def test_build_dest(tmp_path):

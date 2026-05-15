@@ -4,7 +4,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from astropy.time import Time
-from fits_cataloger import FITSHeaderExtractor, compute_imaging_night, parse_ota
+from fits_cataloger import (
+    FITSHeaderExtractor,
+    _normalize_camera,
+    _round_exposure,
+    compute_imaging_night,
+    parse_ota,
+)
 from darkroom.parse import fits_files, parse_filter
 
 
@@ -90,11 +96,11 @@ def _scan_lights(light_root: Path) -> list[Session]:
                 target=target_dir.name,
                 obs_date=night,
                 ota=parse_ota(first_meta.get("focallen")),
-                camera=first_meta["camera"],
+                camera=_normalize_camera(first_meta["camera"]),
                 filter=filter_,
                 gain=first_meta["gain"],
                 temperature_c=first_meta["temperature"],
-                exposure_sec=first_meta["exposure"],
+                exposure_sec=_round_exposure(first_meta["exposure"]),
                 ra_deg=first_meta.get("ra_deg"),
                 dec_deg=first_meta.get("dec_deg"),
                 files=[path for _, path in frames],
@@ -141,16 +147,19 @@ def _scan_calibration(source: Path) -> list[CalibrationGroup]:
                     filter_ = meta.get("filter_header")
 
             temp_rounded = round(meta["temperature"])
-            key = (frame_type, meta["camera"], parse_ota(meta.get("focallen")), filter_, meta["gain"], meta["exposure"], temp_rounded, capture_date)
+            camera = _normalize_camera(meta["camera"])
+            exposure = _round_exposure(meta["exposure"])
+            ota = parse_ota(meta.get("focallen"))
+            key = (frame_type, camera, ota, filter_, meta["gain"], exposure, temp_rounded, capture_date)
 
             if key not in groups:
                 groups[key] = CalibrationGroup(
                     frame_type=frame_type,
-                    camera=meta["camera"],
-                    ota=parse_ota(meta.get("focallen")),
+                    camera=camera,
+                    ota=ota,
                     filter=filter_,
                     gain=meta["gain"],
-                    exposure_sec=meta["exposure"],
+                    exposure_sec=exposure,
                     temperature_c=float(temp_rounded),
                     capture_date=capture_date,
                     files=[],

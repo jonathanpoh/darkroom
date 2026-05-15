@@ -47,7 +47,7 @@ def test_scan_source_single_session():
     assert s.obs_date == "2026-02-19"
     assert s.filter == "L-Pro"
     assert s.ota == "FRA400"
-    assert s.camera == "ZWO ASI585MC Pro"
+    assert s.camera == "ZWOASI585MCPro"
     assert s.gain == 200
     assert s.temperature_c == -20.0
     assert s.exposure_sec == 180.0

@@ -5,11 +5,14 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import sqlite3
 import sys
 import shutil
 import tomllib
 from datetime import datetime
 from pathlib import Path
+
+from fits_cataloger import mark_processed
 
 
 # ── config resolution (mirrors wbpp_prep.py) ──────────────────────────────────
@@ -49,19 +52,88 @@ def _target_slug(target: str) -> str:
 
 # ── core helpers ──────────────────────────────────────────────────────────────
 
-def _find_master_date(master_dir: Path) -> str:
-    """Return YYYY-MM-DD creation date of the first masterLight_*.xisf in master_dir."""
-    candidates = sorted(master_dir.glob("masterLight_*.xisf"))
-    if not candidates:
-        sys.exit(f"No masterLight_*.xisf found in {master_dir}")
-    stat = candidates[0].stat()
-    ts = getattr(stat, "st_birthtime", stat.st_mtime)
-    return datetime.fromtimestamp(ts).date().isoformat()
+def _find_processing_date(
+    master_dir: Path, processed_dir: Path, override: str | None
+) -> str:
+    """Return YYYY-MM-DD for the _Processed/<date>/ folder name.
+
+    If override is given (--date), use it verbatim. Otherwise return the
+    latest mtime across files in master/ and processed/ — captures the
+    most recent processing activity, whether WBPP-only or with hand finishing.
+    """
+    if override:
+        return override
+    times: list[float] = []
+    for d in (master_dir, processed_dir):
+        if d.exists():
+            for f in d.iterdir():
+                if f.is_file():
+                    times.append(f.stat().st_mtime)
+    if not times:
+        sys.exit(f"No files in {master_dir} or {processed_dir} — cannot derive date")
+    return datetime.fromtimestamp(max(times)).date().isoformat()
 
 
 def _build_dest(output: Path, target: str, date_str: str) -> Path:
     """Return <output>/04_Deep Sky Objects/<target>/_Processed/<date_str>."""
     return output / "04_Deep Sky Objects" / target / "_Processed" / date_str
+
+
+def _collect_session_folders(wbpp_target: Path) -> set[tuple[str, str]]:
+    """Walk SESSION_N symlinks and return unique (target_folder_name, session_folder_name) pairs.
+
+    Symlinks point to absolute NAS paths shaped like:
+        .../04_Deep Sky Objects/<target>/<session_folder>/Lights/<file>.fit
+    """
+    pairs: set[tuple[str, str]] = set()
+    for session_dir in wbpp_target.glob("SESSION_*"):
+        if not session_dir.is_dir():
+            continue
+        for symlink in (session_dir / "Lights").rglob("*"):
+            if not symlink.is_symlink():
+                continue
+            try:
+                resolved = symlink.resolve(strict=True)
+            except FileNotFoundError:
+                continue
+            session_folder = resolved.parent.parent
+            target_folder = session_folder.parent
+            pairs.add((target_folder.name, session_folder.name))
+    return pairs
+
+
+def _resolve_session_ids(wbpp_target: Path, catalog: Path) -> list[str]:
+    """Look up catalog session_ids for the lights symlinked under wbpp_target."""
+    pairs = _collect_session_folders(wbpp_target)
+    if not pairs:
+        return []
+    ids: list[str] = []
+    with sqlite3.connect(catalog) as conn:
+        conn.row_factory = sqlite3.Row
+        for target, folder in pairs:
+            rel = f"04_Deep Sky Objects/{target}/{folder}/Lights"
+            row = conn.execute(
+                "SELECT session_id FROM sessions WHERE target = ? AND lights_path = ?",
+                (target, rel),
+            ).fetchone()
+            if row:
+                ids.append(row["session_id"])
+    return sorted(set(ids))
+
+
+def _mark_sessions_processed(
+    wbpp_target: Path, catalog: Path, status: str
+) -> None:
+    """Mark every session resolved from wbpp_target as processed with the given status."""
+    session_ids = _resolve_session_ids(wbpp_target, catalog)
+    if not session_ids:
+        print("\nWarning: no catalog sessions matched symlinks — nothing to mark.")
+        return
+    print(f"\nMarking {len(session_ids)} session(s) as processed:")
+    for sid in session_ids:
+        ok = mark_processed(catalog, sid, status)
+        mark = "✓" if ok else "✗ (not found)"
+        print(f"  {mark} {sid}")
 
 
 def _copy_flat(src_dir: Path, dest_dir: Path, *, dry_run: bool) -> int:
@@ -145,6 +217,8 @@ def cmd_finish(
     output: Path,
     wbpp_root: Path,
     target: str,
+    catalog: Path,
+    date_override: str | None,
     dry_run: bool,
 ) -> None:
     slug = _target_slug(target)
@@ -159,7 +233,7 @@ def cmd_finish(
     if not processed_dir.exists():
         sys.exit(f"processed/ not found in {wbpp_target}")
 
-    date_str = _find_master_date(master_dir)
+    date_str = _find_processing_date(master_dir, processed_dir, date_override)
     dest = _build_dest(output, target, date_str)
 
     print(f"Destination: {dest}")
@@ -176,7 +250,9 @@ def cmd_finish(
         print("\nCopying processed/")
         _copy_flat(processed_dir, dest / "processed", dry_run=dry_run)
 
-    print(f'\nDone. Remember to mark "{target}" as processed in darkroom-catalog once that command is implemented.')
+    if not dry_run:
+        status = str(dest.relative_to(output))
+        _mark_sessions_processed(wbpp_target, catalog, status)
 
     _confirm_and_delete(
         _list_intermediates(wbpp_target),
@@ -199,8 +275,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--target", metavar="NAME", required=True, help='Target name (e.g. "M 81")')
     p.add_argument("--output", metavar="PATH",
                    help="Archive root — same value as wbpp_prep.py --output")
+    p.add_argument("--catalog", metavar="PATH", help="Path to astro_catalog.db")
     p.add_argument("--wbpp", metavar="PATH", default="./WBPP",
                    help="Root for WBPP target dirs (default: ./WBPP)")
+    p.add_argument("--date", metavar="YYYY-MM-DD",
+                   help="Override the auto-derived processing date for the _Processed/<date>/ folder")
     p.add_argument("--dry-run", action="store_true",
                    help="Print what would be copied/deleted without making changes")
     return p
@@ -214,10 +293,16 @@ def main() -> None:
     if output is None:
         sys.exit("Error: --output / DARKROOM_OUTPUT / darkroom.toml output_path required")
 
+    catalog = resolve_path(args.catalog, "DARKROOM_CATALOG", "catalog_path")
+    if catalog is None:
+        sys.exit("Error: --catalog / DARKROOM_CATALOG / darkroom.toml catalog_path required")
+
     cmd_finish(
         output=output,
         wbpp_root=Path(args.wbpp),
         target=args.target,
+        catalog=catalog,
+        date_override=args.date,
         dry_run=args.dry_run,
     )
 
