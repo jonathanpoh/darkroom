@@ -432,7 +432,103 @@ def cmd_review(args: argparse.Namespace, config: dict) -> None:
 
 
 def cmd_commit(args: argparse.Namespace, config: dict) -> None:
-    raise NotImplementedError("--commit not yet implemented")
+    """Execute a manifest: copy files and register in catalog."""
+    if args.commit is True:
+        # No manifest file given — scan and commit in one step
+        if not args.source:
+            print("Error: --commit without a file requires --source", file=sys.stderr)
+            sys.exit(1)
+        source = Path(args.source)
+        output = resolve_path(args.output, "DARKROOM_OUTPUT", config, "output_path", "output")
+        catalog = resolve_path(args.catalog, "DARKROOM_CATALOG", config, "catalog_path", "catalog")
+        interactive = sys.stdin.isatty()
+        scan = scan_source(source)
+        manifest = build_manifest(scan, source, output, catalog, interactive)
+    else:
+        manifest_path = Path(args.commit)
+        if not manifest_path.exists():
+            print(f"Error: manifest file not found: {manifest_path}", file=sys.stderr)
+            sys.exit(1)
+        manifest = yaml.safe_load(manifest_path.read_text())
+        output = Path(manifest["meta"]["output"])
+        catalog = Path(manifest["meta"]["catalog"])
+
+    # Hard-refuse if any needs_review items remain
+    flagged = [
+        e.get("session_id") or e.get("set_id")
+        for e in manifest.get("sessions", []) + manifest.get("calibration", [])
+        if e.get("needs_review")
+    ]
+    if flagged:
+        print("Error: manifest has unresolved needs_review items:", file=sys.stderr)
+        for item in flagged:
+            print(f"  - {item}", file=sys.stderr)
+        print("Run: archive_ingest.py --review <manifest>", file=sys.stderr)
+        sys.exit(1)
+
+    init_db(catalog)
+    files_copied = 0
+    files_skipped = 0
+
+    # Copy files
+    for entry in manifest.get("sessions", []) + manifest.get("calibration", []):
+        if entry.get("status") == "existing":
+            continue
+        for f in entry.get("files", []):
+            if not f.get("copy"):
+                files_skipped += 1
+                continue
+            src = Path(f["src"])
+            dst = output / f["dst"]
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            if dst.exists():
+                files_skipped += 1
+                continue
+            shutil.copy2(src, dst)
+            files_copied += 1
+
+    # Upsert catalog entries
+    catalog_entries = 0
+    for entry in manifest.get("sessions", []):
+        if entry.get("status") == "existing":
+            continue
+        upsert_session(catalog, {
+            "session_id": entry["session_id"],
+            "target": entry["target"],
+            "obs_date": entry["obs_date"],
+            "ota": entry["ota"],
+            "camera": entry["camera"],
+            "filter": entry.get("filter"),
+            "gain": entry["gain"],
+            "temperature_c": entry["temperature_c"],
+            "exposure_sec": entry["exposure_sec"],
+            "frame_count": entry["frame_count"],
+            "total_integration_sec": int(entry["frame_count"] * entry["exposure_sec"]),
+            "ra_deg": entry.get("ra_deg"),
+            "dec_deg": entry.get("dec_deg"),
+            "lights_path": entry["lights_rel_path"],
+            "processed_status": "",
+            "notes": "",
+        })
+        catalog_entries += 1
+
+    for entry in manifest.get("calibration", []):
+        upsert_calibration_set(catalog, {
+            "set_id": entry["set_id"],
+            "frame_type": entry["frame_type"],
+            "camera": entry["camera"],
+            "ota": entry["ota"],
+            "filter": entry.get("filter"),
+            "gain": entry["gain"],
+            "exposure_sec": entry["exposure_sec"],
+            "temperature_c": entry["temperature_c"],
+            "frame_count": entry["frame_count"],
+            "capture_date": entry["capture_date"],
+            "folder_path": entry["folder_rel_path"],
+        })
+        catalog_entries += 1
+
+    print(f"Done: {files_copied} files copied, {files_skipped} skipped, {catalog_entries} catalog entries written")
 
 
 def main() -> None:
