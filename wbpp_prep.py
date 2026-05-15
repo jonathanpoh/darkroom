@@ -82,19 +82,27 @@ def _target_slug(target: str) -> str:
 
 
 def _resolve_flat(cal_rows: list[dict], filter_name: str, obs_date: str) -> dict | None:
-    """Prompt user to resolve flat set ambiguity. Returns chosen row or None."""
+    """Prompt user to resolve flat set ambiguity. Returns chosen row or None.
+
+    In non-interactive mode (no TTY): auto-selects closest match; skips pause on 0 matches.
+    """
+    interactive = sys.stdin.isatty()
     if len(cal_rows) == 0:
         print(f"  No flats found for {filter_name} within ±1 day of {obs_date}.")
-        input("  [Enter] Proceed without flats")
+        if interactive:
+            input("  [Enter] Proceed without flats")
         return None
     if len(cal_rows) == 1:
         return cal_rows[0]
-    # 2+ matches — prompt
+    # 2+ matches — prompt or auto-select closest
     print(f"  Multiple flat sets found for {filter_name} near {obs_date}:")
     for i, row in enumerate(cal_rows, 1):
         tag = " ← closest" if i == 1 else ""
         print(f"    {i}) {row['capture_date']} ({row['frame_count']} frames){tag}")
-    raw = input(f"  [1]> ").strip()
+    if not interactive:
+        print("  Non-interactive: auto-selecting closest.")
+        return cal_rows[0]
+    raw = input("  [1]> ").strip()
     idx = int(raw) - 1 if raw.isdigit() else 0
     if 0 <= idx < len(cal_rows):
         return cal_rows[idx]
@@ -209,6 +217,7 @@ def cmd_prep(
         night_sessions = list(night_rows)
         n = next_session_num(target_dir)
         session_dir = target_dir / f"SESSION_{n}"
+        session_dir.mkdir(parents=True, exist_ok=True)  # create before next iteration reads num
         filters = ", ".join(s["filter"] or "NoFilter" for s in night_sessions)
         total_lights = sum(s["frame_count"] for s in night_sessions)
         print(f"\nSESSION_{n}  ({target_name} · {night_date} · {filters} · {total_lights} lights)")
