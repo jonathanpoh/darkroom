@@ -252,8 +252,8 @@ def build_cal_entry(
     interactive: bool,
 ) -> dict:
     """Build one calibration[] manifest entry for the given CalibrationGroup."""
-    # Filter resolution only matters for Flat/FlatDark
-    if group.frame_type in ("Flat", "FlatDark"):
+    # Filter resolution only matters for Flat frames (FlatDarks are short darks, filter irrelevant)
+    if group.frame_type in ("Flat",):
         filter_, needs_review = resolve_filter(
             group.filter,
             interactive=interactive,
