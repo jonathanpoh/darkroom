@@ -32,11 +32,11 @@ def resolve_path(
 ) -> Path | None:
     """Resolve a path: CLI flag → env var → darkroom.toml key."""
     if flag_val:
-        return Path(flag_val)
+        return Path(flag_val).expanduser()
     env = os.environ.get(env_var)
     if env:
-        return Path(env)
+        return Path(env).expanduser()
     cfg = find_toml()
     if toml_key in cfg:
-        return Path(cfg[toml_key])
+        return Path(cfg[toml_key]).expanduser()
     return None
