@@ -133,26 +133,12 @@ def _copy_flat(src_dir: Path, dest_dir: Path, *, dry_run: bool) -> int:
 
 # ── cleanup helpers ──────────────────────────────────────────────────────────
 
-_INTERMEDIATE_NAMES = {"calibrated", "debayered", "fastIntegration", "logs"}
-
-
-def _list_intermediates(wbpp_target_dir: Path) -> list[Path]:
-    """Return existing intermediate dirs (named dirs + SESSION_N dirs) inside wbpp_target_dir."""
-    result = []
-    for p in wbpp_target_dir.iterdir():
-        if p.is_dir() and (p.name in _INTERMEDIATE_NAMES or re.fullmatch(r"SESSION_\d+", p.name)):
-            result.append(p)
-    return sorted(result, key=lambda p: p.name)
-
-
-def _list_outputs(wbpp_target_dir: Path) -> list[Path]:
-    """Return existing master/ and processed/ dirs inside wbpp_target_dir."""
-    result = []
-    for name in ("master", "processed"):
-        p = wbpp_target_dir / name
-        if p.is_dir():
-            result.append(p)
-    return result
+def _list_session_dirs(wbpp_target_dir: Path) -> list[Path]:
+    """Return existing SESSION_N dirs inside wbpp_target_dir."""
+    return sorted(
+        p for p in wbpp_target_dir.iterdir()
+        if p.is_dir() and re.fullmatch(r"SESSION_\d+", p.name)
+    )
 
 
 def _confirm_and_delete(dirs: list[Path], label: str, *, dry_run: bool) -> None:
@@ -190,15 +176,16 @@ def cmd_finish(
 ) -> None:
     slug = _target_slug(target)
     wbpp_target = wbpp_root / slug
-    master_dir = wbpp_target / "master"
-    processed_dir = wbpp_target / "processed"
+    wbpp_output = wbpp_target / "Output"
+    master_dir = wbpp_output / "master"
+    processed_dir = wbpp_output / "processed"
 
     if not wbpp_target.exists():
         sys.exit(f"WBPP target dir not found: {wbpp_target}")
+    if not wbpp_output.exists():
+        sys.exit(f"Output/ not found in {wbpp_target} — did you set the WBPP output dir correctly?")
     if not master_dir.exists():
-        sys.exit(f"master/ not found in {wbpp_target}")
-    if not processed_dir.exists():
-        sys.exit(f"processed/ not found in {wbpp_target}")
+        sys.exit(f"master/ not found in {wbpp_output}")
 
     date_str = _find_processing_date(master_dir, processed_dir, date_override)
     dest = _build_dest(output, target, date_str)
@@ -222,13 +209,13 @@ def cmd_finish(
         _mark_sessions_processed(wbpp_target, catalog, status)
 
     _confirm_and_delete(
-        _list_intermediates(wbpp_target),
-        "Intermediate directories to delete",
+        [wbpp_output] if wbpp_output.exists() else [],
+        "WBPP Output/ directory to delete (intermediates + master + processed)",
         dry_run=dry_run,
     )
     _confirm_and_delete(
-        _list_outputs(wbpp_target),
-        "Working output directories to delete (master/ and processed/)",
+        _list_session_dirs(wbpp_target),
+        "SESSION_N directories to delete",
         dry_run=dry_run,
     )
 

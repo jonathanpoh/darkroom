@@ -206,6 +206,10 @@ def cmd_prep(
     if overwrite:
         _overwrite_target_dir(target_dir)
 
+    # Create Output/ and Output/processed/ so PixInsight can select the dir immediately
+    output_dir = target_dir / "Output"
+    (output_dir / "processed").mkdir(parents=True, exist_ok=True)
+
     rows_sorted = sorted(rows, key=lambda r: r["obs_date"])
     for night_date, night_rows in groupby(rows_sorted, key=lambda r: r["obs_date"]):
         night_sessions = list(night_rows)
@@ -217,6 +221,8 @@ def cmd_prep(
         print(f"\nSESSION_{n}  ({target_name} · {night_date} · {filters} · {total_lights} lights)")
         _build_night(night_sessions, output=output, catalog=catalog, session_dir=session_dir)
         print(f"\nIn PixInsight: WBPP → Add Directory → select {session_dir}/")
+
+    print(f"\nSet WBPP output directory to: {output_dir}/")
 
 
 # ── argument parsing ──────────────────────────────────────────────────────────

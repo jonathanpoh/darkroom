@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from darkroom.finish import (
     _find_processing_date, _build_dest, _copy_flat,
-    _list_intermediates, _list_outputs, _confirm_and_delete,
+    _list_session_dirs, _confirm_and_delete,
 )
 
 
@@ -117,51 +117,19 @@ def test_copy_flat_ignores_subdirs(tmp_path):
     assert not (dest / "subdir").exists()
 
 
-def test_list_intermediates_returns_existing(tmp_path):
-    (tmp_path / "calibrated").mkdir()
-    (tmp_path / "debayered").mkdir()
+def test_list_session_dirs_returns_only_session_dirs(tmp_path):
     (tmp_path / "SESSION_1").mkdir()
     (tmp_path / "SESSION_2").mkdir()
-    (tmp_path / "master").mkdir()        # should NOT appear
-    (tmp_path / "processed").mkdir()     # should NOT appear
-    result = _list_intermediates(tmp_path)
+    (tmp_path / "Output").mkdir()        # should NOT appear
+    result = _list_session_dirs(tmp_path)
     names = {p.name for p in result}
-    assert "calibrated" in names
-    assert "debayered" in names
-    assert "SESSION_1" in names
-    assert "SESSION_2" in names
-    assert "master" not in names
-    assert "processed" not in names
+    assert names == {"SESSION_1", "SESSION_2"}
 
 
-def test_list_intermediates_skips_missing(tmp_path):
-    (tmp_path / "SESSION_1").mkdir()
-    result = _list_intermediates(tmp_path)
-    assert len(result) == 1
-    assert result[0].name == "SESSION_1"
-
-
-def test_list_intermediates_includes_all_named(tmp_path):
-    for name in ("calibrated", "debayered", "fastIntegration", "logs"):
-        (tmp_path / name).mkdir()
-    result = _list_intermediates(tmp_path)
-    names = {p.name for p in result}
-    assert names == {"calibrated", "debayered", "fastIntegration", "logs"}
-
-
-def test_list_outputs_returns_master_and_processed(tmp_path):
-    (tmp_path / "master").mkdir()
-    (tmp_path / "processed").mkdir()
-    result = _list_outputs(tmp_path)
-    names = {p.name for p in result}
-    assert names == {"master", "processed"}
-
-
-def test_list_outputs_skips_missing(tmp_path):
-    (tmp_path / "master").mkdir()
-    result = _list_outputs(tmp_path)
-    assert len(result) == 1
-    assert result[0].name == "master"
+def test_list_session_dirs_empty(tmp_path):
+    (tmp_path / "Output").mkdir()
+    result = _list_session_dirs(tmp_path)
+    assert result == []
 
 
 def test_confirm_and_delete_dry_run_does_not_delete(tmp_path):
