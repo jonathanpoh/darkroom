@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import argparse
 
-from darkroom import catalog_cli, finish, ingest, prep
+from darkroom import catalog_cli, finish, ingest, prep, serve
 
 
 def main() -> None:
@@ -18,6 +18,7 @@ def main() -> None:
     ingest.add_subparser(sub)
     prep.add_subparser(sub)
     finish.add_subparser(sub)
+    serve.add_subparser(sub)
 
     args = parser.parse_args()
     args.func(args)
