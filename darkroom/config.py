@@ -40,3 +40,13 @@ def resolve_path(
     if toml_key in cfg:
         return Path(cfg[toml_key]).expanduser()
     return None
+
+
+_DEFAULT_CATALOG = Path.home() / ".config" / "darkroom" / "astro_catalog.db"
+
+
+def resolve_catalog(flag_val: str | None) -> Path:
+    """Resolve catalog path, defaulting to ~/.config/darkroom/astro_catalog.db."""
+    path = resolve_path(flag_val, "DARKROOM_CATALOG", "catalog_path") or _DEFAULT_CATALOG
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path

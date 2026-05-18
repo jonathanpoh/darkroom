@@ -14,7 +14,7 @@ from darkroom.catalog import (
     query_all_sessions,
     query_sessions,
 )
-from darkroom.config import resolve_path
+from darkroom.config import resolve_catalog, resolve_path
 from darkroom.wbpp import (
     clear_sessions,
     discover_darks,
@@ -223,9 +223,7 @@ def cmd_prep(
 
 def run(args: argparse.Namespace) -> None:
     """Entry point invoked by darkroom.cli."""
-    catalog = resolve_path(args.catalog, "DARKROOM_CATALOG", "catalog_path")
-    if catalog is None:
-        sys.exit("Error: --catalog / DARKROOM_CATALOG / darkroom.toml catalog_path required")
+    catalog = resolve_catalog(args.catalog)
 
     if args.list:
         cmd_list(catalog, args.target)
@@ -234,14 +232,16 @@ def run(args: argparse.Namespace) -> None:
     if not args.target and not args.session:
         sys.exit("Error: specify --target or --session (or --list to browse)")
 
-    output = resolve_path(args.output, "DARKROOM_OUTPUT", "output_path")
+    output = resolve_path(args.archive, "DARKROOM_ARCHIVE", "archive_path")
     if output is None:
-        sys.exit("Error: --output / DARKROOM_OUTPUT / darkroom.toml output_path required")
+        sys.exit("Error: --archive / DARKROOM_ARCHIVE / darkroom.toml archive_path required")
+
+    wbpp_root = resolve_path(args.wbpp, "DARKROOM_WBPP", "wbpp_path") or Path("./WBPP")
 
     cmd_prep(
         catalog=catalog,
         output=output,
-        wbpp_root=Path(args.wbpp),
+        wbpp_root=wbpp_root,
         target=args.target,
         obs_date=args.date,
         session_id=args.session,
@@ -261,10 +261,10 @@ def add_subparser(subparsers) -> None:
     p.add_argument("--session", metavar="ID", help="Select single session by catalog ID")
     p.add_argument("--overwrite", action="store_true",
                    help="Clear and regenerate target WBPP dir before creating symlinks")
-    p.add_argument("--output", metavar="PATH",
-                   help="Archive root (env: DARKROOM_OUTPUT)")
+    p.add_argument("--archive", metavar="PATH",
+                   help="Archive root (env: DARKROOM_ARCHIVE)")
     p.add_argument("--catalog", metavar="PATH",
-                   help="astro_catalog.db (env: DARKROOM_CATALOG)")
-    p.add_argument("--wbpp", metavar="PATH", default="./WBPP",
-                   help="Root for WBPP output dirs (default: ./WBPP)")
+                   help="astro_catalog.db (env: DARKROOM_CATALOG, default: ~/.config/darkroom/astro_catalog.db)")
+    p.add_argument("--wbpp", metavar="PATH",
+                   help="Root for WBPP output dirs (env: DARKROOM_WBPP, default: ./WBPP)")
     p.set_defaults(func=run)

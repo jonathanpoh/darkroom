@@ -8,13 +8,18 @@
 # Either flat keys (below) or a [darkroom] section table are accepted.
 
 # Path to the SQLite catalog. Used by every subcommand. (env: DARKROOM_CATALOG)
-catalog_path = "/Volumes/Astrophotography/astro_catalog.db"
+# Optional — defaults to ~/.config/darkroom/astro_catalog.db, created on first use.
+# catalog_path = "~/.config/darkroom/astro_catalog.db"
 
-# NAS archive root — contains 04_Deep Sky Objects/, 00_Calibration/, etc.
-# Used by `darkroom ingest`, `darkroom finish`. (env: DARKROOM_OUTPUT)
-output_path = "/Volumes/Astrophotography"
+# NAS/local archive root — contains 04_Deep Sky Objects/, 00_Calibration/, etc.
+# Used by `darkroom ingest`, `darkroom wbpp`, `darkroom finish`. (env: DARKROOM_ARCHIVE)
+archive_path = "~/02_Astrophotography/02_Archive"
+
+# Root directory for WBPP session symlink trees.
+# Used by `darkroom wbpp`, `darkroom finish`. (env: DARKROOM_WBPP, default: ./WBPP)
+wbpp_path = "~/02_Astrophotography/03_Processing/WBPP"
 
 # Optional: equivalent section-table form. Pick one style and stick with it.
 # [darkroom]
-# catalog_path = "/Volumes/Astrophotography/astro_catalog.db"
-# output_path  = "/Volumes/Astrophotography"
+# archive_path = "~/02_Astrophotography/02_Archive"
+# wbpp_path    = "~/02_Astrophotography/03_Processing/WBPP"

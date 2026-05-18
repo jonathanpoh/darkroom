@@ -545,7 +545,7 @@ class TestFinishCommand:
         upsert_session(db, row("M81_20260220_FRA400_ASI585MC_L-Pro", "M 81", "2026-02-20", "L-Pro"))
 
     def _args(self, **kwargs):
-        defaults = {"db": None, "target": "M 81", "output": None, "date": None, "session": None}
+        defaults = {"db": None, "target": "M 81", "archive": None, "date": None, "session": None}
         defaults.update(kwargs)
         return types.SimpleNamespace(**defaults)
 
@@ -559,12 +559,12 @@ class TestFinishCommand:
             ).fetchall()
         assert all(r[0] == "2026-05-15" for r in rows)
 
-    def test_output_flag_detects_date_from_processed_dir(self, tmp_path):
+    def test_archive_flag_detects_date_from_processed_dir(self, tmp_path):
         db = tmp_path / "test.db"
         self._populate(db)
         processed_dir = tmp_path / "04_Deep Sky Objects" / "M 81" / "_Processed" / "2026-05-15"
         processed_dir.mkdir(parents=True)
-        finish_command(self._args(db=str(db), output=str(tmp_path)))
+        finish_command(self._args(db=str(db), archive=str(tmp_path)))
         with sqlite3.connect(db) as conn:
             rows = conn.execute(
                 "SELECT processed_status FROM sessions WHERE target = 'M 81'"

@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 from darkroom.cataloger import mark_processed
-from darkroom.config import resolve_path
+from darkroom.config import resolve_catalog, resolve_path
 
 
 def _target_slug(target: str) -> str:
@@ -237,17 +237,17 @@ def cmd_finish(
 
 def run(args: argparse.Namespace) -> None:
     """Entry point invoked by darkroom.cli."""
-    output = resolve_path(args.output, "DARKROOM_OUTPUT", "output_path")
+    output = resolve_path(args.archive, "DARKROOM_ARCHIVE", "archive_path")
     if output is None:
-        sys.exit("Error: --output / DARKROOM_OUTPUT / darkroom.toml output_path required")
+        sys.exit("Error: --archive / DARKROOM_ARCHIVE / darkroom.toml archive_path required")
 
-    catalog = resolve_path(args.catalog, "DARKROOM_CATALOG", "catalog_path")
-    if catalog is None:
-        sys.exit("Error: --catalog / DARKROOM_CATALOG / darkroom.toml catalog_path required")
+    catalog = resolve_catalog(args.catalog)
+
+    wbpp_root = resolve_path(args.wbpp, "DARKROOM_WBPP", "wbpp_path") or Path("./WBPP")
 
     cmd_finish(
         output=output,
-        wbpp_root=Path(args.wbpp),
+        wbpp_root=wbpp_root,
         target=args.target,
         catalog=catalog,
         date_override=args.date,
@@ -259,15 +259,15 @@ def add_subparser(subparsers) -> None:
     p = subparsers.add_parser(
         "finish",
         help="Copy WBPP stacks to the archive and mark sessions processed",
-        description="Copy master/ and processed/ to <output>/04_Deep Sky Objects/<target>/_Processed/<date>/, then mark each session as processed in the catalog.",
+        description="Copy master/ and processed/ to <archive>/04_Deep Sky Objects/<target>/_Processed/<date>/, then mark each session as processed in the catalog.",
     )
     p.add_argument("--target", metavar="NAME", required=True, help='Target name (e.g. "M 81")')
-    p.add_argument("--output", metavar="PATH",
-                   help="Archive root (env: DARKROOM_OUTPUT)")
+    p.add_argument("--archive", metavar="PATH",
+                   help="Archive root (env: DARKROOM_ARCHIVE)")
     p.add_argument("--catalog", metavar="PATH",
-                   help="astro_catalog.db (env: DARKROOM_CATALOG)")
-    p.add_argument("--wbpp", metavar="PATH", default="./WBPP",
-                   help="Root for WBPP target dirs (default: ./WBPP)")
+                   help="astro_catalog.db (env: DARKROOM_CATALOG, default: ~/.config/darkroom/astro_catalog.db)")
+    p.add_argument("--wbpp", metavar="PATH",
+                   help="Root for WBPP target dirs (env: DARKROOM_WBPP, default: ./WBPP)")
     p.add_argument("--date", metavar="YYYY-MM-DD",
                    help="Override the auto-derived processing date")
     p.add_argument("--dry-run", action="store_true",

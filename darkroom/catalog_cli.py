@@ -11,15 +11,12 @@ from darkroom.cataloger import (
     scan_all_command,
     scan_calibration_command,
 )
-from darkroom.config import resolve_path
+from darkroom.config import resolve_catalog
 
 
 def _resolve_db(args: argparse.Namespace) -> None:
-    """Resolve args.db via CLI/env/toml; mutate args.db to the resolved string."""
-    catalog = resolve_path(args.db, "DARKROOM_CATALOG", "catalog_path")
-    if catalog is None:
-        sys.exit("Error: --db / DARKROOM_CATALOG / darkroom.toml catalog_path required")
-    args.db = str(catalog)
+    """Resolve args.db via CLI/env/toml/default; mutate args.db to the resolved string."""
+    args.db = str(resolve_catalog(args.db))
 
 
 def _list_run(args: argparse.Namespace) -> None:
@@ -67,7 +64,7 @@ def add_subparser(subparsers) -> None:
     p.add_argument(
         "--db",
         metavar="PATH",
-        help="astro_catalog.db (env: DARKROOM_CATALOG)",
+        help="astro_catalog.db (env: DARKROOM_CATALOG, default: ~/.config/darkroom/astro_catalog.db)",
     )
     sub = p.add_subparsers(dest="catcmd", required=True)
 

@@ -63,40 +63,40 @@ def test_find_toml_missing_returns_empty(tmp_path, monkeypatch):
 def test_find_toml_reads_flat_keys(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "darkroom.toml").write_text(
-        'output_path = "/staging"\ncatalog_path = "/catalog.db"\n'
+        'archive_path = "/staging"\ncatalog_path = "/catalog.db"\n'
     )
-    assert find_toml()["output_path"] == "/staging"
+    assert find_toml()["archive_path"] == "/staging"
 
 
 def test_find_toml_reads_section(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "darkroom.toml").write_text(
-        '[darkroom]\noutput_path = "/staging"\n'
+        '[darkroom]\narchive_path = "/staging"\n'
     )
-    assert find_toml()["output_path"] == "/staging"
+    assert find_toml()["archive_path"] == "/staging"
 
 
 def test_resolve_path_from_cli():
-    assert resolve_path("/from/cli", "DARKROOM_OUTPUT", "output_path") == Path("/from/cli")
+    assert resolve_path("/from/cli", "DARKROOM_ARCHIVE", "archive_path") == Path("/from/cli")
 
 
 def test_resolve_path_from_env(monkeypatch):
-    monkeypatch.setenv("DARKROOM_OUTPUT", "/from/env")
-    assert resolve_path(None, "DARKROOM_OUTPUT", "output_path") == Path("/from/env")
+    monkeypatch.setenv("DARKROOM_ARCHIVE", "/from/env")
+    assert resolve_path(None, "DARKROOM_ARCHIVE", "archive_path") == Path("/from/env")
 
 
 def test_resolve_path_from_toml(tmp_path, monkeypatch):
-    monkeypatch.delenv("DARKROOM_OUTPUT", raising=False)
+    monkeypatch.delenv("DARKROOM_ARCHIVE", raising=False)
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "darkroom.toml").write_text('output_path = "/from/toml"\n')
-    assert resolve_path(None, "DARKROOM_OUTPUT", "output_path") == Path("/from/toml")
+    (tmp_path / "darkroom.toml").write_text('archive_path = "/from/toml"\n')
+    assert resolve_path(None, "DARKROOM_ARCHIVE", "archive_path") == Path("/from/toml")
 
 
 def test_resolve_path_missing_returns_none(tmp_path, monkeypatch):
-    monkeypatch.delenv("DARKROOM_OUTPUT", raising=False)
+    monkeypatch.delenv("DARKROOM_ARCHIVE", raising=False)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path))
-    assert resolve_path(None, "DARKROOM_OUTPUT", "output_path") is None
+    assert resolve_path(None, "DARKROOM_ARCHIVE", "archive_path") is None
 
 
 from darkroom.ingest import resolve_filter, KNOWN_FILTERS

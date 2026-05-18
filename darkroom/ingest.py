@@ -18,7 +18,7 @@ from darkroom.cataloger import (
     upsert_calibration_set,
     upsert_session,
 )
-from darkroom.config import resolve_path
+from darkroom.config import resolve_catalog, resolve_path
 from darkroom.scanner import CalibrationGroup, Session, ScanResult, scan_source
 
 
@@ -294,8 +294,8 @@ def build_manifest(
 
     return {
         "meta": {
-            "source": str(source),
-            "output": str(output),
+            "asiair": str(source),
+            "archive": str(output),
             "catalog": str(catalog),
             "generated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
         },
@@ -306,9 +306,9 @@ def build_manifest(
 
 def cmd_scan(args: argparse.Namespace, *, write_file: bool) -> None:
     """Handle --dry-run and --manifest modes."""
-    source = Path(args.source)
-    output = _require_path(args.output, "DARKROOM_OUTPUT", "output_path", "output")
-    catalog = _require_path(args.catalog, "DARKROOM_CATALOG", "catalog_path", "catalog")
+    source = Path(args.asiair)
+    output = _require_path(args.archive, "DARKROOM_ARCHIVE", "archive_path", "archive")
+    catalog = resolve_catalog(args.catalog)
     interactive = sys.stdin.isatty()
 
     if not source.exists():
@@ -406,12 +406,12 @@ def cmd_commit(args: argparse.Namespace) -> None:
     """Execute a manifest: copy files and register in catalog."""
     if args.commit is True:
         # No manifest file given — scan and commit in one step
-        if not args.source:
-            print("Error: --commit without a file requires --source", file=sys.stderr)
+        if not args.asiair:
+            print("Error: --commit without a file requires --asiair", file=sys.stderr)
             sys.exit(1)
-        source = Path(args.source)
-        output = _require_path(args.output, "DARKROOM_OUTPUT", "output_path", "output")
-        catalog = _require_path(args.catalog, "DARKROOM_CATALOG", "catalog_path", "catalog")
+        source = Path(args.asiair)
+        output = _require_path(args.archive, "DARKROOM_ARCHIVE", "archive_path", "archive")
+        catalog = resolve_catalog(args.catalog)
         interactive = sys.stdin.isatty()
         scan = scan_source(source)
         manifest = build_manifest(scan, source, output, catalog, interactive)
@@ -421,7 +421,7 @@ def cmd_commit(args: argparse.Namespace) -> None:
             print(f"Error: manifest file not found: {manifest_path}", file=sys.stderr)
             sys.exit(1)
         manifest = yaml.safe_load(manifest_path.read_text())
-        output = Path(manifest["meta"]["output"])
+        output = Path(manifest["meta"]["archive"])
         catalog = Path(manifest["meta"]["catalog"])
 
     # Hard-refuse if any needs_review items remain
@@ -517,12 +517,12 @@ def cmd_commit(args: argparse.Namespace) -> None:
 def run(args: argparse.Namespace) -> None:
     """Entry point invoked by darkroom.cli."""
     if args.dry_run:
-        if not args.source:
-            sys.exit("Error: --dry-run requires --source")
+        if not args.asiair:
+            sys.exit("Error: --dry-run requires --asiair")
         cmd_scan(args, write_file=False)
     elif args.manifest:
-        if not args.source:
-            sys.exit("Error: --manifest requires --source")
+        if not args.asiair:
+            sys.exit("Error: --manifest requires --asiair")
         cmd_scan(args, write_file=True)
     elif args.review:
         cmd_review(args)
@@ -540,12 +540,12 @@ def add_subparser(subparsers) -> None:
         help="Archive a completed ASIAir session into the NAS",
         description="Copy ASIAir source files into the canonical archive structure and register sessions in the catalog.",
     )
-    p.add_argument("--source", metavar="PATH",
+    p.add_argument("--asiair", metavar="PATH",
                    help="ASIAir Autorun/ folder")
-    p.add_argument("--output", metavar="PATH",
-                   help="Archive root (env: DARKROOM_OUTPUT)")
+    p.add_argument("--archive", metavar="PATH",
+                   help="Archive root (env: DARKROOM_ARCHIVE)")
     p.add_argument("--catalog", metavar="PATH",
-                   help="astro_catalog.db (env: DARKROOM_CATALOG)")
+                   help="astro_catalog.db (env: DARKROOM_CATALOG, default: ~/.config/darkroom/astro_catalog.db)")
     mode = p.add_mutually_exclusive_group()
     mode.add_argument("--dry-run", action="store_true",
                       help="Scan and print manifest to stdout, do not write")

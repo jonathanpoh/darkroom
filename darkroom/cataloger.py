@@ -416,7 +416,7 @@ def finish_command(args) -> None:
         date_str = args.date
     else:
         processed_root = (
-            Path(args.output) / "04_Deep Sky Objects" / args.target / "_Processed"
+            Path(args.archive) / "04_Deep Sky Objects" / args.target / "_Processed"
         )
         date_str = _find_latest_processed_date(processed_root)
 
@@ -758,10 +758,10 @@ Examples:
   %(prog)s mark-processed M81_20260219_FRA400_ASI585MC_L-Pro "2026-03-01 /path/to/output"
 
   # Mark all sessions for a target as processed (date auto-detected from archive)
-  %(prog)s finish --target "M 81" --output /Volumes/Astrophotography
+  %(prog)s finish --target "M 81" --archive /Volumes/Astrophotography
 
   # Mark specific sessions only
-  %(prog)s finish --target "M 81" --output /Volumes/Astrophotography \\
+  %(prog)s finish --target "M 81" --archive /Volumes/Astrophotography \\
       --session M81_20260219_FRA400_ZWOASI585MCPro_L-Pro
 
   # Fallback when _Processed/ is already cleaned up
@@ -803,10 +803,10 @@ Examples:
     )
     p_finish_date = p_finish.add_mutually_exclusive_group(required=True)
     p_finish_date.add_argument(
-        "--output", metavar="PATH",
+        "--archive", metavar="PATH",
         help=(
             "NAS archive root — navigates to "
-            "<output>/04_Deep Sky Objects/<target>/_Processed/ to detect the date "
+            "<archive>/04_Deep Sky Objects/<target>/_Processed/ to detect the date "
             "(targets outside 04_Deep Sky Objects/ should use --date instead)"
         ),
     )
