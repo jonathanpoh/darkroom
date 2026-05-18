@@ -12,13 +12,21 @@ pipeline); now one package with subcommands:
 | `darkroom catalog scan-calibration <path>` | Catalog calibration frames |
 | `darkroom catalog mark <id> <status>` | Update processed_status for one session |
 | `darkroom catalog list [--target X]` | Browse the catalog |
-| `darkroom ingest --source <path> [--dry-run \| --manifest F \| --review F \| --commit [F]]` | Archive an ASIAir session |
+| `darkroom ingest --asiair <path> [--dry-run \| --manifest F \| --review F \| --commit [F]]` | Archive an ASIAir session |
 | `darkroom wbpp --target X [--date Y \| --session ID]` | Build SESSION_N symlink dirs for PixInsight |
-| `darkroom finish --target X [--date Y]` | Copy WBPP stacks back to NAS and mark sessions processed |
+| `darkroom finish --target X [--date Y]` | Copy WBPP stacks back to archive and mark sessions processed |
+| `darkroom serve` | Browse the catalog in datasette |
 
-Shared flags: `--catalog`/`--db` (env `DARKROOM_CATALOG`), `--output` (env
-`DARKROOM_OUTPUT`), `--wbpp` (default `./WBPP`). All resolve via CLI → env → `darkroom.toml`
-(see `darkroom/config.py`). The toml accepts flat keys or a `[darkroom]` section.
+Shared flags and config resolution (CLI → env → `darkroom.toml`, see `darkroom/config.py`):
+
+| Flag | Env var | toml key | Default |
+|---|---|---|---|
+| `--catalog` / `--db` | `DARKROOM_CATALOG` | `catalog_path` | `~/.config/darkroom/astro_catalog.db` |
+| `--archive` | `DARKROOM_ARCHIVE` | `archive_path` | — (required) |
+| `--wbpp` | `DARKROOM_WBPP` | `wbpp_path` | `./WBPP` |
+| `--asiair` | — | — | — (required for ingest) |
+
+The toml accepts flat keys or a `[darkroom]` section.
 
 ## Pipeline Context
 
@@ -41,8 +49,10 @@ darkroom wbpp ──→ ~/WBPP/<Target>/SESSION_N/  (symlinks, temporary)
       │            Darks/
       │            Flats/FILTER_<name>/
       │            FlatDarks/
+      │          ~/WBPP/<Target>/Output/  (created empty, set as WBPP output dir)
+      │            processed/             (pre-created)
       ▼
-  PixInsight WBPP → master/*.xisf + processed/*.xisf
+  PixInsight WBPP → Output/master/*.xisf + Output/processed/*.xisf
       │
       ▼
 darkroom finish ──→ NAS: 04_Deep Sky Objects/<Target>/_Processed/<date>/
@@ -121,8 +131,8 @@ Ported from `asiair-ingestion/scripts/create_wbpp_input.py`. Use these everywher
 ## `darkroom ingest` (was `archive_ingest.py`)
 
 ### Inputs
-- `--source <path>`: ASIAir output folder (an `Autorun/` directory or equivalent)
-- `--nas <path>`: NAS root (default: read from config or env var)
+- `--asiair <path>`: ASIAir output folder (an `Autorun/` directory or equivalent)
+- `--archive <path>`: NAS/local archive root (env: `DARKROOM_ARCHIVE`)
 - `--dry-run`: print what would happen, create no files
 - `--manifest <yaml>`: path to pre-generated manifest to commit
 - `--commit`: execute a previously generated manifest
@@ -136,9 +146,14 @@ Ported from `asiair-ingestion/scripts/create_wbpp_input.py`. Use these everywher
 6. In `--dry-run` or first pass: print/save manifest, stop.
 7. In `--commit` pass: execute copies, then register in `astro_catalog.db`.
 
-### Manifest YAML structure (draft)
+### Manifest YAML structure
 
 ```yaml
+meta:
+  asiair: /Volumes/ASIAIR/Autorun/
+  archive: ~/02_Astrophotography/02_Archive
+  catalog: ~/.config/darkroom/astro_catalog.db
+  generated: 2026-02-19T21:00:00
 sessions:
   - session_id: M81_20260219_FRA400_ZWOASI585MCPro_L-Pro
     target: M 81
@@ -149,18 +164,10 @@ sessions:
     gain: 200
     exposure_sec: 180.0
     frame_count: 132
-    source: /Volumes/ASIAIR/Autorun/Light/M 81/
-    destination: /Volumes/Astrophotography/04_Deep Sky Objects/M 81/2026-02-19_FRA400_ZWOASI585MCPro_L-Pro/Lights/
 
 calibration:
-  flats:
-    - source: /Volumes/ASIAIR/Autorun/Flat/
-      destination: /Volumes/Astrophotography/00_Calibration/Flats/FRA400_ZWOASI585MCPro_L-Pro/2026-02-20/
-      frame_count: 30
-  darks:
-    - source: /Volumes/ASIAIR/Autorun/Dark/
-      destination: /Volumes/Astrophotography/00_Calibration/Darks/ZWOASI585MCPro/
-      frame_count: 30
+  - frame_type: Flat
+    ...
 ```
 
 ## `darkroom wbpp` (was `wbpp_prep.py`)
@@ -184,18 +191,30 @@ Generalised from `asiair-ingestion/scripts/create_wbpp_input.py`. Key difference
 ### Inputs
 - `--target "M 81"` + `--date 2026-02-19` (looks up session in catalog)
 - `--session M81_20260219_FRA400_ZWOASI585MCPro_L-Pro` (direct session ID)
-- `--wbpp-root <path>`: where to create SESSION_N dirs (default: `~/WBPP/`)
-- `--nas <path>`: NAS root
+- `--wbpp <path>`: where to create SESSION_N dirs (env: `DARKROOM_WBPP`, default: `./WBPP`)
+- `--archive <path>`: NAS/local archive root (env: `DARKROOM_ARCHIVE`)
+
+### Output structure
+```
+<wbpp>/<TargetSlug>/
+  SESSION_N/        ← symlinks into archive
+    Lights/
+    Darks/
+    Flats/
+    FlatDarks/
+  Output/           ← set this as WBPP output dir in PixInsight
+    processed/      ← pre-created
+```
 
 ## Running
 
 ```bash
-cd /Users/jpoh/Projects/darkroom-ingest
+cd /Users/jpoh/Projects/darkroom
 uv sync --extra dev
 uv run darkroom --help
 uv run darkroom catalog list
-uv run datasette serve <catalog_db>      # browse in browser
-uv run pytest                            # 168 tests
+darkroom serve                           # browse catalog in datasette (installed globally)
+uv run pytest                            # 165 tests
 ```
 
 ## Package Layout
@@ -203,28 +222,24 @@ uv run pytest                            # 168 tests
 ```
 darkroom/
   cli.py            ← entry point (argparse dispatch)
-  config.py         ← shared CLI/env/toml path resolution
-  cataloger.py      ← FITS header extraction, scan-all/calibration logic, DB schema, upsert/mark fns (was: fits_cataloger.py from old darkroom-catalog repo)
+  config.py         ← shared CLI/env/toml path resolution; resolve_catalog() defaults to ~/.config/darkroom/astro_catalog.db
+  cataloger.py      ← FITS header extraction, scan-all/calibration logic, DB schema, upsert/mark fns
   catalog.py        ← read-only query helpers (find_darks, find_flats, find_flat_darks, query_sessions)
   catalog_cli.py    ← subparser tree for `darkroom catalog ...`
   parse.py          ← filename parsing (parse_filter, parse_exposure, parse_datetime, fits_files)
   scanner.py        ← scan_source — produces Session/CalibrationGroup dataclasses from ASIAir source folder
-  ingest.py         ← `darkroom ingest` (was archive_ingest.py)
-  prep.py           ← `darkroom wbpp` (was wbpp_prep.py)
-  finish.py         ← `darkroom finish` (was wbpp_finish.py)
+  ingest.py         ← `darkroom ingest`
+  prep.py           ← `darkroom wbpp`
+  finish.py         ← `darkroom finish`
+  serve.py          ← `darkroom serve`
   wbpp.py           ← symlink helpers used by prep/finish
 ```
 
 ## Relationship to `asiair-ingestion`
 
-`asiair-ingestion` is a **data repository** for the Feb 2026 imaging run, with a
-working prototype of `wbpp_prep.py` at `scripts/create_wbpp_input.py`. That script
-is hardcoded to the local `Autorun/` folder structure of that specific dataset.
-
-This project generalises those scripts to work from any NAS-archived session.
-When implementing, use `asiair-ingestion/scripts/create_wbpp_input.py` as the
-reference implementation — the logic is proven, just needs to be decoupled from the
-hardcoded paths and connected to the catalog.
+`asiair-ingestion` is a **data repository** for the Feb 2026 imaging run. Its
+`scripts/create_wbpp_input.py` was the original prototype — now superseded by this
+package. Treat it as a historical reference only.
 
 ## Catalog integration
 
