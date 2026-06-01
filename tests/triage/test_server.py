@@ -187,6 +187,14 @@ class TestAuditPage:
 
 
 class TestCommitExecute:
+    def test_execute_is_get_for_eventsource(self, client):
+        # The browser drives this via EventSource, which only issues GET.
+        # A POST-only route would 405 and silently apply nothing.
+        c, conn = client
+        resp = c.get("/commit/execute")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/event-stream")
+
     def test_flat_restructure_applied(self, db_and_archive):
         conn, db_path, archive = db_and_archive
         app = create_app(db_path=db_path, archive_root=archive)
@@ -201,7 +209,7 @@ class TestCommitExecute:
                               source_path=str(src), proposed_path=str(dst))
         update_status(conn, item_id, "approved")
 
-        resp = c.post("/commit/execute")
+        resp = c.get("/commit/execute")
         assert "success" in resp.text
         assert dst.exists()
         assert not src.exists()
@@ -224,7 +232,7 @@ class TestCommitExecute:
                               source_path=str(src), proposed_path=str(dst))
         update_status(conn, item_id, "approved")
 
-        resp = c.post("/commit/execute")
+        resp = c.get("/commit/execute")
         assert "error" in resp.text
         assert not dst.exists()
         row = conn.execute(
@@ -246,7 +254,7 @@ class TestCommitExecute:
                               source_path=str(src), proposed_path=str(dst))
         update_status(conn, item_id, "approved")
 
-        resp = c.post("/commit/execute")
+        resp = c.get("/commit/execute")
         assert "error" in resp.text
         assert not dst.exists()
         row = conn.execute(
@@ -276,7 +284,7 @@ class TestCommitExecute:
                              source_path=str(session), proposed_path=str(session_dst))
         update_status(conn, ses_id, "approved")
 
-        resp = c.post("/commit/execute")
+        resp = c.get("/commit/execute")
         # Both succeed because the nested Flats move runs before the parent rename
         assert resp.text.count("success") == 2
         assert calib_dst.exists()

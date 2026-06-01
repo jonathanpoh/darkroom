@@ -198,9 +198,13 @@ def create_app(*, db_path: Path, archive_root: Path) -> FastAPI:
             {"items": approved + modified},
         )
 
-    @app.post("/commit/execute")
+    @app.get("/commit/execute")
     def commit_execute():
-        """Stream SSE progress as approved items are applied."""
+        """Stream SSE progress as approved items are applied.
+
+        GET because the browser uses EventSource, which only issues GET. Safe
+        for this localhost single-user tool.
+        """
 
         def generate():
             conn = _conn()
