@@ -52,10 +52,13 @@ def check_ra_dec(
         simbad_dec = simbad_cache["dec"]
     else:
         table = Simbad.query_object(target_name)
-        if table is None:
+        if table is None or len(table) == 0:
             return None
-        simbad_ra = float(table["RA"][0])
-        simbad_dec = float(table["DEC"][0])
+        # astroquery >= 0.4.7 returns lowercase column names
+        ra_col = "ra" if "ra" in table.colnames else "RA"
+        dec_col = "dec" if "dec" in table.colnames else "DEC"
+        simbad_ra = float(table[ra_col][0])
+        simbad_dec = float(table[dec_col][0])
 
     frame_coord = SkyCoord(ra=float(ra), dec=float(dec), unit="deg")
     simbad_coord = SkyCoord(ra=simbad_ra, dec=simbad_dec, unit="deg")

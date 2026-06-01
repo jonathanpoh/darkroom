@@ -57,13 +57,18 @@ class TestCheckFitsObject:
 
 class TestCheckRaDec:
     def _make_mock_table(self, ra: float, dec: float) -> MagicMock:
-        """Return a mock SIMBAD table whose RA/DEC columns convert to floats correctly."""
+        """Return a mock SIMBAD table whose ra/dec columns convert to floats correctly.
+
+        astroquery >= 0.4.7 returns lowercase column names.
+        """
         ra_col = MagicMock()
         ra_col.__getitem__ = MagicMock(return_value=ra)
         dec_col = MagicMock()
         dec_col.__getitem__ = MagicMock(return_value=dec)
         mock_table = MagicMock()
-        mock_table.__getitem__ = MagicMock(side_effect=lambda k: ra_col if k == "RA" else dec_col)
+        mock_table.colnames = ["main_id", "ra", "dec"]
+        mock_table.__len__ = MagicMock(return_value=1)
+        mock_table.__getitem__ = MagicMock(side_effect=lambda k: ra_col if k == "ra" else dec_col)
         return mock_table
 
     def test_matching_coords_returns_none(self, tmp_path):
