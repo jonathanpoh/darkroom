@@ -8,6 +8,7 @@ from itertools import groupby
 from darkroom.catalog import query_all_sessions, query_sessions
 from darkroom.cataloger import (
     mark_processed_command,
+    migrate_archive_command,
     scan_all_command,
     scan_calibration_command,
 )
@@ -56,6 +57,11 @@ def _mark_run(args: argparse.Namespace) -> None:
     mark_processed_command(args)
 
 
+def _migrate_run(args: argparse.Namespace) -> None:
+    _resolve_db(args)
+    migrate_archive_command(args)
+
+
 def add_subparser(subparsers) -> None:
     p = subparsers.add_parser(
         "catalog",
@@ -84,3 +90,11 @@ def add_subparser(subparsers) -> None:
     ls = sub.add_parser("list", help="List sessions from the catalog")
     ls.add_argument("--target", metavar="NAME", help="Filter by target")
     ls.set_defaults(func=_list_run)
+
+    mig = sub.add_parser(
+        "migrate-archive",
+        help="Migrate archive from old filter-in-folder layout to Lights/<filter>/ layout",
+    )
+    mig.add_argument("--archive", required=True, metavar="PATH", help="Archive root directory")
+    mig.add_argument("--dry-run", action="store_true", help="Print moves without executing")
+    mig.set_defaults(func=_migrate_run)

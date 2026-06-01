@@ -104,12 +104,20 @@ class TestMakeSessionId:
 
 class TestFindLightsFolders:
     def test_canonical_structure(self, tmp_path):
-        # M81/2026-02-19_FRA400_ASI585MC_L-Pro/Lights/frame.fit
+        # Old canonical: M81/2026-02-19_FRA400_ASI585MC_L-Pro/Lights/frame.fit
         lights = tmp_path / "M81" / "2026-02-19_FRA400_ASI585MC_L-Pro" / "Lights"
         lights.mkdir(parents=True)
         (lights / "frame001.fit").touch()
         result = find_lights_folders(tmp_path)
         assert lights in result
+
+    def test_new_canonical_structure(self, tmp_path):
+        # New canonical: M81/2026-02-19_FRA400_ASI585MC/Lights/L-Pro/frame.fit
+        filter_dir = tmp_path / "M81" / "2026-02-19_FRA400_ASI585MC" / "Lights" / "L-Pro"
+        filter_dir.mkdir(parents=True)
+        (filter_dir / "frame001.fit").touch()
+        result = find_lights_folders(tmp_path)
+        assert filter_dir in result
 
     def test_old_structure_no_lights_subfolder(self, tmp_path):
         # IC 1805/Lights - Rasa 8"/frame.fit  (no Lights subfolder)

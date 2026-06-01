@@ -21,12 +21,12 @@ def test_camera_slug():
 
 def test_session_dest_rel():
     result = session_dest_rel("M 81", "2026-02-19", "FRA400", "ZWO ASI585MC Pro", "L-Pro")
-    assert result == Path("04_Deep Sky Objects/M 81/2026-02-19_FRA400_ZWOASI585MCPro_L-Pro/Lights")
+    assert result == Path("04_Deep Sky Objects/M 81/2026-02-19_FRA400_ZWOASI585MCPro/Lights/L-Pro")
 
 
 def test_session_dest_rel_no_filter():
     result = session_dest_rel("M 51", "2026-02-28", "FRA400", "ZWO ASI585MC Pro", None)
-    assert result == Path("04_Deep Sky Objects/M 51/2026-02-28_FRA400_ZWOASI585MCPro_NoFilter/Lights")
+    assert result == Path("04_Deep Sky Objects/M 51/2026-02-28_FRA400_ZWOASI585MCPro/Lights/NoFilter")
 
 
 def test_cal_dest_rel_flat():
@@ -168,7 +168,7 @@ def test_build_session_entry_new():
     assert entry["frame_count"] == 3
     assert len(entry["files"]) == 3
     assert all(f["copy"] is True for f in entry["files"])
-    assert entry["lights_rel_path"] == "04_Deep Sky Objects/M 81/2026-02-19_FRA400_ZWOASI585MCPro_L-Pro/Lights"
+    assert entry["lights_rel_path"] == "04_Deep Sky Objects/M 81/2026-02-19_FRA400_ZWOASI585MCPro/Lights/L-Pro"
 
 
 def test_build_session_entry_existing_same_count():

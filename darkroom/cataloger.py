@@ -199,28 +199,36 @@ def _target_from_path(lights_path: Path) -> str:
     """Extract target name from NAS folder path.
 
     Looks for the component immediately after '04_Deep Sky Objects'. Falls back
-    to the grandparent of the lights folder (Target/Date/Lights → Target).
+    based on directory depth:
+      old layout: Target/Date_OTA_Camera_Filter/Lights     → parts[-3]
+      new layout: Target/Date_OTA_Camera/Lights/Filter     → parts[-4]
     """
     parts = lights_path.parts
     for i, part in enumerate(parts):
         if part == "04_Deep Sky Objects" and i + 1 < len(parts):
             return parts[i + 1]
+    # New layout has one extra level (filter subdir under Lights/)
+    if lights_path.parent.name == "Lights" and len(parts) >= 4:
+        return parts[-4]
     if len(parts) >= 3:
         return parts[-3]
     return parts[-2] if len(parts) >= 2 else ""
 
 
 def _filter_from_path(lights_path: Path) -> str | None:
-    """Extract filter from the session folder name.
+    """Extract filter from path, handling two layouts:
 
-    Session folders follow YYYY-MM-DD_{OTA}_{Camera}_{Filter}. Returns the
-    last underscore-delimited component if there are at least 4 parts (date +
-    OTA + camera + filter). Returns None if the folder doesn't match.
+    New: Target/Date_OTA_Camera/Lights/FilterName  → filter = dir name
+    Old: Target/Date_OTA_Camera_Filter/Lights       → filter = last _ component of parent
     """
-    folder = lights_path.parent.name
-    parts = folder.split("_")
-    if len(parts) >= 4:
-        return parts[-1]
+    if lights_path.parent.name == "Lights":
+        # New layout: filter is the directory name itself
+        return lights_path.name
+    if lights_path.name == "Lights":
+        # Old layout: filter encoded in session folder name
+        parts = lights_path.parent.name.split("_")
+        if len(parts) >= 4:
+            return parts[-1]
     return None
 
 
@@ -817,6 +825,87 @@ def scan_all_command(args):
     print(f"\nDone: {added} sessions cataloged, {skipped} skipped")
     print(f"Database: {db_path}")
     print(f"Browse: datasette serve {db_path}")
+
+
+def migrate_archive_command(args) -> None:
+    """Move sessions from old filter-in-folder layout to new Lights/<filter>/ layout.
+
+    Old: 04_Deep Sky Objects/<Target>/<Date>_<OTA>_<Camera>_<Filter>/Lights/*.fit
+    New: 04_Deep Sky Objects/<Target>/<Date>_<OTA>_<Camera>/Lights/<Filter>/*.fit
+    """
+    from darkroom.ingest import camera_slug, session_dest_rel
+
+    archive = Path(args.archive)
+    db_path = Path(args.db)
+    dry_run = getattr(args, "dry_run", False)
+
+    con = sqlite3.connect(db_path)
+    con.row_factory = sqlite3.Row
+    rows = con.execute(
+        "SELECT session_id, target, obs_date, ota, camera, filter, lights_path FROM sessions"
+    ).fetchall()
+
+    migrated = 0
+    skipped = 0
+
+    for row in rows:
+        row = dict(row)
+        old_rel = Path(row["lights_path"])
+
+        if old_rel.parent.name == "Lights":
+            # Already new format
+            continue
+        if old_rel.name != "Lights":
+            print(f"  [SKIP] Unrecognized path format: {row['lights_path']}", file=sys.stderr)
+            skipped += 1
+            continue
+
+        new_rel = session_dest_rel(
+            row["target"], row["obs_date"], row["ota"], row["camera"], row["filter"]
+        )
+
+        old_abs = archive / old_rel
+        new_abs = archive / new_rel
+
+        if not old_abs.exists():
+            print(f"  [SKIP] Not found on disk: {old_abs}", file=sys.stderr)
+            skipped += 1
+            continue
+
+        fits_files = sorted(
+            f for f in old_abs.iterdir()
+            if f.is_file() and f.suffix.lower() in (".fit", ".fits")
+        )
+
+        if dry_run:
+            print(f"  MOVE  {old_abs}")
+            print(f"     -> {new_abs}  ({len(fits_files)} file(s))")
+            print(f"        UPDATE lights_path WHERE session_id='{row['session_id']}'")
+        else:
+            new_abs.mkdir(parents=True, exist_ok=True)
+            for f in fits_files:
+                f.rename(new_abs / f.name)
+            try:
+                old_abs.rmdir()
+            except OSError:
+                print(f"  [WARN] Could not remove {old_abs}", file=sys.stderr)
+            try:
+                old_abs.parent.rmdir()
+            except OSError:
+                pass  # Old session folder still has other filter dirs — expected
+            con.execute(
+                "UPDATE sessions SET lights_path = ? WHERE session_id = ?",
+                (str(new_rel), row["session_id"]),
+            )
+            con.commit()
+            print(f"  OK    {row['session_id']}")
+
+        migrated += 1
+
+    con.close()
+
+    suffix = " (dry run)" if dry_run else ""
+    print(f"\nMigrated {migrated} session(s){suffix}, {skipped} skipped.")
 
 
 def main():
