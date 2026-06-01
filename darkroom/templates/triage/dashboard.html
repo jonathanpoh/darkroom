@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html>
+<head><title>darkroom triage</title></head>
+<body>
+<h1>darkroom triage dashboard</h1>
+<p>Total items: {{ counts.total }} | Done: {{ counts.done }}</p>
+<ul>
+{% for cat, stats in counts.by_cat.items() %}
+<li>{{ cat }}: pending={{ stats.pending }}, approved={{ stats.approved }}, skipped={{ stats.skipped }}, applied={{ stats.applied }}</li>
+{% endfor %}
+</ul>
+<a href="/queue">Queue</a> | <a href="/commit">Commit</a> | <a href="/audit">Audit</a>
+</body>
+</html>

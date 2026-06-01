@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html>
+<head><title>darkroom triage — commit</title></head>
+<body>
+<h1>Commit approved items</h1>
+<p>{{ items | length }} item(s) ready to apply.</p>
+<ul>
+{% for item in items %}
+<li>
+  [{{ item.category }}] {{ item.source_path }} &rarr; {{ item.proposed_path }}
+  (status: {{ item.status }})
+</li>
+{% endfor %}
+</ul>
+<form method="post" action="/commit/execute">
+  <button type="submit">Execute</button>
+</form>
+<a href="/">Dashboard</a>
+</body>
+</html>

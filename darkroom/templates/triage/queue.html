@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head><title>darkroom triage — queue</title></head>
+<body>
+<h1>Queue</h1>
+<p>Filter: category={{ category }}, status={{ status }}</p>
+<ul>
+{% for item in items %}
+<li>
+  [{{ item.category }}] {{ item.source_path }} &rarr; {{ item.proposed_path }}
+  (status: {{ item.status }})
+  <a href="/item/{{ item.id }}">review</a>
+</li>
+{% endfor %}
+{% if not items %}
+<li>No items.</li>
+{% endif %}
+</ul>
+<a href="/">Dashboard</a>
+</body>
+</html>

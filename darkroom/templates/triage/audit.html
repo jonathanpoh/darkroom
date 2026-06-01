@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head><title>darkroom triage — audit log</title></head>
+<body>
+<h1>Audit log</h1>
+<a href="/audit/export.csv">Export CSV</a>
+<table>
+<tr><th>id</th><th>item_id</th><th>action</th><th>source</th><th>dest</th><th>result</th><th>applied_at</th><th>revert</th></tr>
+{% for e in entries %}
+<tr>
+  <td>{{ e.id }}</td>
+  <td>{{ e.triage_item_id }}</td>
+  <td>{{ e.action_type }}</td>
+  <td>{{ e.source_path }}</td>
+  <td>{{ e.dest_path }}</td>
+  <td>{{ e.result }}</td>
+  <td>{{ e.applied_at }}</td>
+  <td>
+    {% if not e.reverted_at %}
+    <form method="post" action="/audit/{{ e.id }}/revert">
+      <button type="submit">Revert</button>
+    </form>
+    {% endif %}
+  </td>
+</tr>
+{% endfor %}
+{% if not entries %}
+<tr><td colspan="8">No audit entries.</td></tr>
+{% endif %}
+</table>
+<a href="/">Dashboard</a>
+</body>
+</html>
