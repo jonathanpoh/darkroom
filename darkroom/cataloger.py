@@ -496,7 +496,7 @@ class FITSHeaderExtractor:
                     "date_obs": header.get("DATE-OBS", ""),
                     "exposure": float(header.get("EXPOSURE", header.get("EXPTIME", 0.0))),
                     "camera": header.get("INSTRUME", "Unknown"),
-                    "gain": int(header.get("GAIN", 0)),
+                    "gain": int(header.get("GAIN") or header.get("ISO") or 0),
                     "temperature": float(header.get("CCD-TEMP", header.get("SET-TEMP", 0.0))),
                     "object": header.get("OBJECT", ""),
                     "filter_header": header.get("FILTER", None),
