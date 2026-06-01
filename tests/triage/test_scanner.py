@@ -1,0 +1,146 @@
+import re
+from pathlib import Path
+
+import numpy as np
+import pytest
+from astropy.io import fits
+
+from darkroom.triage.scanner import (
+    TriageCandidate,
+    scan_flat_restructure,
+    scan_calibration_in_target,
+    scan_processed_dirs,
+    scan_thumbnail_cleanup,
+    scan_legacy_sessions,
+    scan_archive,
+)
+
+_FLAT_DATE_RE = re.compile(r"^\d{8}_")
+_CANONICAL_SESSION_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_\w+_\w+")
+
+
+def make_fits(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    hdu = fits.PrimaryHDU(data=np.zeros((4, 4), dtype=np.uint16))
+    hdu.header["OBJECT"] = "M 81"
+    hdu.header["FOCALLEN"] = 400
+    hdu.writeto(path, overwrite=True)
+    return path
+
+
+@pytest.fixture
+def archive(tmp_path):
+    return tmp_path / "staging"
+
+
+class TestScanFlatRestructure:
+    def test_detects_yyyymmdd_flat_folder(self, archive):
+        flat_dir = archive / "00_Calibration" / "Flats" / "20240110_FMA180_Canon6D_L-Pro"
+        flat_dir.mkdir(parents=True)
+        candidates = scan_flat_restructure(archive / "00_Calibration")
+        assert len(candidates) == 1
+        c = candidates[0]
+        assert c.category == "flat_restructure"
+        assert "FMA180_Canon6D_L-Pro" in c.proposed_path
+        assert "2024-01-10" in c.proposed_path
+
+    def test_skips_already_canonical(self, archive):
+        canon = (archive / "00_Calibration" / "Flats"
+                 / "FMA180_Canon6D_L-Pro" / "2024-01-10")
+        canon.mkdir(parents=True)
+        candidates = scan_flat_restructure(archive / "00_Calibration")
+        assert candidates == []
+
+    def test_normalises_nofilter_typo(self, archive):
+        flat_dir = (archive / "00_Calibration" / "Flats"
+                    / "20250203_FRA400_Canon6D_NoFIlter")
+        flat_dir.mkdir(parents=True)
+        candidates = scan_flat_restructure(archive / "00_Calibration")
+        assert candidates[0].proposed_path.endswith("NoFilter/2025-02-03")
+
+    def test_unknown_ota_flagged(self, archive):
+        flat_dir = (archive / "00_Calibration" / "Flats"
+                    / "20230716_100mm_Canon6D")
+        flat_dir.mkdir(parents=True)
+        candidates = scan_flat_restructure(archive / "00_Calibration")
+        assert len(candidates) == 1
+        assert candidates[0].proposed_path is None  # can't auto-map
+
+
+class TestScanCalibrationInTarget:
+    def test_detects_flats_subdir(self, archive):
+        flats = (archive / "04_Deep Sky Objects" / "M 42" / "2025-01-17" / "Flats")
+        flats.mkdir(parents=True)
+        make_fits(flats / "flat001.fit")
+        candidates = scan_calibration_in_target(archive / "04_Deep Sky Objects")
+        assert any(c.category == "calibration_in_target" for c in candidates)
+
+    def test_case_insensitive(self, archive):
+        darks = (archive / "04_Deep Sky Objects" / "M 42" / "2023-11-23" / "darks")
+        darks.mkdir(parents=True)
+        make_fits(darks / "dark001.fit")
+        candidates = scan_calibration_in_target(archive / "04_Deep Sky Objects")
+        assert len(candidates) == 1
+
+    def test_plural_variants(self, archive):
+        for name in ("flat", "Flats", "bias", "biases", "flatdarks"):
+            d = (archive / "04_Deep Sky Objects" / "NGC 6960" / "2024-01-01" / name)
+            d.mkdir(parents=True)
+            make_fits(d / "frame.fit")
+        candidates = scan_calibration_in_target(archive / "04_Deep Sky Objects")
+        assert len(candidates) == 5
+
+
+class TestScanProcessedDirs:
+    def test_detects_pixinsight_dir(self, archive):
+        pi = archive / "04_Deep Sky Objects" / "NGC 6960" / "Pixinsight"
+        pi.mkdir(parents=True)
+        (pi / "project.pxiproject").write_text("x")
+        candidates = scan_processed_dirs(archive / "04_Deep Sky Objects")
+        assert len(candidates) == 1
+        assert candidates[0].category == "processed_dir"
+        assert candidates[0].proposed_path.endswith("_Processed")
+
+    def test_skips_already_canonical(self, archive):
+        proc = archive / "04_Deep Sky Objects" / "NGC 6960" / "_Processed"
+        proc.mkdir(parents=True)
+        candidates = scan_processed_dirs(archive / "04_Deep Sky Objects")
+        assert candidates == []
+
+
+class TestScanThumbnailCleanup:
+    def test_detects_thn_jpg(self, archive):
+        thn = archive / "04_Deep Sky Objects" / "M 81" / "2024-01-01" / "img_thn.jpg"
+        thn.parent.mkdir(parents=True)
+        thn.write_bytes(b"jpg")
+        candidates = scan_thumbnail_cleanup(archive)
+        assert len(candidates) == 1
+        assert candidates[0].category == "thumbnail_cleanup"
+
+    def test_case_insensitive_extension(self, archive):
+        thn = archive / "frame_thn.JPG"
+        archive.mkdir(parents=True, exist_ok=True)
+        thn.write_bytes(b"jpg")
+        candidates = scan_thumbnail_cleanup(archive)
+        assert len(candidates) == 1
+
+
+class TestScanLegacySessions:
+    def test_detects_date_only_folder(self, archive):
+        session = archive / "04_Deep Sky Objects" / "M 42" / "2023-11-23"
+        make_fits(session / "Lights" / "frame.fit")
+        candidates = scan_legacy_sessions(archive / "04_Deep Sky Objects")
+        assert any(c.category == "legacy_session" for c in candidates)
+
+    def test_skips_canonical_session(self, archive):
+        session = (archive / "04_Deep Sky Objects" / "M 42"
+                   / "2026-02-22_FRA400_ZWOASI585MCPro")
+        make_fits(session / "Lights" / "L-Pro" / "frame.fit")
+        candidates = scan_legacy_sessions(archive / "04_Deep Sky Objects")
+        assert candidates == []
+
+    def test_skips_processed_dirs(self, archive):
+        proc = archive / "04_Deep Sky Objects" / "M 42" / "_Processed"
+        proc.mkdir(parents=True)
+        candidates = scan_legacy_sessions(archive / "04_Deep Sky Objects")
+        assert candidates == []
