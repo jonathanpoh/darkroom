@@ -86,6 +86,29 @@ class TestItemActions:
         ).fetchone()
         assert row[0] == "skipped"
 
+    def test_accepting_suggestion_unchanged_is_approved(self, client):
+        c, conn = client
+        item_id = upsert_item(conn, category="processed_dir",
+                              source_path="/s/p", proposed_path="/s/p_Processed")
+        # Submit the same pre-filled path back — accepting the suggestion as-is.
+        c.post(f"/item/{item_id}/approve",
+               data={"proposed_path": "/s/p_Processed"})
+        row = conn.execute(
+            "SELECT status FROM triage_items WHERE id = ?", (item_id,)
+        ).fetchone()
+        assert row[0] == "approved"
+
+    def test_editing_suggestion_is_modified(self, client):
+        c, conn = client
+        item_id = upsert_item(conn, category="processed_dir",
+                              source_path="/s/p", proposed_path="/s/p_Processed")
+        c.post(f"/item/{item_id}/approve",
+               data={"proposed_path": "/s/p_DIFFERENT"})
+        row = conn.execute(
+            "SELECT status FROM triage_items WHERE id = ?", (item_id,)
+        ).fetchone()
+        assert row[0] == "modified"
+
     def test_approve_advances_within_same_category(self, client):
         c, conn = client
         # calibration_in_target sorts alphabetically before processed_dir;
@@ -124,6 +147,21 @@ class TestItemActions:
         resp = c.post(f"/item/{proc1}/skip", follow_redirects=False)
         assert resp.status_code == 303
         assert resp.headers["location"] == f"/item/{proc2}"
+
+
+class TestDashboardCounts:
+    def test_modified_counted_as_approved(self, client):
+        c, conn = client
+        # An item the user edited (status "modified") must still appear on the
+        # dashboard — counted as ready-to-commit, same as the Commit page.
+        item_id = upsert_item(conn, category="processed_dir",
+                              source_path="/s/p", proposed_path="/s/p1")
+        update_status(conn, item_id, "modified")
+        resp = c.get("/")
+        # The processed_dir row must render (0 pending but 1 ready) ...
+        assert "processed_dir" in resp.text
+        # ... and the commit page agrees there's 1 item ready.
+        assert "/s/p" in c.get("/commit").text
 
 
 class TestCommitPage:

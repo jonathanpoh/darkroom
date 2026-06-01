@@ -49,7 +49,12 @@ def create_app(*, db_path: Path, archive_root: Path) -> FastAPI:
         by_cat = {
             cat: {
                 "pending": triage_db.count_items(conn, category=cat, status="pending"),
-                "approved": triage_db.count_items(conn, category=cat, status="approved"),
+                # "approved" here means ready-to-commit, which includes items the
+                # user edited (status "modified") — same set the Commit page lists.
+                "approved": (
+                    triage_db.count_items(conn, category=cat, status="approved")
+                    + triage_db.count_items(conn, category=cat, status="modified")
+                ),
                 "skipped": triage_db.count_items(conn, category=cat, status="skipped"),
                 "applied": triage_db.count_items(conn, category=cat, status="applied"),
             }
@@ -150,7 +155,11 @@ def create_app(*, db_path: Path, archive_root: Path) -> FastAPI:
         item = triage_db.get_item(conn, item_id)
         if item is None:
             raise HTTPException(status_code=404)
-        status = "modified" if (proposed_path or proposed_value) else "approved"
+        # "modified" only when the user actually changed the suggested path/value;
+        # accepting the pre-filled suggestion as-is counts as plain "approved".
+        path_changed = bool(proposed_path) and proposed_path != (item.get("proposed_path") or "")
+        value_changed = bool(proposed_value) and proposed_value != (item.get("proposed_value") or "")
+        status = "modified" if (path_changed or value_changed) else "approved"
         triage_db.update_status(
             conn,
             item_id,
