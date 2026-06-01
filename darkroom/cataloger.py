@@ -157,7 +157,9 @@ _DSLR_RE = re.compile(r"canon|nikon|sony|pentax|fuji", re.IGNORECASE)
 
 def _format_gain(camera: str, gain: int) -> str:
     """Return 'ISO1600' for DSLRs or '200g' for astro cameras."""
-    return f"ISO{gain}" if _DSLR_RE.search(camera) else f"{gain}g"
+    if _DSLR_RE.search(camera):
+        return "ISOAuto" if gain == 0 else f"ISO{gain}"
+    return f"{gain}g"
 
 
 def _parse_gain(header) -> int:
