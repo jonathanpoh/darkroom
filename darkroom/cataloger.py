@@ -175,14 +175,22 @@ def _parse_gain(header) -> int:
 
 
 _CATALOG_RE = re.compile(
-    r"^(NGC|LBN|LDN|RCW|GUM|Ced|vdB|Col|Mel|Stock|Abell|Sh\s*2|IC|Tr|Cr|B|M|C)\s*(\d.*)",
+    r"^(NGC|LBN|LDN|RCW|GUM|Ced|vdB|Col|Mel|Stock|Abell|IC|Tr|Cr|B|M|C)\s*(\d.*)",
     re.IGNORECASE,
 )
+_SH2_RE = re.compile(r"^Sh\s*2[-\s]*(\d+)", re.IGNORECASE)
 
 
 def _normalize_target(name: str) -> str:
-    """Ensure canonical space between catalog prefix and number ('M81' → 'M 81', 'C49' → 'C 49')."""
+    """Ensure canonical spacing in catalog designations.
+
+    'M81' → 'M 81', 'C49' → 'C 49', 'SH2-103' → 'Sh 2-103'.
+    Unrecognised names pass through unchanged.
+    """
     name = name.strip()
+    m = _SH2_RE.match(name)
+    if m:
+        return f"Sh 2-{m.group(1)}"
     m = _CATALOG_RE.match(name)
     return f"{m.group(1)} {m.group(2)}" if m else name
 
