@@ -86,6 +86,45 @@ class TestItemActions:
         ).fetchone()
         assert row[0] == "skipped"
 
+    def test_approve_advances_within_same_category(self, client):
+        c, conn = client
+        # calibration_in_target sorts alphabetically before processed_dir;
+        # approving a processed_dir item must NOT jump to the calibration queue.
+        cal = upsert_item(conn, category="calibration_in_target",
+                          source_path="/s/cal", proposed_path="/s/cal2")
+        proc1 = upsert_item(conn, category="processed_dir",
+                            source_path="/s/p1", proposed_path="/s/p1x")
+        proc2 = upsert_item(conn, category="processed_dir",
+                            source_path="/s/p2", proposed_path="/s/p2x")
+
+        resp = c.post(f"/item/{proc1}/approve", follow_redirects=False)
+        assert resp.status_code == 303
+        assert resp.headers["location"] == f"/item/{proc2}"
+
+    def test_advance_to_queue_when_category_exhausted(self, client):
+        c, conn = client
+        upsert_item(conn, category="calibration_in_target",
+                    source_path="/s/cal", proposed_path="/s/cal2")
+        only = upsert_item(conn, category="processed_dir",
+                           source_path="/s/p1", proposed_path="/s/p1x")
+
+        resp = c.post(f"/item/{only}/approve", follow_redirects=False)
+        assert resp.status_code == 303
+        assert resp.headers["location"] == "/queue?category=processed_dir&status=pending"
+
+    def test_skip_advances_within_same_category(self, client):
+        c, conn = client
+        upsert_item(conn, category="calibration_in_target",
+                    source_path="/s/cal", proposed_path="/s/cal2")
+        proc1 = upsert_item(conn, category="processed_dir",
+                            source_path="/s/p1", proposed_path="/s/p1x")
+        proc2 = upsert_item(conn, category="processed_dir",
+                            source_path="/s/p2", proposed_path="/s/p2x")
+
+        resp = c.post(f"/item/{proc1}/skip", follow_redirects=False)
+        assert resp.status_code == 303
+        assert resp.headers["location"] == f"/item/{proc2}"
+
 
 class TestCommitPage:
     def test_commit_page_loads(self, client):

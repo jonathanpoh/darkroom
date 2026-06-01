@@ -57,6 +57,27 @@ def create_app(*, db_path: Path, archive_root: Path) -> FastAPI:
         }
         return {"total": total, "done": done, "by_cat": by_cat}
 
+    def _next_pending_id(conn, category: str, exclude_id: int) -> int | None:
+        """First pending item id in the same category, excluding exclude_id.
+
+        Keeps the reviewer moving through one category at a time instead of
+        jumping to the alphabetically-first category's queue.
+        """
+        rows = triage_db.list_items(
+            conn, category=category, status="pending", limit=500
+        )
+        return next((r["id"] for r in rows if r["id"] != exclude_id), None)
+
+    def _advance(conn, category: str, current_id: int) -> RedirectResponse:
+        """Redirect to the next pending item in the same category, or — when
+        that category is cleared — back to its filtered queue."""
+        next_id = _next_pending_id(conn, category, current_id)
+        if next_id is not None:
+            return RedirectResponse(f"/item/{next_id}", status_code=303)
+        return RedirectResponse(
+            f"/queue?category={category}&status=pending", status_code=303
+        )
+
     @app.get("/", response_class=HTMLResponse)
     def dashboard(request: Request):
         conn = _conn()
@@ -106,10 +127,7 @@ def create_app(*, db_path: Path, archive_root: Path) -> FastAPI:
             except Exception:
                 pass
 
-        rows = triage_db.list_items(conn, status="pending", limit=2)
-        next_id = next(
-            (r["id"] for r in rows if r["id"] != item_id), None
-        )
+        next_id = _next_pending_id(conn, item["category"], item_id)
 
         return templates.TemplateResponse(
             request,
@@ -141,20 +159,17 @@ def create_app(*, db_path: Path, archive_root: Path) -> FastAPI:
             proposed_path=proposed_path or None,
             proposed_value=proposed_value or None,
         )
-        rows = triage_db.list_items(conn, status="pending", limit=1)
-        if rows:
-            return RedirectResponse(f"/item/{rows[0]['id']}", status_code=303)
-        return RedirectResponse("/queue", status_code=303)
+        return _advance(conn, item["category"], item_id)
 
     @app.post("/item/{item_id}/skip")
     def skip_item(item_id: int, user_notes: str = Form(default="")):
         conn = _conn()
+        item = triage_db.get_item(conn, item_id)
+        if item is None:
+            raise HTTPException(status_code=404)
         triage_db.update_status(conn, item_id, "skipped",
                                  user_notes=user_notes or None)
-        rows = triage_db.list_items(conn, status="pending", limit=1)
-        if rows:
-            return RedirectResponse(f"/item/{rows[0]['id']}", status_code=303)
-        return RedirectResponse("/queue", status_code=303)
+        return _advance(conn, item["category"], item_id)
 
     @app.post("/item/{item_id}/flag")
     def flag_item(item_id: int, user_notes: str = Form(default="")):
