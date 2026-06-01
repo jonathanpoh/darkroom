@@ -167,6 +167,20 @@ def _target_from_path(lights_path: Path) -> str:
     return parts[-2] if len(parts) >= 2 else ""
 
 
+def _filter_from_path(lights_path: Path) -> str | None:
+    """Extract filter from the session folder name.
+
+    Session folders follow YYYY-MM-DD_{OTA}_{Camera}_{Filter}. Returns the
+    last underscore-delimited component if there are at least 4 parts (date +
+    OTA + camera + filter). Returns None if the folder doesn't match.
+    """
+    folder = lights_path.parent.name
+    parts = folder.split("_")
+    if len(parts) >= 4:
+        return parts[-1]
+    return None
+
+
 def find_lights_folders(root: Path) -> list[Path]:
     """Recursively find dirs containing .fit/.fits files, skipping @eaDir and calibration folders.
 
@@ -533,7 +547,7 @@ class SessionAnalyzer:
                 if filter_ is not None:
                     break
             if filter_ is None:
-                filter_ = first.get("filter_header") or ""
+                filter_ = first.get("filter_header") or _filter_from_path(lights_path) or ""
 
             sessions.append({
                 "target": first["object"] or _target_from_path(lights_path),
