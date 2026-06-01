@@ -65,3 +65,45 @@ class TestCollectFitsFiles:
         (tmp_path / "a.fit").touch()
         result = collect_fits_files(tmp_path)
         assert result == sorted(result)
+
+
+from astropy.io import fits
+import numpy as np
+
+
+def _make_fits(path: Path, object_val=None, set_key=True) -> Path:
+    """Write a minimal FITS file. If set_key=False, OBJECT header is absent."""
+    hdu = fits.PrimaryHDU(data=np.zeros((4, 4), dtype=np.uint16))
+    if set_key:
+        hdu.header["OBJECT"] = object_val if object_val is not None else ""
+    hdu.writeto(path, overwrite=True)
+    return path
+
+
+class TestScanFile:
+    def test_valid_object_returns_none(self, tmp_path):
+        p = _make_fits(tmp_path / "good.fit", "M 81")
+        assert scan_file(p) is None
+
+    def test_missing_key_flagged(self, tmp_path):
+        p = _make_fits(tmp_path / "nokey.fit", set_key=False)
+        assert scan_file(p) == (p, "MISSING")
+
+    def test_empty_object_flagged(self, tmp_path):
+        p = _make_fits(tmp_path / "empty.fit", "")
+        assert scan_file(p) == (p, "MISSING")
+
+    def test_fov_flagged(self, tmp_path):
+        p = _make_fits(tmp_path / "fov.fit", "FOV")
+        assert scan_file(p) == (p, "FOV")
+
+    def test_fov_case_insensitive(self, tmp_path):
+        p = _make_fits(tmp_path / "fov_lc.fit", "fov")
+        assert scan_file(p) == (p, "FOV")
+
+    def test_corrupt_file_returns_none_with_warning(self, tmp_path, capsys):
+        p = tmp_path / "corrupt.fit"
+        p.write_bytes(b"not a fits file")
+        result = scan_file(p)
+        assert result is None
+        assert "WARNING" in capsys.readouterr().err
