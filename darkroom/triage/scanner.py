@@ -7,6 +7,7 @@ from pathlib import Path
 from astropy.io import fits
 
 from darkroom.parse import ota_from_focallen
+from darkroom.triage.checks import check_fits_object, check_ra_dec
 
 _FITS_SUFFIXES = {".fit", ".fits"}
 _CALIB_NAMES = {
@@ -181,8 +182,77 @@ def scan_legacy_sessions(dso_root: Path) -> list[TriageCandidate]:
     return candidates
 
 
+def scan_fits_headers(dso_root: Path) -> list[TriageCandidate]:
+    """
+    Sample one FITS file per Lights/ directory to detect missing/FOV OBJECT
+    headers and RA/DEC mismatches. One candidate per session folder, not per file.
+    """
+    candidates = []
+    seen_sessions: set[str] = set()
+
+    for lights_dir in dso_root.rglob("Lights"):
+        if not lights_dir.is_dir():
+            continue
+        session_dir = lights_dir.parent
+        if str(session_dir) in seen_sessions:
+            continue
+        target_dir = session_dir.parent
+        target_name = target_dir.name
+
+        # Sample first FITS file
+        sample = next(
+            (p for p in sorted(lights_dir.rglob("*"))
+             if p.suffix.lower() in _FITS_SUFFIXES and "_thn" not in p.name),
+            None,
+        )
+        if sample is None:
+            continue
+
+        seen_sessions.add(str(session_dir))
+        reason, obj_val = check_fits_object(sample)
+
+        if reason is not None:
+            corrected = str(
+                dso_root.parent / "_corrected"
+                / session_dir.relative_to(dso_root.parent)
+            )
+            candidates.append(TriageCandidate(
+                category="missing_object",
+                source_path=str(session_dir),
+                proposed_path=corrected,
+                proposed_value=target_name,
+                fits_metadata={
+                    "sample_file": str(sample),
+                    "object_val": obj_val,
+                    "reason": reason,
+                    "target": target_name,
+                },
+            ))
+            continue
+
+        # Only check RA/DEC if OBJECT is valid
+        mismatch = check_ra_dec(sample, target_name)
+        if mismatch:
+            corrected = str(
+                dso_root.parent / "_corrected"
+                / session_dir.relative_to(dso_root.parent)
+            )
+            candidates.append(TriageCandidate(
+                category="ra_dec_mismatch",
+                source_path=str(session_dir),
+                proposed_path=corrected,
+                proposed_value=target_name,
+                fits_metadata={
+                    "sample_file": str(sample),
+                    **mismatch,
+                },
+            ))
+
+    return candidates
+
+
 def scan_archive(archive_root: Path) -> list[TriageCandidate]:
-    """Run all structural scanners and return combined candidates."""
+    """Run all scanners and return combined candidates."""
     calib = archive_root / "00_Calibration"
     dso = archive_root / "04_Deep Sky Objects"
     results: list[TriageCandidate] = []
@@ -192,5 +262,6 @@ def scan_archive(archive_root: Path) -> list[TriageCandidate]:
         results += scan_calibration_in_target(dso)
         results += scan_processed_dirs(dso)
         results += scan_legacy_sessions(dso)
+        results += scan_fits_headers(dso)
     results += scan_thumbnail_cleanup(archive_root)
     return results

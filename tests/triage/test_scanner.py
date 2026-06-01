@@ -5,6 +5,8 @@ import numpy as np
 import pytest
 from astropy.io import fits
 
+from unittest.mock import patch
+
 from darkroom.triage.scanner import (
     TriageCandidate,
     scan_flat_restructure,
@@ -13,6 +15,7 @@ from darkroom.triage.scanner import (
     scan_thumbnail_cleanup,
     scan_legacy_sessions,
     scan_archive,
+    scan_fits_headers,
 )
 
 _FLAT_DATE_RE = re.compile(r"^\d{8}_")
@@ -144,3 +147,42 @@ class TestScanLegacySessions:
         proc.mkdir(parents=True)
         candidates = scan_legacy_sessions(archive / "04_Deep Sky Objects")
         assert candidates == []
+
+
+class TestScanFitsHeaders:
+    def test_detects_missing_object(self, archive):
+        session = archive / "04_Deep Sky Objects" / "M 81" / "2023-08-06"
+        make_fits(session / "Lights" / "frame.fit")
+        # Patch check_fits_object to return MISSING for any file
+        with patch("darkroom.triage.scanner.check_fits_object",
+                   return_value=("MISSING", None)):
+            candidates = scan_fits_headers(archive / "04_Deep Sky Objects")
+        assert any(c.category == "missing_object" for c in candidates)
+
+    def test_detects_fov_object(self, archive):
+        session = archive / "04_Deep Sky Objects" / "NGC 6960" / "2024-05-07"
+        make_fits(session / "Lights" / "frame.fit")
+        with patch("darkroom.triage.scanner.check_fits_object",
+                   return_value=("FOV", "FOV")):
+            candidates = scan_fits_headers(archive / "04_Deep Sky Objects")
+        assert any(c.category == "missing_object" for c in candidates)
+
+    def test_proposes_object_from_folder_name(self, archive):
+        session = archive / "04_Deep Sky Objects" / "NGC 6960" / "2024-05-07"
+        make_fits(session / "Lights" / "frame.fit")
+        with patch("darkroom.triage.scanner.check_fits_object",
+                   return_value=("FOV", "FOV")):
+            candidates = scan_fits_headers(archive / "04_Deep Sky Objects")
+        c = next(c for c in candidates if c.category == "missing_object")
+        assert c.proposed_value == "NGC 6960"
+
+    def test_ra_dec_mismatch_flagged(self, archive):
+        session = archive / "04_Deep Sky Objects" / "M 81" / "2024-01-01"
+        make_fits(session / "Lights" / "frame.fit")
+        mismatch = {"separation_deg": 30.0, "simbad_ra": 10.0, "simbad_dec": 40.0,
+                    "frame_ra": 100.0, "frame_dec": 20.0, "target_name": "M 81"}
+        with patch("darkroom.triage.scanner.check_fits_object",
+                   return_value=(None, "M 81")), \
+             patch("darkroom.triage.scanner.check_ra_dec", return_value=mismatch):
+            candidates = scan_fits_headers(archive / "04_Deep Sky Objects")
+        assert any(c.category == "ra_dec_mismatch" for c in candidates)
