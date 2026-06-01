@@ -152,6 +152,14 @@ def make_session_id(target: str, obs_date: str, ota: str, camera: str, filter_: 
 _CALIB_FOLDER_NAMES = frozenset({"flats", "darks", "bias", "flatdarks", "flat darks"})
 
 
+_DSLR_RE = re.compile(r"canon|nikon|sony|pentax|fuji", re.IGNORECASE)
+
+
+def _format_gain(camera: str, gain: int) -> str:
+    """Return 'ISO1600' for DSLRs or '200g' for astro cameras."""
+    return f"ISO{gain}" if _DSLR_RE.search(camera) else f"{gain}g"
+
+
 def _parse_gain(header) -> int:
     """Return numeric gain/ISO from FITS header, 0 if absent or non-numeric (e.g. 'Auto')."""
     for key in ("GAIN", "ISO"):
@@ -679,7 +687,7 @@ class CalibrationCataloger:
             # keeping the most recent folder_path. This is intentional for portability.
             set_id = (
                 f"{group['frame_type']}_{camera_slug}"
-                f"_{group['exposure_sec']:.3g}s_{group['gain']}g"
+                f"_{group['exposure_sec']:.3g}s_{_format_gain(group['camera'], group['gain'])}"
                 f"_{temp_str}_{group['capture_date']}"
             )
             cal_sets.append({
