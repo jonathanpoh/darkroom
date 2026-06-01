@@ -141,7 +141,7 @@ def make_session_id(target: str, obs_date: str, ota: str, camera: str, filter_: 
         (e.g. "M81_20260219_FRA400_ASI585MC_L-Pro")
     """
     slug = re.sub(r"\s+", "", target)
-    camera_slug = re.sub(r"\s+", "", camera)
+    camera_slug = _normalize_camera(camera)
     date = obs_date.replace("-", "")
     # "UnknownFilter" means parse failed AND no FITS FILTER header — needs manual review.
     # A session legitimately shot bare would need to be flagged explicitly (future work).
@@ -315,9 +315,23 @@ def init_db(db_path: Path) -> None:
         """)
 
 
+# Canonical camera names, keyed on the whitespace-stripped form of the
+# FITS INSTRUME header. e.g. "Canon EOS 6D" -> "CanonEOS6D" -> "Canon6D".
+_CAMERA_ALIASES = {
+    "CanonEOS6D": "Canon6D",
+}
+
+
 def _normalize_camera(name):
-    """Strip whitespace from a camera name. Idempotent; safe on None."""
-    return None if name is None else re.sub(r"\s+", "", name)
+    """Canonicalize a camera name: strip whitespace, then apply known aliases.
+
+    Idempotent and safe on None. e.g. "Canon EOS 6D" and "CanonEOS6D" both
+    normalize to "Canon6D"; "ZWO ASI585MC Pro" -> "ZWOASI585MCPro".
+    """
+    if name is None:
+        return None
+    slug = re.sub(r"\s+", "", name)
+    return _CAMERA_ALIASES.get(slug, slug)
 
 
 def _round_exposure(x):
@@ -712,7 +726,7 @@ class CalibrationCataloger:
 
         cal_sets = []
         for group in groups.values():
-            camera_slug = re.sub(r"\s+", "", group["camera"])
+            camera_slug = _normalize_camera(group["camera"])
             temp_str = f"{int(group['temperature_c'])}C"
             # set_id omits folder deliberately — same params from different folders merge on re-scan,
             # keeping the most recent folder_path. This is intentional for portability.

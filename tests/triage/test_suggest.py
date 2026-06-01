@@ -58,7 +58,7 @@ class TestSuggestLegacySession:
         assert has_placeholder(proposed)
         # the parts we DO know are still filled in
         assert "2023-08-12" in proposed
-        assert "CanonEOS6D" in proposed
+        assert "Canon6D" in proposed
 
     def test_missing_date_and_camera(self, tmp_path):
         target = tmp_path / "04_Deep Sky Objects" / "M 31"
@@ -118,7 +118,7 @@ class TestSuggestCalibrationDest:
         make_fits(darks / "dark.fit",
                   **{"INSTRUME": "Canon EOS 6D", "EXPOSURE": 2.0})
         proposed, missing = suggest_calibration_dest(darks, archive)
-        assert proposed.endswith("00_Calibration/FlatDarks/CanonEOS6D")
+        assert proposed.endswith("00_Calibration/FlatDarks/Canon6D")
 
     def test_bias_dest(self, tmp_path):
         archive = tmp_path / "staging"
