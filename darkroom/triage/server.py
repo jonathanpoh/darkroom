@@ -11,6 +11,7 @@ from fastapi.templating import Jinja2Templates
 from darkroom.triage import db as triage_db
 from darkroom.triage.actions import copy_corrected, move, rename, trash, revert
 from darkroom.triage.preview import generate_thumbnail
+from darkroom.triage.suggest import has_placeholder
 
 _TEMPLATES_DIR = Path(__file__).parent.parent / "templates" / "triage"
 
@@ -194,8 +195,8 @@ def create_app(*, db_path: Path, archive_root: Path) -> FastAPI:
                 src = Path(item["source_path"])
                 dst = Path(item["proposed_path"]) if item["proposed_path"] else None
                 cat = item["category"]
-                if dst is None and cat not in ("thumbnail_cleanup",):
-                    yield f"data: {json.dumps({'id': item_id, 'result': 'error', 'msg': 'no destination path set — edit proposed_path before committing'})}\n\n"
+                if cat != "thumbnail_cleanup" and has_placeholder(item["proposed_path"]):
+                    yield f"data: {json.dumps({'id': item_id, 'result': 'error', 'msg': 'destination incomplete — fill in the {…?} placeholder(s) before committing'})}\n\n"
                     triage_db.update_status(conn, item_id, "error")
                     continue
                 if cat in ("missing_object", "ra_dec_mismatch") and not item.get("proposed_value"):

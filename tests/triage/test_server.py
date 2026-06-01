@@ -155,6 +155,28 @@ class TestCommitExecute:
         ).fetchone()
         assert row[0] == "error"
 
+    def test_partial_suggestion_blocked(self, db_and_archive):
+        conn, db_path, archive = db_and_archive
+        app = create_app(db_path=db_path, archive_root=archive)
+        c = TestClient(app)
+
+        src = archive / "04 Deep Sky Objects" / "M 42" / "2023-11-23" / "Flats"
+        src.mkdir(parents=True)
+        # proposed_path still contains a placeholder — must not be committed
+        dst = archive / "00_Calibration" / "Flats" / "FRA400_Cam_{FILTER?}" / "2024-01-10"
+
+        item_id = upsert_item(conn, category="calibration_in_target",
+                              source_path=str(src), proposed_path=str(dst))
+        update_status(conn, item_id, "approved")
+
+        resp = c.post("/commit/execute")
+        assert "error" in resp.text
+        assert not dst.exists()
+        row = conn.execute(
+            "SELECT status FROM triage_items WHERE id = ?", (item_id,)
+        ).fetchone()
+        assert row[0] == "error"
+
     def test_deepest_path_committed_first(self, db_and_archive):
         conn, db_path, archive = db_and_archive
         app = create_app(db_path=db_path, archive_root=archive)

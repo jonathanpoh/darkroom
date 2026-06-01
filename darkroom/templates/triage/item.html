@@ -34,6 +34,14 @@
     <h3 style="margin-top:0">Item #{{ item.id }}</h3>
     <p class="path"><strong>Source:</strong> {{ item.source_path }}</p>
 
+    {% set missing = (item.fits_metadata or {}).get('missing_fields') %}
+    {% if missing %}
+    <div style="margin-bottom:0.75rem; padding:0.5rem 0.75rem; background:#3a2a00; border:1px solid #765; border-radius:3px; color:#fc8">
+      ⚠ Partial suggestion — replace the <code>{…?}</code> placeholder(s) for
+      <strong>{{ missing | join(', ') }}</strong> before approving. It can't be committed until complete.
+    </div>
+    {% endif %}
+
     <form method="post" action="/item/{{ item.id }}/approve">
       <div style="margin-bottom:0.75rem">
         <label>Proposed path / destination</label><br>

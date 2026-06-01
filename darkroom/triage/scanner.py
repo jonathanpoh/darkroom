@@ -8,6 +8,7 @@ from astropy.io import fits
 
 from darkroom.parse import ota_from_focallen
 from darkroom.triage.checks import check_fits_object, check_ra_dec
+from darkroom.triage.suggest import suggest_calibration_dest, suggest_legacy_session
 
 _FITS_SUFFIXES = {".fit", ".fits"}
 _CALIB_NAMES = {
@@ -110,11 +111,18 @@ def scan_calibration_in_target(dso_root: Path) -> list[TriageCandidate]:
             if any(part in ("_Processed", "Pixinsight") for part in rel_parts):
                 continue
             if subdir.name.lower() in _CALIB_NAMES and _has_fits(subdir):
+                proposed, missing = suggest_calibration_dest(
+                    subdir, dso_root.parent
+                )
                 candidates.append(TriageCandidate(
                     category="calibration_in_target",
                     source_path=str(subdir),
-                    proposed_path=None,
-                    fits_metadata={"parent": str(subdir.parent)},
+                    proposed_path=proposed,
+                    fits_metadata={
+                        "parent": str(subdir.parent),
+                        "missing_fields": missing,
+                        "suggestion": "partial" if missing else "complete",
+                    },
                 ))
     return candidates
 
@@ -167,14 +175,17 @@ def scan_legacy_sessions(dso_root: Path) -> list[TriageCandidate]:
                 continue
             focal = _sample_focallen(child)
             ota = ota_from_focallen(focal) if focal else None
+            proposed, missing = suggest_legacy_session(child, target_dir)
             candidates.append(TriageCandidate(
                 category="legacy_session",
                 source_path=str(child),
-                proposed_path=None,
+                proposed_path=proposed,
                 fits_metadata={
                     "target": target_dir.name,
                     "focallen": focal,
                     "suggested_ota": ota,
+                    "missing_fields": missing,
+                    "suggestion": "partial" if missing else "complete",
                 },
             ))
     return candidates
