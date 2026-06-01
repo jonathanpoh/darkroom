@@ -68,6 +68,15 @@ class TestUpsertItem:
         item = get_item(conn, item_id)
         assert item["proposed_path"] == "/staging/old"  # preserved
 
+    def test_updates_pending_row_proposed_path(self, conn):
+        src = "/staging/updatable"
+        item_id = upsert_item(conn, category="flat_restructure", source_path=src,
+                              proposed_path="/staging/v1")
+        upsert_item(conn, category="flat_restructure", source_path=src,
+                    proposed_path="/staging/v2")
+        item = get_item(conn, item_id)
+        assert item["proposed_path"] == "/staging/v2"  # updated because still pending
+
     def test_stores_fits_metadata_as_json(self, conn):
         meta = {"OBJECT": "M 81", "RA": 148.888}
         item_id = upsert_item(conn, category="missing_object", source_path="/p",

@@ -61,10 +61,10 @@ def upsert_item(
         VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(source_path) DO UPDATE SET
             category      = excluded.category,
-            proposed_path = COALESCE(proposed_path, excluded.proposed_path),
-            proposed_value= COALESCE(proposed_value, excluded.proposed_value),
-            fits_metadata = COALESCE(fits_metadata, excluded.fits_metadata),
-            simbad_cache  = COALESCE(simbad_cache, excluded.simbad_cache),
+            proposed_path = excluded.proposed_path,
+            proposed_value= excluded.proposed_value,
+            fits_metadata = excluded.fits_metadata,
+            simbad_cache  = excluded.simbad_cache,
             updated_at    = datetime('now')
         WHERE status = 'pending'
         """,
