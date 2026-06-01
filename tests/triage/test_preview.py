@@ -47,6 +47,37 @@ class TestGenerateThumbnail:
         img = Image.open(jpg)
         assert img.mode == "RGB"
 
+    def test_unlinked_stretch_balances_channels(self, tmp_path):
+        # Build an RGGB mosaic where the blue pixels are ~10x brighter than red,
+        # each with its own spatial gradient. An *unlinked* stretch normalises
+        # each channel to its own range, so both R and B reach near-full
+        # intensity. A linked stretch would crush the dim red channel.
+        h = w = 100
+        mosaic = np.zeros((h, w), dtype=np.uint16)
+        row = np.linspace(0, 1, w, dtype=np.float32)
+        grad = np.tile(row, (h, 1))
+        red = (100 + grad * 150).astype(np.uint16)        # ~100..250
+        blue = (1000 + grad * 1500).astype(np.uint16)     # ~1000..2500
+        green = (500 + grad * 750).astype(np.uint16)
+        mosaic[0::2, 0::2] = red[0::2, 0::2]      # R
+        mosaic[0::2, 1::2] = green[0::2, 1::2]    # G
+        mosaic[1::2, 0::2] = green[1::2, 0::2]    # G
+        mosaic[1::2, 1::2] = blue[1::2, 1::2]     # B
+
+        path = tmp_path / "osc.fit"
+        hdu = fits.PrimaryHDU(data=mosaic)
+        hdu.header["BAYERPAT"] = "RGGB"
+        hdu.writeto(path, overwrite=True)
+
+        jpg = generate_thumbnail(path, tmp_path / ".cache")
+        arr = np.asarray(Image.open(jpg))  # H x W x 3, uint8
+        r_max = int(arr[..., 0].max())
+        b_max = int(arr[..., 2].max())
+        # Both channels independently stretched to near full range despite the
+        # ~10x raw brightness difference.
+        assert r_max > 200
+        assert b_max > 200
+
     def test_cached_on_second_call(self, tmp_path):
         src = make_mono_fits(tmp_path / "mono.fit")
         cache = tmp_path / ".cache"

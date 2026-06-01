@@ -50,17 +50,23 @@ def generate_thumbnail(
             return jpg_path
 
     with fits.open(fits_path) as hdul:
-        data = hdul[0].data.astype(np.float32)
+        raw = hdul[0].data
         bayer = hdul[0].header.get("BAYERPAT", "").strip().upper()
 
-    stretched = _zscale_asinh(data)  # 0..1 float32 ndarray
-
     if bayer in _BAYER_PATTERNS:
-        u16 = (stretched * 65535).astype(np.uint16)
-        rgb = cv2.cvtColor(u16, _BAYER_PATTERNS[bayer])
-        u8 = (rgb / 256).astype(np.uint8)
+        # Debayer first, then stretch each channel on its own ZScale limits
+        # (unlinked stretch). On raw OSC subs this neutralises the background
+        # and balances the colour channels far better than a single shared
+        # (linked) stretch applied to the interleaved mosaic.
+        mosaic = raw.astype(np.uint16)
+        rgb = cv2.cvtColor(mosaic, _BAYER_PATTERNS[bayer])  # H x W x 3, uint16
+        channels = [
+            _zscale_asinh(rgb[..., i].astype(np.float32)) for i in range(3)
+        ]
+        u8 = (np.stack(channels, axis=-1) * 255).astype(np.uint8)
         img = Image.fromarray(u8, mode="RGB")
     else:
+        stretched = _zscale_asinh(raw.astype(np.float32))
         u8 = (stretched * 255).astype(np.uint8)
         img = Image.fromarray(u8, mode="L").convert("RGB")
 
