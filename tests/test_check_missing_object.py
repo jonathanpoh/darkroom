@@ -27,3 +27,41 @@ class TestCheckObjectValue:
 
     def test_valid_object_ngc_returns_none(self):
         assert check_object_value("NGC 7380") is None
+
+
+class TestCollectFitsFiles:
+    def test_single_fit_file_found(self, tmp_path):
+        f = tmp_path / "frame.fit"
+        f.touch()
+        assert collect_fits_files(tmp_path) == [f]
+
+    def test_fits_extension_found(self, tmp_path):
+        f = tmp_path / "frame.fits"
+        f.touch()
+        assert collect_fits_files(tmp_path) == [f]
+
+    def test_recursive_subdirectory(self, tmp_path):
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        f = sub / "frame.fit"
+        f.touch()
+        assert collect_fits_files(tmp_path) == [f]
+
+    def test_thumbnail_excluded(self, tmp_path):
+        (tmp_path / "frame_thn.fit").touch()
+        assert collect_fits_files(tmp_path) == []
+
+    def test_non_fits_excluded(self, tmp_path):
+        (tmp_path / "frame.xisf").touch()
+        assert collect_fits_files(tmp_path) == []
+
+    def test_case_insensitive_extension(self, tmp_path):
+        f = tmp_path / "frame.FIT"
+        f.touch()
+        assert collect_fits_files(tmp_path) == [f]
+
+    def test_returns_sorted(self, tmp_path):
+        (tmp_path / "b.fit").touch()
+        (tmp_path / "a.fit").touch()
+        result = collect_fits_files(tmp_path)
+        assert result == sorted(result)
