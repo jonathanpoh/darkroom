@@ -20,7 +20,24 @@ from darkroom.cataloger import (
     _find_latest_processed_date,
     mark_processed_by_target,
     finish_command,
+    _normalize_camera,
 )
+
+
+class TestNormalizeCamera:
+    def test_none(self):
+        assert _normalize_camera(None) is None
+
+    def test_strips_whitespace(self):
+        assert _normalize_camera("ZWO ASI585MC Pro") == "ZWOASI585MCPro"
+
+    def test_canon_eos_6d_alias(self):
+        assert _normalize_camera("Canon EOS 6D") == "Canon6D"
+
+    def test_canon_alias_idempotent(self):
+        # already-stored "CanonEOS6D" (from the old normalization) is corrected
+        assert _normalize_camera("CanonEOS6D") == "Canon6D"
+        assert _normalize_camera("Canon6D") == "Canon6D"
 
 
 class TestParseFilter:

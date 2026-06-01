@@ -1,0 +1,48 @@
+<!-- darkroom/templates/triage/queue.html -->
+{% extends "base.html" %}
+{% block content %}
+<h2>Queue</h2>
+<form method="get" style="margin-bottom:1rem; display:flex; gap:0.5rem; flex-wrap:wrap">
+  <select name="category">
+    <option value="">All categories</option>
+    {% for cat in categories %}
+    <option value="{{ cat }}" {% if cat == category %}selected{% endif %}>{{ cat }}</option>
+    {% endfor %}
+  </select>
+  <select name="status">
+    <option value="">All statuses</option>
+    {% for s in ['pending','approved','modified','skipped','applied','error'] %}
+    <option value="{{ s }}" {% if s == status %}selected{% endif %}>{{ s }}</option>
+    {% endfor %}
+  </select>
+  <button type="submit">Filter</button>
+</form>
+
+<table>
+  <thead>
+    <tr><th>ID</th><th>Category</th><th>Source path</th><th>Status</th><th></th></tr>
+  </thead>
+  <tbody>
+  {% for item in items %}
+  <tr>
+    <td>{{ item.id }}</td>
+    <td><span class="badge badge-{{ item.category }}">{{ item.category }}</span></td>
+    <td class="path">{{ item.source_path }}</td>
+    <td><span class="badge badge-{{ item.status }}">{{ item.status }}</span></td>
+    <td><a href="/item/{{ item.id }}">Review →</a></td>
+  </tr>
+  {% else %}
+  <tr><td colspan="5" style="color:#666">No items found.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<div style="margin-top:1rem; display:flex; gap:1rem">
+  {% if offset >= 50 %}
+  <a href="?category={{ category or '' }}&status={{ status or '' }}&offset={{ offset - 50 }}">← Previous</a>
+  {% endif %}
+  {% if items|length == 50 %}
+  <a href="?category={{ category or '' }}&status={{ status or '' }}&offset={{ offset + 50 }}">Next →</a>
+  {% endif %}
+</div>
+{% endblock %}

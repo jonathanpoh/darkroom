@@ -1,0 +1,36 @@
+<!-- darkroom/templates/triage/dashboard.html -->
+{% extends "base.html" %}
+{% block content %}
+<h2>Archive Triage — Dashboard</h2>
+{% set total = counts.total %}
+{% set done = counts.done %}
+<p>{{ done }} / {{ total }} items applied
+  {% if total > 0 %}({{ (done / total * 100)|int }}%){% endif %}
+</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Category</th><th>Pending</th><th>Approved</th><th>Skipped</th><th>Applied</th><th></th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for cat, c in counts.by_cat.items() %}
+    {% if c.pending + c.approved + c.skipped + c.applied > 0 %}
+    <tr>
+      <td><span class="badge badge-{{ cat }}">{{ cat }}</span></td>
+      <td>{{ c.pending }}</td>
+      <td>{{ c.approved }}</td>
+      <td>{{ c.skipped }}</td>
+      <td>{{ c.applied }}</td>
+      <td><a href="/queue?category={{ cat }}&status=pending">Review →</a></td>
+    </tr>
+    {% endif %}
+  {% endfor %}
+  </tbody>
+</table>
+
+<p style="margin-top:1.5rem">
+  <a href="/queue?status=pending" class="btn btn-success">Start reviewing →</a>
+</p>
+{% endblock %}

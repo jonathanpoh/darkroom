@@ -13,6 +13,7 @@ from pathlib import Path
 import yaml
 
 from darkroom.cataloger import (
+    _normalize_camera,
     init_db,
     make_session_id,
     upsert_calibration_set,
@@ -36,8 +37,8 @@ def _require_path(cli_val, env_var, toml_key, label) -> Path:
 # ---------------------------------------------------------------------------
 
 def camera_slug(camera: str) -> str:
-    """Strip spaces from camera name for use in folder names."""
-    return re.sub(r"\s+", "", camera)
+    """Canonical camera name for folder names (delegates to _normalize_camera)."""
+    return _normalize_camera(camera)
 
 
 def session_dest_rel(
