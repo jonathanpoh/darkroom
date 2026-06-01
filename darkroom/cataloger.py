@@ -152,6 +152,18 @@ def make_session_id(target: str, obs_date: str, ota: str, camera: str, filter_: 
 _CALIB_FOLDER_NAMES = frozenset({"flats", "darks", "bias", "flatdarks", "flat darks"})
 
 
+def _parse_gain(header) -> int:
+    """Return numeric gain/ISO from FITS header, 0 if absent or non-numeric (e.g. 'Auto')."""
+    for key in ("GAIN", "ISO"):
+        val = header.get(key)
+        if val is not None:
+            try:
+                return int(val)
+            except (ValueError, TypeError):
+                continue
+    return 0
+
+
 def _target_from_path(lights_path: Path) -> str:
     """Extract target name from NAS folder path.
 
@@ -496,7 +508,7 @@ class FITSHeaderExtractor:
                     "date_obs": header.get("DATE-OBS", ""),
                     "exposure": float(header.get("EXPOSURE", header.get("EXPTIME", 0.0))),
                     "camera": header.get("INSTRUME", "Unknown"),
-                    "gain": int(header.get("GAIN") or header.get("ISO") or 0),
+                    "gain": _parse_gain(header),
                     "temperature": float(header.get("CCD-TEMP", header.get("SET-TEMP", 0.0))),
                     "object": header.get("OBJECT", ""),
                     "filter_header": header.get("FILTER", None),
