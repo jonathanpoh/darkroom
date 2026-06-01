@@ -174,6 +174,19 @@ def _parse_gain(header) -> int:
     return 0
 
 
+_CATALOG_RE = re.compile(
+    r"^(NGC|LBN|LDN|RCW|GUM|Ced|vdB|Col|Mel|Stock|Abell|Sh\s*2|IC|Tr|Cr|B|M|C)\s*(\d.*)",
+    re.IGNORECASE,
+)
+
+
+def _normalize_target(name: str) -> str:
+    """Ensure canonical space between catalog prefix and number ('M81' → 'M 81', 'C49' → 'C 49')."""
+    name = name.strip()
+    m = _CATALOG_RE.match(name)
+    return f"{m.group(1)} {m.group(2)}" if m else name
+
+
 def _target_from_path(lights_path: Path) -> str:
     """Extract target name from NAS folder path.
 
@@ -572,7 +585,7 @@ class SessionAnalyzer:
                 filter_ = first.get("filter_header") or _filter_from_path(lights_path) or ""
 
             sessions.append({
-                "target": first["object"] or _target_from_path(lights_path),
+                "target": _normalize_target(first["object"] or _target_from_path(lights_path)),
                 "obs_date": night,
                 "ota": parse_ota(first.get("focallen")),
                 "camera": first["camera"],
