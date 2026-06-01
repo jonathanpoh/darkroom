@@ -19,7 +19,7 @@ _CANONICAL_SESSION_RE = re.compile(
 _FLAT_DATE_RE = re.compile(r"^(\d{4})(\d{2})(\d{2})_(.+)$")
 _SKIP_TARGET_CHILDREN = {"_Processed", "Pixinsight", ".DS_Store"}
 _KNOWN_OTA = {"FMA180", "FRA400"}
-_FILTER_NORMALISE = {"nofilter": "NoFilter", "nofilIer": "NoFilter"}
+_FILTER_NORMALISE = {"nofilter": "NoFilter"}
 
 
 @dataclass
@@ -133,18 +133,11 @@ def scan_processed_dirs(dso_root: Path) -> list[TriageCandidate]:
 
 def scan_thumbnail_cleanup(archive_root: Path) -> list[TriageCandidate]:
     """Find ASIAir _thn.jpg thumbnail files throughout the archive."""
-    candidates = []
-    for p in archive_root.rglob("*_thn.jpg"):
-        candidates.append(TriageCandidate(
-            category="thumbnail_cleanup",
-            source_path=str(p),
-        ))
-    for p in archive_root.rglob("*_thn.JPG"):
-        candidates.append(TriageCandidate(
-            category="thumbnail_cleanup",
-            source_path=str(p),
-        ))
-    return candidates
+    return [
+        TriageCandidate(category="thumbnail_cleanup", source_path=str(p))
+        for p in archive_root.rglob("*")
+        if p.is_file() and p.name.lower().endswith("_thn.jpg")
+    ]
 
 
 def scan_legacy_sessions(dso_root: Path) -> list[TriageCandidate]:

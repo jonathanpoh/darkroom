@@ -188,6 +188,10 @@ def create_app(*, db_path: Path, archive_root: Path) -> FastAPI:
                 src = Path(item["source_path"])
                 dst = Path(item["proposed_path"]) if item["proposed_path"] else None
                 cat = item["category"]
+                if dst is None and cat not in ("thumbnail_cleanup",):
+                    yield f"data: {json.dumps({'id': item_id, 'result': 'error', 'msg': 'no destination path set — edit proposed_path before committing'})}\n\n"
+                    triage_db.update_status(conn, item_id, "error")
+                    continue
                 try:
                     if cat == "thumbnail_cleanup":
                         trash(conn, item_id, src,
@@ -225,6 +229,8 @@ def create_app(*, db_path: Path, archive_root: Path) -> FastAPI:
         entry = triage_db.get_audit_entry(conn, log_id)
         if entry is None:
             raise HTTPException(status_code=404)
+        if entry["result"] != "success":
+            raise HTTPException(status_code=409, detail="Can only revert successful actions")
         revert(conn, log_id, trash_root=trash_root)
         return RedirectResponse("/audit", status_code=303)
 
