@@ -183,6 +183,12 @@ def create_app(*, db_path: Path, archive_root: Path) -> FastAPI:
                 triage_db.list_items(conn, status="approved", limit=500)
                 + triage_db.list_items(conn, status="modified", limit=500)
             )
+            # Process deepest paths first so a nested move (e.g. a calibration
+            # folder inside a session) runs before its parent is renamed —
+            # otherwise the parent rename invalidates the child's source path.
+            items.sort(
+                key=lambda it: len(Path(it["source_path"]).parts), reverse=True
+            )
             for item in items:
                 item_id = item["id"]
                 src = Path(item["source_path"])
@@ -190,6 +196,10 @@ def create_app(*, db_path: Path, archive_root: Path) -> FastAPI:
                 cat = item["category"]
                 if dst is None and cat not in ("thumbnail_cleanup",):
                     yield f"data: {json.dumps({'id': item_id, 'result': 'error', 'msg': 'no destination path set — edit proposed_path before committing'})}\n\n"
+                    triage_db.update_status(conn, item_id, "error")
+                    continue
+                if cat in ("missing_object", "ra_dec_mismatch") and not item.get("proposed_value"):
+                    yield f"data: {json.dumps({'id': item_id, 'result': 'error', 'msg': 'no corrected OBJECT value set — edit proposed_value before committing'})}\n\n"
                     triage_db.update_status(conn, item_id, "error")
                     continue
                 try:
@@ -201,10 +211,8 @@ def create_app(*, db_path: Path, archive_root: Path) -> FastAPI:
                     elif cat == "calibration_in_target":
                         move(conn, item_id, src, dst)
                     elif cat in ("missing_object", "ra_dec_mismatch"):
-                        patches = {}
-                        if item.get("proposed_value"):
-                            patches["OBJECT"] = item["proposed_value"]
-                        copy_corrected(conn, item_id, src, dst, patches)
+                        copy_corrected(conn, item_id, src, dst,
+                                       {"OBJECT": item["proposed_value"]})
                     triage_db.update_status(conn, item_id, "applied")
                     yield f"data: {json.dumps({'id': item_id, 'result': 'success'})}\n\n"
                 except Exception as exc:

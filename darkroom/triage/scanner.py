@@ -104,6 +104,11 @@ def scan_calibration_in_target(dso_root: Path) -> list[TriageCandidate]:
         for subdir in target_dir.rglob("*"):
             if not subdir.is_dir():
                 continue
+            # Skip processed-output subtrees — they may contain dark/flat-named
+            # folders that aren't raw calibration frames.
+            rel_parts = subdir.relative_to(target_dir).parts
+            if any(part in ("_Processed", "Pixinsight") for part in rel_parts):
+                continue
             if subdir.name.lower() in _CALIB_NAMES and _has_fits(subdir):
                 candidates.append(TriageCandidate(
                     category="calibration_in_target",
@@ -179,6 +184,12 @@ def scan_fits_headers(dso_root: Path) -> list[TriageCandidate]:
     """
     Sample one FITS file per Lights/ directory to detect missing/FOV OBJECT
     headers and RA/DEC mismatches. One candidate per session folder, not per file.
+
+    Only canonical session folders are examined. Legacy (non-canonical) sessions
+    share the same folder path and are handled by ``scan_legacy_sessions`` first;
+    once renamed to canonical form, a re-scan picks up any header issues. This
+    keeps the two scanners from emitting the same ``source_path`` (a two-pass
+    workflow: fix structure, then re-scan for headers).
     """
     candidates = []
     seen_sessions: set[str] = set()
@@ -189,6 +200,8 @@ def scan_fits_headers(dso_root: Path) -> list[TriageCandidate]:
         session_dir = lights_dir.parent
         if str(session_dir) in seen_sessions:
             continue
+        if not _CANONICAL_SESSION_RE.match(session_dir.name):
+            continue  # legacy session — handled by scan_legacy_sessions
         target_dir = session_dir.parent
         target_name = target_dir.name
 

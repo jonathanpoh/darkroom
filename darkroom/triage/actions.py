@@ -16,8 +16,11 @@ _FITS_SUFFIXES = {".fit", ".fits"}
 def _sha256_first_fits(directory: Path) -> str | None:
     for p in sorted(directory.rglob("*")):
         if p.suffix.lower() in _FITS_SUFFIXES and "_thn" not in p.name:
-            h = hashlib.sha256(p.read_bytes()).hexdigest()
-            return h
+            h = hashlib.sha256()
+            with p.open("rb") as fh:
+                for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                    h.update(chunk)
+            return h.hexdigest()
     return None
 
 

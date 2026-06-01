@@ -107,3 +107,78 @@ class TestAuditPage:
         c, conn = client
         resp = c.get("/audit")
         assert resp.status_code == 200
+
+
+class TestCommitExecute:
+    def test_flat_restructure_applied(self, db_and_archive):
+        conn, db_path, archive = db_and_archive
+        app = create_app(db_path=db_path, archive_root=archive)
+        c = TestClient(app)
+
+        src = archive / "00_Calibration" / "Flats" / "20240110_FMA180_Canon6D_L-Pro"
+        src.mkdir(parents=True)
+        (src / "flat.fit").write_bytes(b"x")
+        dst = archive / "00_Calibration" / "Flats" / "FMA180_Canon6D_L-Pro" / "2024-01-10"
+
+        item_id = upsert_item(conn, category="flat_restructure",
+                              source_path=str(src), proposed_path=str(dst))
+        update_status(conn, item_id, "approved")
+
+        resp = c.post("/commit/execute")
+        assert "success" in resp.text
+        assert dst.exists()
+        assert not src.exists()
+        row = conn.execute(
+            "SELECT status FROM triage_items WHERE id = ?", (item_id,)
+        ).fetchone()
+        assert row[0] == "applied"
+
+    def test_missing_value_blocks_correction(self, db_and_archive):
+        conn, db_path, archive = db_and_archive
+        app = create_app(db_path=db_path, archive_root=archive)
+        c = TestClient(app)
+
+        src = archive / "04_Deep Sky Objects" / "M 81" / "2024-01-01_FRA400_ZWOASI585MCPro"
+        src.mkdir(parents=True)
+        dst = archive / "_corrected" / "x"
+
+        # missing_object with empty proposed_value must be blocked, not a no-op copy
+        item_id = upsert_item(conn, category="missing_object",
+                              source_path=str(src), proposed_path=str(dst))
+        update_status(conn, item_id, "approved")
+
+        resp = c.post("/commit/execute")
+        assert "error" in resp.text
+        assert not dst.exists()
+        row = conn.execute(
+            "SELECT status FROM triage_items WHERE id = ?", (item_id,)
+        ).fetchone()
+        assert row[0] == "error"
+
+    def test_deepest_path_committed_first(self, db_and_archive):
+        conn, db_path, archive = db_and_archive
+        app = create_app(db_path=db_path, archive_root=archive)
+        c = TestClient(app)
+
+        # A legacy session and a calibration folder nested inside it.
+        session = archive / "04_Deep Sky Objects" / "M 42" / "2023-11-23"
+        flats = session / "Flats"
+        (session / "Lights").mkdir(parents=True)
+        flats.mkdir(parents=True)
+        (flats / "flat.fit").write_bytes(b"x")
+
+        calib_dst = archive / "00_Calibration" / "Flats" / "FMA180_Canon6D" / "2023-11-23"
+        session_dst = archive / "04_Deep Sky Objects" / "M 42" / "2023-11-23_FMA180_Canon6D"
+
+        cal_id = upsert_item(conn, category="calibration_in_target",
+                             source_path=str(flats), proposed_path=str(calib_dst))
+        update_status(conn, cal_id, "approved")
+        ses_id = upsert_item(conn, category="legacy_session",
+                             source_path=str(session), proposed_path=str(session_dst))
+        update_status(conn, ses_id, "approved")
+
+        resp = c.post("/commit/execute")
+        # Both succeed because the nested Flats move runs before the parent rename
+        assert resp.text.count("success") == 2
+        assert calib_dst.exists()
+        assert session_dst.exists()
