@@ -1,28 +1,86 @@
-<!DOCTYPE html>
-<html>
-<head><title>darkroom triage — item {{ item.id }}</title></head>
-<body>
-<h1>Item #{{ item.id }}</h1>
-<p>Category: {{ item.category }}</p>
-<p>Source: {{ item.source_path }}</p>
-<p>Proposed: {{ item.proposed_path }}</p>
-<p>Status: {{ item.status }}</p>
-{% if thumbnail_url %}
-<img src="{{ thumbnail_url }}" alt="thumbnail" style="max-width:600px">
-{% endif %}
-<form method="post" action="/item/{{ item.id }}/approve">
-  <input type="hidden" name="proposed_path" value="">
-  <input type="hidden" name="proposed_value" value="">
-  <input type="hidden" name="user_notes" value="">
-  <button type="submit">Approve</button>
-</form>
-<form method="post" action="/item/{{ item.id }}/skip">
-  <input type="hidden" name="user_notes" value="">
-  <button type="submit">Skip</button>
-</form>
-{% if next_id %}
-<a href="/item/{{ next_id }}">Next</a>
-{% endif %}
-<a href="/queue">Back to queue</a>
-</body>
-</html>
+<!-- darkroom/templates/triage/item.html -->
+{% extends "base.html" %}
+{% block content %}
+<div style="display:flex; gap:2rem; align-items:flex-start">
+
+  <!-- Left: preview + metadata -->
+  <div style="flex:0 0 620px">
+    {% if thumbnail_url %}
+    <img src="{{ thumbnail_url }}" style="max-width:600px; border:1px solid #333; display:block; margin-bottom:1rem">
+    {% else %}
+    <div style="width:600px;height:400px;background:#1a1a1a;display:flex;align-items:center;justify-content:center;color:#444;margin-bottom:1rem">
+      No preview
+    </div>
+    {% endif %}
+
+    <table>
+      <tr><th>Category</th><td><span class="badge badge-{{ item.category }}">{{ item.category }}</span></td></tr>
+      <tr><th>Status</th><td><span class="badge badge-{{ item.status }}">{{ item.status }}</span></td></tr>
+      {% if item.fits_metadata %}
+        {% for k, v in item.fits_metadata.items() %}
+        <tr><th>{{ k }}</th><td class="path">{{ v }}</td></tr>
+        {% endfor %}
+      {% endif %}
+      {% if item.simbad_cache %}
+        {% for k, v in item.simbad_cache.items() %}
+        <tr><th>simbad_{{ k }}</th><td>{{ v }}</td></tr>
+        {% endfor %}
+      {% endif %}
+    </table>
+  </div>
+
+  <!-- Right: action panel -->
+  <div style="flex:1; min-width:400px">
+    <h3 style="margin-top:0">Item #{{ item.id }}</h3>
+    <p class="path"><strong>Source:</strong> {{ item.source_path }}</p>
+
+    <form method="post" action="/item/{{ item.id }}/approve">
+      <div style="margin-bottom:0.75rem">
+        <label>Proposed path / destination</label><br>
+        <input type="text" name="proposed_path" id="proposed_path"
+               value="{{ item.proposed_path or '' }}"
+               style="width:100%; margin-top:0.3rem">
+      </div>
+      {% if item.category in ('missing_object', 'ra_dec_mismatch') %}
+      <div style="margin-bottom:0.75rem">
+        <label>Corrected OBJECT value</label><br>
+        <input type="text" name="proposed_value" id="proposed_value"
+               value="{{ item.proposed_value or '' }}"
+               style="width:100%; margin-top:0.3rem">
+      </div>
+      {% endif %}
+      <div style="margin-bottom:0.75rem">
+        <label>Notes</label><br>
+        <input type="text" name="user_notes" value="{{ item.user_notes or '' }}"
+               style="width:100%; margin-top:0.3rem">
+      </div>
+      <div style="display:flex; gap:0.5rem; flex-wrap:wrap">
+        <button type="submit" class="btn btn-success" id="btn-approve">✓ Approve (a)</button>
+      </div>
+    </form>
+
+    <form method="post" action="/item/{{ item.id }}/skip" style="margin-top:0.5rem">
+      <input type="hidden" name="user_notes" value="">
+      <button type="submit" class="btn">⟶ Skip (s)</button>
+    </form>
+
+    {% if next_id %}
+    <p style="margin-top:1.5rem"><a href="/item/{{ next_id }}">Next pending →</a></p>
+    {% else %}
+    <p style="margin-top:1.5rem; color:#888">No more pending items.</p>
+    {% endif %}
+  </div>
+</div>
+
+<script>
+document.addEventListener('keydown', function(e) {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  if (e.key === 'a') document.getElementById('btn-approve').closest('form').submit();
+  if (e.key === 's') document.querySelector('form[action*="/skip"]').submit();
+  if (e.key === 'e') { e.preventDefault(); document.getElementById('proposed_path').focus(); }
+  {% if next_id %}
+  if (e.key === 'j') window.location = '/item/{{ next_id }}';
+  {% endif %}
+});
+</script>
+{% endblock %}

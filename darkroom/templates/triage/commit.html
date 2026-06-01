@@ -1,20 +1,52 @@
-<!DOCTYPE html>
-<html>
-<head><title>darkroom triage — commit</title></head>
-<body>
-<h1>Commit approved items</h1>
-<p>{{ items | length }} item(s) ready to apply.</p>
-<ul>
-{% for item in items %}
-<li>
-  [{{ item.category }}] {{ item.source_path }} &rarr; {{ item.proposed_path }}
-  (status: {{ item.status }})
-</li>
-{% endfor %}
-</ul>
-<form method="post" action="/commit/execute">
-  <button type="submit">Execute</button>
-</form>
-<a href="/">Dashboard</a>
-</body>
-</html>
+<!-- darkroom/templates/triage/commit.html -->
+{% extends "base.html" %}
+{% block content %}
+<h2>Commit Changes</h2>
+<p>{{ items|length }} item(s) approved and ready to apply.</p>
+
+{% if items %}
+<table id="commit-table">
+  <thead>
+    <tr><th>ID</th><th>Category</th><th>Source</th><th>Destination</th><th>Status</th></tr>
+  </thead>
+  <tbody>
+  {% for item in items %}
+  <tr id="commit-row-{{ item.id }}">
+    <td>{{ item.id }}</td>
+    <td><span class="badge badge-{{ item.category }}">{{ item.category }}</span></td>
+    <td class="path">{{ item.source_path }}</td>
+    <td class="path">{{ item.proposed_path or '—' }}</td>
+    <td id="commit-status-{{ item.id }}"><span class="badge badge-{{ item.status }}">{{ item.status }}</span></td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<div style="margin-top:1.5rem">
+  <button class="btn btn-success" id="execute-btn" onclick="executeCommit()">⚡ Execute all</button>
+  <span id="commit-progress" style="margin-left:1rem; color:#888"></span>
+</div>
+
+<script>
+async function executeCommit() {
+  document.getElementById('execute-btn').disabled = true;
+  const prog = document.getElementById('commit-progress');
+  const es = new EventSource('/commit/execute');
+  let done = 0;
+  es.onmessage = function(e) {
+    const d = JSON.parse(e.data);
+    const cell = document.getElementById('commit-status-' + d.id);
+    if (cell) {
+      const cls = d.result === 'success' ? 'applied' : 'error';
+      cell.innerHTML = '<span class="badge badge-' + cls + '">' + d.result + '</span>';
+    }
+    done++;
+    prog.textContent = done + ' done';
+  };
+  es.onerror = function() { es.close(); prog.textContent += ' (complete)'; };
+}
+</script>
+{% else %}
+<p style="color:#888">No approved items. Go to the <a href="/queue?status=pending">queue</a> to review.</p>
+{% endif %}
+{% endblock %}

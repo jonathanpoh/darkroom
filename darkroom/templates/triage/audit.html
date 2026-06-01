@@ -1,33 +1,44 @@
-<!DOCTYPE html>
-<html>
-<head><title>darkroom triage — audit log</title></head>
-<body>
-<h1>Audit log</h1>
-<a href="/audit/export.csv">Export CSV</a>
+<!-- darkroom/templates/triage/audit.html -->
+{% extends "base.html" %}
+{% block content %}
+<h2>Audit Log</h2>
+<div style="margin-bottom:1rem">
+  <a href="/audit/export.csv" class="btn">↓ Export CSV</a>
+</div>
 <table>
-<tr><th>id</th><th>item_id</th><th>action</th><th>source</th><th>dest</th><th>result</th><th>applied_at</th><th>revert</th></tr>
-{% for e in entries %}
-<tr>
-  <td>{{ e.id }}</td>
-  <td>{{ e.triage_item_id }}</td>
-  <td>{{ e.action_type }}</td>
-  <td>{{ e.source_path }}</td>
-  <td>{{ e.dest_path }}</td>
-  <td>{{ e.result }}</td>
-  <td>{{ e.applied_at }}</td>
-  <td>
-    {% if not e.reverted_at %}
-    <form method="post" action="/audit/{{ e.id }}/revert">
-      <button type="submit">Revert</button>
-    </form>
-    {% endif %}
-  </td>
-</tr>
-{% endfor %}
-{% if not entries %}
-<tr><td colspan="8">No audit entries.</td></tr>
-{% endif %}
+  <thead>
+    <tr>
+      <th>ID</th><th>Item</th><th>Action</th>
+      <th>Source</th><th>Destination</th>
+      <th>Result</th><th>Applied</th><th></th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for e in entries %}
+  <tr>
+    <td>{{ e.id }}</td>
+    <td>{{ e.triage_item_id }}</td>
+    <td>{{ e.action_type }}</td>
+    <td class="path">{{ e.source_path }}</td>
+    <td class="path">{{ e.dest_path }}</td>
+    <td>
+      {% if e.result %}
+      <span class="badge badge-{{ e.result }}">{{ e.result }}</span>
+      {% else %}<span style="color:#666">—</span>{% endif %}
+    </td>
+    <td style="white-space:nowrap">{{ e.applied_at[:16] }}</td>
+    <td>
+      {% if e.result == 'success' %}
+      <form method="post" action="/audit/{{ e.id }}/revert"
+            onsubmit="return confirm('Revert this action?')">
+        <button type="submit" class="btn btn-danger" style="font-size:0.75rem">Revert</button>
+      </form>
+      {% endif %}
+    </td>
+  </tr>
+  {% else %}
+  <tr><td colspan="8" style="color:#666">No audit entries yet.</td></tr>
+  {% endfor %}
+  </tbody>
 </table>
-<a href="/">Dashboard</a>
-</body>
-</html>
+{% endblock %}
