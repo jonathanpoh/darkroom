@@ -149,12 +149,31 @@ def make_session_id(target: str, obs_date: str, ota: str, camera: str, filter_: 
     return f"{slug}_{date}_{ota}_{camera_slug}_{f}"
 
 
+_CALIB_FOLDER_NAMES = frozenset({"flats", "darks", "bias", "flatdarks", "flat darks"})
+
+
+def _target_from_path(lights_path: Path) -> str:
+    """Extract target name from NAS folder path.
+
+    Looks for the component immediately after '04_Deep Sky Objects'. Falls back
+    to the grandparent of the lights folder (Target/Date/Lights → Target).
+    """
+    parts = lights_path.parts
+    for i, part in enumerate(parts):
+        if part == "04_Deep Sky Objects" and i + 1 < len(parts):
+            return parts[i + 1]
+    if len(parts) >= 3:
+        return parts[-3]
+    return parts[-2] if len(parts) >= 2 else ""
+
+
 def find_lights_folders(root: Path) -> list[Path]:
-    """Recursively find dirs containing .fit/.fits files, skipping @eaDir.
+    """Recursively find dirs containing .fit/.fits files, skipping @eaDir and calibration folders.
 
     Walks the directory tree from root, collecting any directory that
     directly contains at least one .fit or .fits file. Synology metadata
-    folders (@eaDir) are skipped at all levels.
+    folders (@eaDir) and calibration frame folders (Flats, Darks, Bias,
+    FlatDarks) are skipped.
 
     This handles three coexisting folder structures:
     1. Canonical: Target/Date_Equipment_Filter/Lights/
@@ -171,7 +190,8 @@ def find_lights_folders(root: Path) -> list[Path]:
     for dirpath, dirnames, filenames in os.walk(root):
         # In-place modification prevents os.walk from descending into @eaDir
         dirnames[:] = [d for d in dirnames if d != "@eaDir"]
-        # Check if this directory contains any FITS files
+        if Path(dirpath).name.lower() in _CALIB_FOLDER_NAMES:
+            continue
         if any(f.lower().endswith((".fit", ".fits")) for f in filenames):
             result.append(Path(dirpath))
     return result
@@ -516,7 +536,7 @@ class SessionAnalyzer:
                 filter_ = first.get("filter_header") or ""
 
             sessions.append({
-                "target": first["object"],
+                "target": first["object"] or _target_from_path(lights_path),
                 "obs_date": night,
                 "ota": parse_ota(first.get("focallen")),
                 "camera": first["camera"],
