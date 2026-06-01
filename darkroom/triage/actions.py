@@ -8,7 +8,7 @@ from pathlib import Path
 
 from astropy.io import fits
 
-from darkroom.triage.db import complete_action, log_action, mark_reverted
+from darkroom.triage.db import complete_action, log_action, mark_reverted, update_status
 
 _FITS_SUFFIXES = {".fit", ".fits"}
 
@@ -143,3 +143,7 @@ def revert(
         raise ValueError(f"Cannot revert action_type={action_type!r}")
 
     mark_reverted(conn, log_id)
+    # Re-open the underlying item for review: a reverted change is no longer
+    # applied, so it should reappear in the pending queue (proposed_path kept).
+    if row["triage_item_id"] is not None:
+        update_status(conn, row["triage_item_id"], "pending")

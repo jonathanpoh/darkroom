@@ -5,7 +5,7 @@ import pytest
 from astropy.io import fits
 import numpy as np
 
-from darkroom.triage.db import open_db, upsert_item, get_audit_entry
+from darkroom.triage.db import open_db, upsert_item, get_audit_entry, update_status, get_item
 from darkroom.triage.actions import move, rename, trash, copy_corrected, revert
 
 
@@ -153,3 +153,17 @@ class TestRevert:
         revert(conn, log_id, trash_root=tmp_path / ".trash")
 
         assert not dst_dir.exists()
+
+    def test_revert_reopens_item_as_pending(self, conn, item_id, tmp_path):
+        # After commit an item is "applied"; reverting should re-open it for
+        # review (back to "pending") so it reappears in the queue.
+        src = tmp_path / "orig"
+        src.mkdir()
+        dst = tmp_path / "moved"
+        move(conn, item_id, src, dst)
+        update_status(conn, item_id, "applied")  # as commit would set it
+
+        log_id = conn.execute("SELECT id FROM audit_log").fetchone()["id"]
+        revert(conn, log_id, trash_root=tmp_path / ".trash")
+
+        assert get_item(conn, item_id)["status"] == "pending"
