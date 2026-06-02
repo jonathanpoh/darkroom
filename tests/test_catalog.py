@@ -122,6 +122,42 @@ def test_query_sessions_no_match(tmp_path):
     assert rows == []
 
 
+def test_query_sessions_target_missing_space(tmp_path):
+    # 'M81' (no space) should still match the stored 'M 81'
+    db = make_db(tmp_path)
+    rows = query_sessions(db, target="M81")
+    assert len(rows) == 2
+
+
+def test_query_sessions_target_wrong_case(tmp_path):
+    # 'm 81' (lowercase prefix) should match 'M 81'
+    db = make_db(tmp_path)
+    rows = query_sessions(db, target="m 81")
+    assert len(rows) == 2
+
+
+def test_query_sessions_target_messy(tmp_path):
+    # both wrong: no space and lowercase
+    db = make_db(tmp_path)
+    rows = query_sessions(db, target="m81")
+    assert len(rows) == 2
+
+
+def test_query_sessions_sharpless_normalised(tmp_path):
+    db = make_db(tmp_path)
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "INSERT INTO sessions (session_id, target, obs_date) VALUES "
+        "('Sh2-103_20260219_FRA400_ZWOASI585MCPro_L-Extreme', 'Sh2-103', '2026-02-19')"
+    )
+    conn.commit()
+    conn.close()
+    # any of these user spellings should resolve to the stored 'Sh2-103'
+    for spelling in ("SH2-103", "Sh 2-103", "sh2-103", "Sh2-103"):
+        rows = query_sessions(db, target=spelling)
+        assert len(rows) == 1, f"{spelling!r} failed to match"
+
+
 def test_find_darks(tmp_path):
     db = make_db(tmp_path)
     rows = find_darks(db, camera="ZWO ASI585MC Pro", gain=200, exposure_sec=180.0)

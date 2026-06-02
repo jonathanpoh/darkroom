@@ -21,7 +21,30 @@ from darkroom.cataloger import (
     mark_processed_by_target,
     finish_command,
     _normalize_camera,
+    _normalize_target,
 )
+
+
+class TestNormalizeTarget:
+    def test_messier_spacing(self):
+        assert _normalize_target("M81") == "M 81"
+
+    def test_caldwell_spacing(self):
+        assert _normalize_target("C49") == "C 49"
+
+    def test_sharpless_no_space(self):
+        assert _normalize_target("SH2-103") == "Sh2-103"
+
+    def test_sharpless_collapses_internal_space(self):
+        # 'Sh 2-103' (old canonical form) is corrected to 'Sh2-103'
+        assert _normalize_target("Sh 2-103") == "Sh2-103"
+        assert _normalize_target("Sh 2 103") == "Sh2-103"
+
+    def test_sharpless_idempotent(self):
+        assert _normalize_target("Sh2-103") == "Sh2-103"
+
+    def test_unrecognised_passthrough(self):
+        assert _normalize_target("Andromeda") == "Andromeda"
 
 
 class TestNormalizeCamera:
@@ -533,6 +556,13 @@ class TestMarkProcessedByTarget:
         db = tmp_path / "test.db"
         self._populate(db)
         count = mark_processed_by_target(db, "m 81", "2026-05-15")
+        assert count == 2
+
+    def test_missing_space_match(self, tmp_path):
+        # 'M81' (no space) should match the stored 'M 81'
+        db = tmp_path / "test.db"
+        self._populate(db)
+        count = mark_processed_by_target(db, "M81", "2026-05-15")
         assert count == 2
 
     def test_does_not_affect_other_targets(self, tmp_path):

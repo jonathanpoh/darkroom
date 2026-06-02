@@ -184,13 +184,13 @@ _SH2_RE = re.compile(r"^Sh\s*2[-\s]*(\d+)", re.IGNORECASE)
 def _normalize_target(name: str) -> str:
     """Ensure canonical spacing in catalog designations.
 
-    'M81' → 'M 81', 'C49' → 'C 49', 'SH2-103' → 'Sh 2-103'.
+    'M81' → 'M 81', 'C49' → 'C 49', 'SH2-103' → 'Sh2-103'.
     Unrecognised names pass through unchanged.
     """
     name = name.strip()
     m = _SH2_RE.match(name)
     if m:
-        return f"Sh 2-{m.group(1)}"
+        return f"Sh2-{m.group(1)}"
     m = _CATALOG_RE.match(name)
     return f"{m.group(1)} {m.group(2)}" if m else name
 
@@ -486,7 +486,8 @@ def mark_processed_by_target(db_path: Path, target: str, status: str) -> int:
 
     Args:
         db_path: Path to SQLite database file.
-        target: Target name to match (e.g. "M 81"). Case-insensitive.
+        target: Target name to match (e.g. "M 81"). Spacing is canonicalised
+            ('M81' → 'M 81') and the comparison is case-insensitive.
         status: New processed_status value (e.g. "2026-05-15").
 
     Returns:
@@ -495,7 +496,7 @@ def mark_processed_by_target(db_path: Path, target: str, status: str) -> int:
     with sqlite3.connect(db_path) as conn:
         cursor = conn.execute(
             "UPDATE sessions SET processed_status = ? WHERE target = ? COLLATE NOCASE",
-            (status, target),
+            (status, _normalize_target(target)),
         )
         return cursor.rowcount
 
@@ -511,11 +512,15 @@ def finish_command(args) -> None:
         print(f"Error: --date must be YYYY-MM-DD, got {args.date!r}", file=sys.stderr)
         sys.exit(1)
 
+    # Canonicalise the user-supplied target so the archive folder path and the
+    # catalog lookup both use the stored form (e.g. 'M81' → 'M 81').
+    target = _normalize_target(args.target) if args.target else args.target
+
     if args.date:
         date_str = args.date
     else:
         processed_root = (
-            Path(args.archive) / "04_Deep Sky Objects" / args.target / "_Processed"
+            Path(args.archive) / "04_Deep Sky Objects" / target / "_Processed"
         )
         date_str = _find_latest_processed_date(processed_root)
 
@@ -531,15 +536,15 @@ def finish_command(args) -> None:
             sys.exit(1)
         print(f"\nDone: {updated}/{len(args.session)} session(s) updated")
     else:
-        count = mark_processed_by_target(db_path, args.target, date_str)
+        count = mark_processed_by_target(db_path, target, date_str)
         if count == 0:
             print(
-                f"Warning: no sessions found for target {args.target!r}",
+                f"Warning: no sessions found for target {target!r}",
                 file=sys.stderr,
             )
         else:
             print(
-                f"Updated {count} session(s) for target {args.target!r}"
+                f"Updated {count} session(s) for target {target!r}"
                 f" → processed_status = {date_str!r}"
             )
 

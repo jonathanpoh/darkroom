@@ -3,6 +3,8 @@ import sqlite3
 from datetime import date, timedelta
 from pathlib import Path
 
+from darkroom.cataloger import _normalize_target
+
 
 def _connect(db: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(db)
@@ -32,8 +34,10 @@ def query_sessions(
         clauses.append("session_id = ?")
         params.append(session_id)
     if target is not None:
-        clauses.append("target = ?")
-        params.append(target)
+        # Forgiving match: canonicalise spacing (e.g. 'M81' → 'M 81',
+        # 'SH2-103' → 'Sh2-103') and compare case-insensitively.
+        clauses.append("target = ? COLLATE NOCASE")
+        params.append(_normalize_target(target))
     if obs_date is not None:
         clauses.append("obs_date = ?")
         params.append(obs_date)
