@@ -200,7 +200,10 @@ def cmd_prep(
         if not rows:
             date_info = f" on {obs_date}" if obs_date else ""
             sys.exit(f"No sessions found for target '{target}'{date_info}")
-        target_name = target
+        # Use the canonical target name from the catalog, not the raw arg, so the
+        # WBPP folder name is stable regardless of how --target was typed. This
+        # keeps the wbpp→finish handoff working (finish derives the same slug).
+        target_name = rows[0]["target"]
     else:
         sys.exit("Specify --target or --session")
 

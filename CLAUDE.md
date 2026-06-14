@@ -36,7 +36,7 @@ Shared flags and config resolution (CLI → env → `darkroom.toml`, see `darkro
 
 | Flag | Env var | toml key | Default |
 |---|---|---|---|
-| `--catalog` / `--db` | `DARKROOM_CATALOG` | `catalog_path` | `~/.config/darkroom/astro_catalog.db` |
+| `--catalog` | `DARKROOM_CATALOG` | `catalog_path` | `~/.config/darkroom/astro_catalog.db` |
 | `--archive` | `DARKROOM_ARCHIVE` | `archive_path` | — (required) |
 | `--wbpp` | `DARKROOM_WBPP` | `wbpp_path` | `./WBPP` |
 | `--asiair` | — | — | — (required for ingest) |

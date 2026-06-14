@@ -17,7 +17,7 @@ from darkroom.config import resolve_catalog
 
 def _resolve_db(args: argparse.Namespace) -> None:
     """Resolve args.db via CLI/env/toml/default; mutate args.db to the resolved string."""
-    args.db = str(resolve_catalog(args.db))
+    args.db = str(resolve_catalog(args.catalog))
 
 
 def _list_run(args: argparse.Namespace) -> None:
@@ -67,32 +67,40 @@ def add_subparser(subparsers) -> None:
         "catalog",
         help="Browse and update the astro catalog",
     )
-    p.add_argument(
-        "--db",
+    sub = p.add_subparsers(dest="catcmd", required=True)
+
+    # Shared --catalog flag, added to every subcommand so its position is
+    # consistent with the rest of the CLI (after the subcommand, not before).
+    catalog_flag = argparse.ArgumentParser(add_help=False)
+    catalog_flag.add_argument(
+        "--catalog",
         metavar="PATH",
         help="astro_catalog.db (env: DARKROOM_CATALOG, default: ~/.config/darkroom/astro_catalog.db)",
     )
-    sub = p.add_subparsers(dest="catcmd", required=True)
 
-    sl = sub.add_parser("scan-lights", help="Recursively catalog all light sessions")
+    sl = sub.add_parser("scan-lights", parents=[catalog_flag],
+                        help="Recursively catalog all light sessions")
     sl.add_argument("root_path", help="Root folder to scan (e.g. '04_Deep Sky Objects')")
     sl.set_defaults(func=_scan_lights_run)
 
-    sc = sub.add_parser("scan-calibration", help="Catalog calibration frames")
+    sc = sub.add_parser("scan-calibration", parents=[catalog_flag],
+                        help="Catalog calibration frames")
     sc.add_argument("calibration_path", help="Root folder to scan (e.g. '00_Calibration')")
     sc.set_defaults(func=_scan_calibration_run)
 
-    m = sub.add_parser("mark", help="Update processed_status for one session")
+    m = sub.add_parser("mark", parents=[catalog_flag],
+                       help="Update processed_status for one session")
     m.add_argument("session_id", help="Session ID")
     m.add_argument("status", help="Status string (date, path, or note)")
     m.set_defaults(func=_mark_run)
 
-    ls = sub.add_parser("list", help="List sessions from the catalog")
+    ls = sub.add_parser("list", parents=[catalog_flag],
+                        help="List sessions from the catalog")
     ls.add_argument("--target", metavar="NAME", help="Filter by target")
     ls.set_defaults(func=_list_run)
 
     mig = sub.add_parser(
-        "migrate-archive",
+        "migrate-archive", parents=[catalog_flag],
         help="Migrate archive from old filter-in-folder layout to Lights/<filter>/ layout",
     )
     mig.add_argument("--archive", required=True, metavar="PATH", help="Archive root directory")

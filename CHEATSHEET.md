@@ -23,7 +23,7 @@ Set the env vars once in your shell and you can omit the flags everywhere.
 
 | Flag | Env var | `darkroom.toml` key | Default |
 |---|---|---|---|
-| `--catalog` / `--db` | `DARKROOM_CATALOG` | `catalog_path` | `~/.config/darkroom/astro_catalog.db` |
+| `--catalog` | `DARKROOM_CATALOG` | `catalog_path` | `~/.config/darkroom/astro_catalog.db` |
 | `--archive` | `DARKROOM_ARCHIVE` | `archive_path` | — (required) |
 | `--wbpp` | `DARKROOM_WBPP` | `wbpp_path` | `./WBPP` |
 | `--asiair` | — | — | — (required for ingest) |
@@ -167,8 +167,8 @@ darkroom finish --target "M 81" --dry-run
 The catalog is the source of truth. `ingest` writes to it automatically; these commands
 are for backfilling, browsing, and manual edits.
 
-> Note: `--db` lives on the **`catalog`** group, before the subcommand:
-> `darkroom catalog --db /path/to.db list`.
+> Note: `--catalog` goes **after** the subcommand, like everywhere else:
+> `darkroom catalog list --catalog /path/to.db`.
 
 ```bash
 # Backfill the catalog by scanning the NAS (idempotent upserts)
@@ -208,7 +208,7 @@ Launches datasette on the catalog for ad-hoc SQL/exploration in the browser.
 
 ```bash
 darkroom serve
-darkroom serve --db /path/to/astro_catalog.db
+darkroom serve --catalog /path/to/astro_catalog.db
 ```
 
 ---

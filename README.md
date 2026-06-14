@@ -41,9 +41,9 @@ Resolution order: CLI flag → env var → `darkroom.toml`.
 
 | Setting | CLI flag | Env var | toml key |
 |---|---|---|---|
-| Catalog DB | `--catalog` / `--db` | `DARKROOM_CATALOG` | `catalog_path` |
-| Archive root | `--output` | `DARKROOM_OUTPUT` | `output_path` |
-| WBPP work dir | `--wbpp` | — | (default `./WBPP`) |
+| Catalog DB | `--catalog` | `DARKROOM_CATALOG` | `catalog_path` |
+| Archive root | `--archive` | `DARKROOM_ARCHIVE` | `archive_path` |
+| WBPP work dir | `--wbpp` | `DARKROOM_WBPP` | `wbpp_path` |
 
 See [`darkroom.toml.example`](darkroom.toml.example).
 
