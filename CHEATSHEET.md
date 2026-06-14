@@ -153,7 +153,7 @@ darkroom finish --target "M 81" --dry-run
 | Flag | Use |
 |---|---|
 | `--target NAME` | Required. The WBPP target to finish. |
-| `--date YYYY-MM-DD` | Override the auto-derived processing date. |
+| `--date YYYY-MM-DD` | Name the `_Processed/<date>/` output folder (default: derived from WBPP mtimes). **Not** a night selector — finish always processes the whole WBPP target. |
 | `--dry-run` | Print copies/deletes, change nothing. |
 | `--archive`, `--catalog`, `--wbpp` | Override resolved paths. |
 
@@ -228,8 +228,8 @@ darkroom triage serve --archive "/Volumes/Astrophotography" --port 8010
 
 | Flag | Use |
 |---|---|
-| `--archive PATH` | Archive root to scan/serve. Required. |
-| `--db PATH` | triage.db location (default `<archive>/triage.db`). |
+| `--archive PATH` | Archive root to scan/serve (env: `DARKROOM_ARCHIVE`, like the other commands). |
+| `--db PATH` | **triage.db**, not the catalog (default `<archive>/triage.db`). |
 | `--port` / `--host` | (serve) bind address; default `127.0.0.1:8002`. |
 
 ---

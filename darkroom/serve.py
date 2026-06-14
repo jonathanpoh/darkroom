@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import sys
 
 from darkroom.config import resolve_catalog
@@ -12,6 +13,8 @@ def run(args: argparse.Namespace) -> None:
     catalog = resolve_catalog(args.catalog)
     if not catalog.exists():
         sys.exit(f"Catalog not found: {catalog}\nRun `darkroom catalog scan-lights` first.")
+    if shutil.which("datasette") is None:
+        sys.exit("datasette not found on PATH — install it with `pip install datasette` (or `uv tool install datasette`).")
     os.execvp("datasette", ["datasette", "serve", str(catalog)])
 
 

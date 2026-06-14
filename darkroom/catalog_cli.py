@@ -88,10 +88,18 @@ def add_subparser(subparsers) -> None:
     sc.add_argument("calibration_path", help="Root folder to scan (e.g. '00_Calibration')")
     sc.set_defaults(func=_scan_calibration_run)
 
-    m = sub.add_parser("mark", parents=[catalog_flag],
-                       help="Update processed_status for one session")
-    m.add_argument("session_id", help="Session ID")
-    m.add_argument("status", help="Status string (date, path, or note)")
+    m = sub.add_parser(
+        "mark", parents=[catalog_flag],
+        help="Set processed_status for one session",
+        description="Set a session's processed_status. This is a free-form label: "
+                    "`darkroom finish` auto-sets it to the _Processed/<date>/ path it "
+                    "wrote. Set it by hand to record a processing date, an output path, "
+                    "or a note (e.g. 'skipped — bad tracking'). Empty string clears it.",
+    )
+    m.add_argument("session_id", help="Session ID (see `catalog list`)")
+    m.add_argument("status",
+                   help="Free-form status: a date, an output path, or a note "
+                        "('' clears it)")
     m.set_defaults(func=_mark_run)
 
     ls = sub.add_parser("list", parents=[catalog_flag],

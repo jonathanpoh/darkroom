@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
+
+from darkroom.config import resolve_path
 
 
 def add_subparser(sub: argparse._SubParsersAction) -> None:
@@ -11,16 +14,18 @@ def add_subparser(sub: argparse._SubParsersAction) -> None:
 
     # scan
     scan_p = sub2.add_parser("scan", help="Scan archive and populate triage.db")
-    scan_p.add_argument("--archive", required=True, type=Path,
-                        help="Path to staging archive root")
+    scan_p.add_argument("--archive", type=Path,
+                        help="Archive root to scan (env: DARKROOM_ARCHIVE)")
     scan_p.add_argument("--db", type=Path,
-                        help="Path to triage.db (default: <archive>/triage.db)")
+                        help="triage.db — NOT the catalog (default: <archive>/triage.db)")
     scan_p.set_defaults(func=_cmd_scan)
 
     # serve
     serve_p = sub2.add_parser("serve", help="Start triage web UI")
-    serve_p.add_argument("--archive", required=True, type=Path)
-    serve_p.add_argument("--db", type=Path)
+    serve_p.add_argument("--archive", type=Path,
+                         help="Archive root to serve (env: DARKROOM_ARCHIVE)")
+    serve_p.add_argument("--db", type=Path,
+                         help="triage.db — NOT the catalog (default: <archive>/triage.db)")
     serve_p.add_argument("--port", type=int, default=8002)
     serve_p.add_argument("--host", default="127.0.0.1")
     serve_p.set_defaults(func=_cmd_serve)
@@ -28,18 +33,25 @@ def add_subparser(sub: argparse._SubParsersAction) -> None:
     p.set_defaults(func=lambda args: p.print_help())
 
 
-def _resolve_db(args) -> Path:
+def _resolve_archive(args) -> Path:
+    archive = resolve_path(args.archive, "DARKROOM_ARCHIVE", "archive_path")
+    if archive is None:
+        sys.exit("Error: --archive / DARKROOM_ARCHIVE / darkroom.toml archive_path required")
+    return archive
+
+
+def _resolve_db(args, archive: Path) -> Path:
     if args.db:
         return args.db
-    return Path(args.archive) / "triage.db"
+    return archive / "triage.db"
 
 
 def _cmd_scan(args) -> None:
     from darkroom.triage.db import open_db, upsert_item
     from darkroom.triage.scanner import scan_archive
 
-    archive = Path(args.archive)
-    db_path = _resolve_db(args)
+    archive = _resolve_archive(args)
+    db_path = _resolve_db(args, archive)
     conn = open_db(db_path)
 
     candidates = scan_archive(archive)
@@ -68,8 +80,8 @@ def _cmd_serve(args) -> None:
     import uvicorn
     from darkroom.triage.server import create_app
 
-    archive = Path(args.archive)
-    db_path = _resolve_db(args)
+    archive = _resolve_archive(args)
+    db_path = _resolve_db(args, archive)
 
     app = create_app(db_path=db_path, archive_root=archive)
     print(f"Starting triage server at http://{args.host}:{args.port}")

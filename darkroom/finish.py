@@ -256,7 +256,9 @@ def add_subparser(subparsers) -> None:
     p.add_argument("--wbpp", metavar="PATH",
                    help="Root for WBPP target dirs (env: DARKROOM_WBPP, default: ./WBPP)")
     p.add_argument("--date", metavar="YYYY-MM-DD",
-                   help="Override the auto-derived processing date")
+                   help="Name the _Processed/<date>/ output folder (default: derived "
+                        "from WBPP output mtimes). Does NOT select a night — finish "
+                        "always processes the whole WBPP target.")
     p.add_argument("--dry-run", action="store_true",
                    help="Print what would be copied/deleted without making changes")
     p.set_defaults(func=run)
