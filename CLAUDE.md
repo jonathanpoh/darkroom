@@ -1,5 +1,17 @@
 # darkroom — Development Brief
 
+## Superpowers skills (opt-in on Opus 4.8)
+
+When running **Opus 4.8**, do NOT auto-invoke `test-driven-development`,
+`systematic-debugging`, or `verification-before-completion` — 4.8 already does
+root-cause investigation, test-first discipline, and verify-before-claiming well
+enough on its own, and the gates add friction to exploratory work in this repo.
+Invoke them only when I explicitly ask, or when the change is risky enough to
+warrant the rigor (e.g. catalog/ingest logic where a silent regression corrupts
+the archive). On **Sonnet 4.6** (or any non-4.8 model), treat them as normally
+auto-triggering. Orchestration skills (brainstorming, writing/executing-plans,
+worktrees, subagent-driven-development) are unaffected.
+
 ## What This Project Is
 
 The full darkroom suite — unified into a single `darkroom` CLI as of May 2026.
