@@ -32,6 +32,13 @@ class TestNormalizeTarget:
     def test_caldwell_spacing(self):
         assert _normalize_target("C49") == "C 49"
 
+    def test_prefix_canonical_casing(self):
+        # lowercase/odd-case prefixes are corrected to canonical casing, so the
+        # result is usable verbatim as a case-sensitive archive folder name
+        assert _normalize_target("ngc7000") == "NGC 7000"
+        assert _normalize_target("ic 443") == "IC 443"
+        assert _normalize_target("c49") == "C 49"
+
     def test_sharpless_no_space(self):
         assert _normalize_target("SH2-103") == "Sh2-103"
 

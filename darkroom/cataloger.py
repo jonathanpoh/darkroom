@@ -174,17 +174,27 @@ def _parse_gain(header) -> int:
     return 0
 
 
+# Canonical prefixes in alternation order (longer/compound forms before their
+# single-letter subsets so e.g. 'Col'/'Cr' win over 'C'). The casing here is the
+# canonical casing we store and use to build archive folder paths.
+_CATALOG_PREFIXES = (
+    "NGC", "LBN", "LDN", "RCW", "GUM", "Ced", "vdB", "Col", "Mel",
+    "Stock", "Abell", "IC", "Tr", "Cr", "B", "M", "C",
+)
 _CATALOG_RE = re.compile(
-    r"^(NGC|LBN|LDN|RCW|GUM|Ced|vdB|Col|Mel|Stock|Abell|IC|Tr|Cr|B|M|C)\s*(\d.*)",
+    r"^(" + "|".join(_CATALOG_PREFIXES) + r")\s*(\d.*)",
     re.IGNORECASE,
 )
+_CANON_PREFIX = {p.upper(): p for p in _CATALOG_PREFIXES}
 _SH2_RE = re.compile(r"^Sh\s*2[-\s]*(\d+)", re.IGNORECASE)
 
 
 def _normalize_target(name: str) -> str:
-    """Ensure canonical spacing in catalog designations.
+    """Ensure canonical spacing and casing in catalog designations.
 
-    'M81' → 'M 81', 'C49' → 'C 49', 'SH2-103' → 'Sh2-103'.
+    'M81' → 'M 81', 'c49' → 'C 49', 'ngc7000' → 'NGC 7000', 'SH2-103' → 'Sh2-103'.
+    The prefix is normalised to its canonical casing (not just spacing) so the
+    result can be used verbatim as a case-sensitive archive folder name.
     Unrecognised names pass through unchanged.
     """
     name = name.strip()
@@ -192,7 +202,7 @@ def _normalize_target(name: str) -> str:
     if m:
         return f"Sh2-{m.group(1)}"
     m = _CATALOG_RE.match(name)
-    return f"{m.group(1)} {m.group(2)}" if m else name
+    return f"{_CANON_PREFIX[m.group(1).upper()]} {m.group(2)}" if m else name
 
 
 def _target_from_path(lights_path: Path) -> str:
