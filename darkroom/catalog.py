@@ -63,12 +63,17 @@ def find_darks(
 
 
 def find_flats(
-    db: Path, *, camera: str, ota: str, filter_: str | None, obs_date: str
+    db: Path, *, camera: str, ota: str, filter_: str | None, obs_date: str,
+    window_days: int = 3,
 ) -> list[dict]:
-    """Return Flat calibration sets within ±1 day, ordered by date proximity."""
+    """Return Flat calibration sets within ±window_days, ordered by date proximity.
+
+    Archived flats may have been taken on a different occasion than the session,
+    so matching is by date proximity (default ±3 days) rather than exact date.
+    """
     d = date.fromisoformat(obs_date)
-    lo = (d - timedelta(days=1)).isoformat()
-    hi = (d + timedelta(days=1)).isoformat()
+    lo = (d - timedelta(days=window_days)).isoformat()
+    hi = (d + timedelta(days=window_days)).isoformat()
     if filter_ is None:
         filter_clause = "filter IS NULL"
         params = (camera, ota, lo, hi, obs_date)

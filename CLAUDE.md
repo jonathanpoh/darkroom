@@ -24,12 +24,13 @@ pipeline); now one package with subcommands:
 | `darkroom catalog scan-calibration <path>` | Catalog calibration frames |
 | `darkroom catalog mark <id> <status>` | Update processed_status for one session |
 | `darkroom catalog list [--target X]` | Browse the catalog |
+| `darkroom catalog migrate-archive --archive <path> [--dry-run]` | Migrate archive from old filter-in-folder layout to `Lights/<filter>/` |
 | `darkroom ingest --asiair <path> [--dry-run \| --manifest F \| --review F \| --commit [F]]` | Archive an ASIAir session |
-| `darkroom wbpp --target X [--date Y \| --session ID]` | Build SESSION_N symlink dirs for PixInsight |
+| `darkroom wbpp --target X [--date Y \| --session ID] [--flat-window DAYS]` | Build SESSION_N symlink dirs for PixInsight |
 | `darkroom finish --target X [--date Y]` | Copy WBPP stacks back to archive and mark sessions processed |
 | `darkroom serve` | Browse the catalog in datasette |
-| `darkroom triage scan <archive>` | Scan archive for issues, populate triage.db |
-| `darkroom triage serve <archive>` | Review/fix flagged items in a web UI (port 8002) |
+| `darkroom triage scan --archive <path>` | Scan archive for issues, populate triage.db |
+| `darkroom triage serve --archive <path>` | Review/fix flagged items in a web UI (port 8002) |
 
 Shared flags and config resolution (CLI → env → `darkroom.toml`, see `darkroom/config.py`):
 
@@ -153,7 +154,10 @@ Ported from `asiair-ingestion/scripts/create_wbpp_input.py`. Use these everywher
 
 ### Workflow
 1. Scan source for FITS files; extract metadata from filenames + headers.
-2. Detect session boundaries: gap > 4h between frames = new session.
+2. Group light frames into sessions by **imaging night** (local noon-to-noon):
+   each frame's night is the local calendar date the night began, so a run
+   spanning midnight stays one session. Sessions are keyed by (target, night).
+   See `cataloger.py:compute_imaging_night`.
 3. Separate frame types: Light, Dark, Flat, FlatDark.
 4. Compute canonical destination paths for each group.
 5. Write YAML manifest listing every source→destination move.
@@ -190,8 +194,9 @@ Generalised from `asiair-ingestion/scripts/create_wbpp_input.py`. Key difference
 
 - Source is the **NAS archive**, not a local `Autorun/` folder.
 - Sessions identified by catalog ID or `--target` + `--date`.
-- Flat matching uses **date proximity** (±3 days default), not exact date — because
-  archived flats may have been taken on a different occasion than the session.
+- Flat matching uses **date proximity** (±3 days default, `--flat-window DAYS`), not
+  exact date — because archived flats may have been taken on a different occasion
+  than the session.
 - Produces WBPP session dirs in `~/WBPP/<TargetSlug>/SESSION_N/` with symlinks.
 
 ### Matching rules (inherit from prototype, adjust as needed)
@@ -199,7 +204,7 @@ Generalised from `asiair-ingestion/scripts/create_wbpp_input.py`. Key difference
 | Frame type | Match key |
 |---|---|
 | Science darks | Camera + Gain + Exposure (all dates usable) |
-| Flats | OTA + Camera + Filter + nearest date within ±N days |
+| Flats | OTA + Camera + Filter + nearest date within ±N days (N = `--flat-window`, default 3) |
 | Flat darks | Flat exposure + flat date (or flat_date + 1 fallback) |
 
 ### Inputs

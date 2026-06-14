@@ -172,9 +172,10 @@ def test_find_darks_no_match(tmp_path):
 
 
 def test_find_flats_one_match(tmp_path):
+    # narrow window: only the adjacent 02-19 flat is within ±1 of 02-18
     db = make_db(tmp_path)
     rows = find_flats(db, camera="ZWO ASI585MC Pro", ota="FRA400",
-                      filter_="L-Pro", obs_date="2026-02-18")
+                      filter_="L-Pro", obs_date="2026-02-18", window_days=1)
     assert len(rows) == 1
     assert rows[0]["capture_date"] == "2026-02-19"
 
@@ -186,6 +187,24 @@ def test_find_flats_two_matches(tmp_path):
     assert len(rows) == 2
     assert rows[0]["capture_date"] == "2026-02-19"
     assert rows[1]["capture_date"] == "2026-02-20"
+
+
+def test_find_flats_default_window_three_days(tmp_path):
+    # flats are on 02-19 and 02-20; a session on 02-22 is 2-3 days away.
+    # The default ±3 window catches them; the old ±1 window would not.
+    db = make_db(tmp_path)
+    rows = find_flats(db, camera="ZWO ASI585MC Pro", ota="FRA400",
+                      filter_="L-Pro", obs_date="2026-02-22")
+    assert len(rows) == 2
+    # closest first
+    assert rows[0]["capture_date"] == "2026-02-20"
+
+
+def test_find_flats_narrow_window(tmp_path):
+    db = make_db(tmp_path)
+    rows = find_flats(db, camera="ZWO ASI585MC Pro", ota="FRA400",
+                      filter_="L-Pro", obs_date="2026-02-22", window_days=1)
+    assert rows == []
 
 
 def test_find_flats_filter_mismatch(tmp_path):

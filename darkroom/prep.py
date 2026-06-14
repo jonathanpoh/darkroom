@@ -76,14 +76,16 @@ def _overwrite_target_dir(target_dir: Path) -> None:
     clear_sessions(target_dir)
 
 
-def _resolve_flat(cal_rows: list[dict], filter_name: str, obs_date: str) -> dict | None:
+def _resolve_flat(
+    cal_rows: list[dict], filter_name: str, obs_date: str, window_days: int
+) -> dict | None:
     """Prompt user to resolve flat set ambiguity. Returns chosen row or None.
 
     In non-interactive mode (no TTY): auto-selects closest match; skips pause on 0 matches.
     """
     interactive = sys.stdin.isatty()
     if len(cal_rows) == 0:
-        print(f"  No flats found for {filter_name} within ±1 day of {obs_date}.")
+        print(f"  No flats found for {filter_name} within ±{window_days} day(s) of {obs_date}.")
         if interactive:
             input("  [Enter] Proceed without flats")
         return None
@@ -110,6 +112,7 @@ def _build_night(
     output: Path,
     catalog: Path,
     session_dir: Path,
+    flat_window: int,
 ) -> None:
     """Build one SESSION_N directory from one or more sessions on the same night."""
     session_dir.mkdir(parents=True, exist_ok=True)
@@ -147,8 +150,9 @@ def _build_night(
             ota=sess["ota"],
             filter_=sess["filter"],
             obs_date=obs_date,
+            window_days=flat_window,
         )
-        chosen_flat = _resolve_flat(flat_rows, filter_name, obs_date)
+        chosen_flat = _resolve_flat(flat_rows, filter_name, obs_date, flat_window)
         if chosen_flat:
             files = discover_flat_files(output / chosen_flat["folder_path"])
             flat_count = make_symlinks(files, session_dir / "Flats" / f"FILTER_{filter_name}")
@@ -184,6 +188,7 @@ def cmd_prep(
     obs_date: str | None,
     session_id: str | None,
     overwrite: bool = False,
+    flat_window: int = 3,
 ) -> None:
     if session_id:
         rows = query_sessions(catalog, session_id=session_id)
@@ -219,7 +224,13 @@ def cmd_prep(
         filters = ", ".join(s["filter"] or "NoFilter" for s in night_sessions)
         total_lights = sum(s["frame_count"] for s in night_sessions)
         print(f"\nSESSION_{n}  ({target_name} · {night_date} · {filters} · {total_lights} lights)")
-        _build_night(night_sessions, output=output, catalog=catalog, session_dir=session_dir)
+        _build_night(
+            night_sessions,
+            output=output,
+            catalog=catalog,
+            session_dir=session_dir,
+            flat_window=flat_window,
+        )
         print(f"\nIn PixInsight: WBPP → Add Directory → select {session_dir}/")
 
     print(f"\nSet WBPP output directory to: {output_dir}/")
@@ -252,6 +263,7 @@ def run(args: argparse.Namespace) -> None:
         obs_date=args.date,
         session_id=args.session,
         overwrite=args.overwrite,
+        flat_window=args.flat_window,
     )
 
 
@@ -267,6 +279,8 @@ def add_subparser(subparsers) -> None:
     p.add_argument("--session", metavar="ID", help="Select single session by catalog ID")
     p.add_argument("--overwrite", action="store_true",
                    help="Clear and regenerate target WBPP dir before creating symlinks")
+    p.add_argument("--flat-window", type=int, default=3, metavar="DAYS",
+                   help="Match flats within ±DAYS of the session date (default: 3)")
     p.add_argument("--archive", metavar="PATH",
                    help="Archive root (env: DARKROOM_ARCHIVE)")
     p.add_argument("--catalog", metavar="PATH",
