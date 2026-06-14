@@ -305,6 +305,24 @@ def build_manifest(
     }
 
 
+def _manifest_dest(manifest_arg: str) -> tuple[Path, str | None]:
+    """Resolve the --manifest output path, defaulting a missing extension to .yaml.
+
+    The manifest is always YAML, so a bare name gets `.yaml` appended and a
+    misleading `.json` name returns a warning (the content is not JSON).
+    Returns (dest, warning_or_None).
+    """
+    dest = Path(manifest_arg)
+    if dest.suffix == "":
+        return dest.with_suffix(".yaml"), None
+    if dest.suffix.lower() == ".json":
+        return dest, (
+            f"Warning: {dest.name} will contain YAML, not JSON "
+            "— consider a .yaml/.yml name"
+        )
+    return dest, None
+
+
 def cmd_scan(args: argparse.Namespace, *, write_file: bool) -> None:
     """Handle --dry-run and --manifest modes."""
     source = Path(args.asiair)
@@ -322,7 +340,9 @@ def cmd_scan(args: argparse.Namespace, *, write_file: bool) -> None:
     yaml_str = yaml.dump(manifest, default_flow_style=False, sort_keys=False, allow_unicode=True)
 
     if write_file:
-        dest = Path(args.manifest)
+        dest, warning = _manifest_dest(args.manifest)
+        if warning:
+            print(warning, file=sys.stderr)
         dest.write_text(yaml_str)
         needs_review = sum(
             1 for e in manifest["sessions"] + manifest["calibration"]

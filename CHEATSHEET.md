@@ -81,6 +81,9 @@ darkroom ingest --asiair /Volumes/ASIAIR/Autorun --commit
 The four mode flags (`--dry-run` / `--manifest` / `--review` / `--commit`) are
 mutually exclusive — pick one.
 
+> The manifest is always **YAML**. `--manifest run` (no extension) writes `run.yaml`;
+> a `.json` name still gets YAML content and prints a warning.
+
 Sessions are grouped by **imaging night** (local noon-to-noon), so a run that crosses
 midnight stays one session, dated to the night it began.
 

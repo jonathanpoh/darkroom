@@ -10,6 +10,7 @@ from darkroom.ingest import (
     camera_slug,
     session_dest_rel,
     cal_dest_rel,
+    _manifest_dest,
 )
 from darkroom.config import find_toml, resolve_path
 
@@ -52,6 +53,31 @@ def test_cal_dest_rel_flatdark():
 def test_cal_dest_rel_bias():
     result = cal_dest_rel("Bias", "ZWO ASI585MC Pro", "FRA400", None, "2026-02-21")
     assert result == Path("00_Calibration/Bias/ZWOASI585MCPro/Raw")
+
+
+def test_manifest_dest_appends_yaml_when_no_extension():
+    dest, warning = _manifest_dest("run")
+    assert dest == Path("run.yaml")
+    assert warning is None
+
+
+def test_manifest_dest_warns_on_json():
+    dest, warning = _manifest_dest("manifest.json")
+    assert dest == Path("manifest.json")
+    assert warning is not None and "YAML" in warning
+
+
+def test_manifest_dest_keeps_yaml_extension():
+    dest, warning = _manifest_dest("run.yaml")
+    assert dest == Path("run.yaml")
+    assert warning is None
+
+
+def test_manifest_dest_preserves_path_and_dotted_dirs():
+    # extension defaulting must not clobber a real path
+    dest, warning = _manifest_dest("/tmp/out/run")
+    assert dest == Path("/tmp/out/run.yaml")
+    assert warning is None
 
 
 def test_find_toml_missing_returns_empty(tmp_path, monkeypatch):
