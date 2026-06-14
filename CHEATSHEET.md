@@ -52,34 +52,31 @@ new sessions + calibration sets in the catalog. **Never deletes source files.**
 Designed to be non-interactive (CCC postflight has no TTY): generate a manifest,
 eyeball it, then commit.
 
-```bash
-# 1. Dry-run: scan and print the manifest to stdout, write nothing
-darkroom ingest --asiair /Volumes/ASIAIR/Autorun --dry-run
+It has three verbs: **scan** → (review) → **commit**.
 
-# 2. Write a manifest to a file so you can review/edit it
-darkroom ingest --asiair /Volumes/ASIAIR/Autorun --manifest run.yaml
+```bash
+# 1. Scan and print the manifest to stdout, write nothing (a dry run)
+darkroom ingest scan --asiair /Volumes/ASIAIR/Autorun
+
+# 2. Scan and write the manifest to a file so you can review/edit it
+darkroom ingest scan --asiair /Volumes/ASIAIR/Autorun --manifest run.yaml
 
 # 3. (optional) Resolve any needs_review items interactively
-darkroom ingest --review run.yaml
+darkroom ingest review run.yaml
 
 # 4. Commit the reviewed manifest (copies files + writes catalog)
-darkroom ingest --commit run.yaml
+darkroom ingest commit run.yaml
 
 #    …or scan + commit in one shot (no separate manifest file)
-darkroom ingest --asiair /Volumes/ASIAIR/Autorun --commit
+darkroom ingest commit --asiair /Volumes/ASIAIR/Autorun
 ```
 
-| Flag | Use |
+| Verb | Use |
 |---|---|
-| `--asiair PATH` | ASIAir `Autorun/` folder (the SD-card copy). Required. |
-| `--dry-run` | Scan, print manifest to stdout, change nothing. |
-| `--manifest FILE` | Scan and write manifest to FILE for review. |
-| `--review FILE` | Interactively resolve `needs_review` items in FILE. |
-| `--commit [FILE]` | Execute FILE; with no FILE, scan + commit directly. |
-| `--archive`, `--catalog` | Override resolved paths. |
-
-The four mode flags (`--dry-run` / `--manifest` / `--review` / `--commit`) are
-mutually exclusive — pick one.
+| `scan --asiair PATH [--manifest FILE]` | Scan the source; print the manifest (or write it to FILE with `--manifest`). No `--manifest` = dry run. |
+| `review FILE` | Interactively resolve `needs_review` items in FILE. |
+| `commit [FILE]` | Execute FILE; with no FILE, scan `--asiair` + commit directly. |
+| `--archive`, `--catalog` | (on `scan`/`commit`) Override resolved paths. |
 
 > The manifest is always **YAML**. `--manifest run` (no extension) writes `run.yaml`;
 > a `.json` name still gets YAML content and prints a warning.
@@ -241,9 +238,9 @@ darkroom triage serve --archive "/Volumes/Astrophotography" --port 8010
 
 ```bash
 # A. New imaging night landed on disk
-darkroom ingest --asiair /Volumes/ASIAIR/Autorun --manifest run.yaml
+darkroom ingest scan --asiair /Volumes/ASIAIR/Autorun --manifest run.yaml
 #    review run.yaml, then:
-darkroom ingest --commit run.yaml
+darkroom ingest commit run.yaml
 
 # B. Stage it for PixInsight
 darkroom wbpp --target "M 81" --date 2026-02-19

@@ -76,13 +76,13 @@ uv run datasette serve astro_catalog.db
 ### `darkroom ingest`
 
 ```bash
-# Three-step (recommended): manifest → review → commit
-darkroom ingest --source ~/staging/Autorun --manifest /tmp/ingest.yaml
-darkroom ingest --review /tmp/ingest.yaml      # only if filter detection failed
-darkroom ingest --commit /tmp/ingest.yaml
+# Three-step (recommended): scan → review → commit
+darkroom ingest scan --asiair ~/staging/Autorun --manifest /tmp/ingest.yaml
+darkroom ingest review /tmp/ingest.yaml      # only if filter detection failed
+darkroom ingest commit /tmp/ingest.yaml
 
 # Or one-shot:
-darkroom ingest --source ~/staging/Autorun --commit
+darkroom ingest commit --asiair ~/staging/Autorun
 ```
 
 - Designed to run non-interactively after Carbon Copy Cloner finishes (no TTY).

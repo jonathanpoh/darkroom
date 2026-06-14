@@ -350,7 +350,7 @@ def cmd_scan(args: argparse.Namespace, *, write_file: bool) -> None:
         )
         print(f"Manifest written to {dest}")
         if needs_review:
-            print(f"  {needs_review} item(s) need filter review — run: darkroom ingest --review {dest}")
+            print(f"  {needs_review} item(s) need filter review — run: darkroom ingest review {dest}")
     else:
         print(yaml_str)
 
@@ -361,7 +361,7 @@ def cmd_scan(args: argparse.Namespace, *, write_file: bool) -> None:
 
 def cmd_review(args: argparse.Namespace) -> None:
     """Interactively resolve needs_review items in a saved manifest file."""
-    manifest_path = Path(args.review)
+    manifest_path = Path(args.manifest)
     if not manifest_path.exists():
         print(f"Error: manifest file not found: {manifest_path}", file=sys.stderr)
         sys.exit(1)
@@ -425,10 +425,10 @@ def cmd_review(args: argparse.Namespace) -> None:
 
 def cmd_commit(args: argparse.Namespace) -> None:
     """Execute a manifest: copy files and register in catalog."""
-    if args.commit is True:
+    if args.manifest is None:
         # No manifest file given — scan and commit in one step
         if not args.asiair:
-            print("Error: --commit without a file requires --asiair", file=sys.stderr)
+            print("Error: commit without a manifest file requires --asiair", file=sys.stderr)
             sys.exit(1)
         source = Path(args.asiair)
         output = _require_path(args.archive, "DARKROOM_ARCHIVE", "archive_path", "archive")
@@ -437,7 +437,7 @@ def cmd_commit(args: argparse.Namespace) -> None:
         scan = scan_source(source)
         manifest = build_manifest(scan, source, output, catalog, interactive)
     else:
-        manifest_path = Path(args.commit)
+        manifest_path = Path(args.manifest)
         if not manifest_path.exists():
             print(f"Error: manifest file not found: {manifest_path}", file=sys.stderr)
             sys.exit(1)
@@ -455,7 +455,7 @@ def cmd_commit(args: argparse.Namespace) -> None:
         print("Error: manifest has unresolved needs_review items:", file=sys.stderr)
         for item in flagged:
             print(f"  - {item}", file=sys.stderr)
-        print("Run: darkroom ingest --review <manifest>", file=sys.stderr)
+        print("Run: darkroom ingest review <manifest>", file=sys.stderr)
         sys.exit(1)
 
     init_db(catalog)
@@ -535,24 +535,12 @@ def cmd_commit(args: argparse.Namespace) -> None:
     print(f"Done: {files_copied} files copied, {files_skipped} skipped, {catalog_entries} catalog entries written")
 
 
-def run(args: argparse.Namespace) -> None:
-    """Entry point invoked by darkroom.cli."""
-    if args.dry_run:
-        if not args.asiair:
-            sys.exit("Error: --dry-run requires --asiair")
-        cmd_scan(args, write_file=False)
-    elif args.manifest:
-        if not args.asiair:
-            sys.exit("Error: --manifest requires --asiair")
-        cmd_scan(args, write_file=True)
-    elif args.review:
-        cmd_review(args)
-    elif args.commit is not None:
-        cmd_commit(args)
-    else:
-        sys.exit(
-            "Error: select a mode — --dry-run | --manifest FILE | --review FILE | --commit [FILE]"
-        )
+def _run_scan(args: argparse.Namespace) -> None:
+    """`ingest scan` — scan the ASIAir source and emit a manifest.
+
+    No --manifest prints to stdout (dry run); --manifest FILE writes it.
+    """
+    cmd_scan(args, write_file=args.manifest is not None)
 
 
 def add_subparser(subparsers) -> None:
@@ -561,19 +549,47 @@ def add_subparser(subparsers) -> None:
         help="Archive a completed ASIAir session into the NAS",
         description="Copy ASIAir source files into the canonical archive structure and register sessions in the catalog.",
     )
-    p.add_argument("--asiair", metavar="PATH",
-                   help="ASIAir Autorun/ folder")
-    p.add_argument("--archive", metavar="PATH",
-                   help="Archive root (env: DARKROOM_ARCHIVE)")
-    p.add_argument("--catalog", metavar="PATH",
-                   help="astro_catalog.db (env: DARKROOM_CATALOG, default: ~/.config/darkroom/astro_catalog.db)")
-    mode = p.add_mutually_exclusive_group()
-    mode.add_argument("--dry-run", action="store_true",
-                      help="Scan and print manifest to stdout, do not write")
-    mode.add_argument("--manifest", metavar="FILE",
-                      help="Scan and write manifest to FILE for review")
-    mode.add_argument("--review", metavar="FILE",
-                      help="Interactively resolve needs_review items in FILE")
-    mode.add_argument("--commit", nargs="?", const=True, metavar="FILE",
-                      help="Execute FILE (or scan+commit if no FILE given)")
-    p.set_defaults(func=run)
+    verbs = p.add_subparsers(dest="ingest_cmd", required=True)
+
+    # ── scan ──────────────────────────────────────────────────────────────
+    scan = verbs.add_parser(
+        "scan",
+        help="Scan the ASIAir source and emit a manifest",
+        description="Scan the ASIAir source; print the manifest to stdout, or write it to a file with --manifest.",
+    )
+    scan.add_argument("--asiair", required=True, metavar="PATH",
+                      help="ASIAir Autorun/ folder")
+    scan.add_argument("--manifest", metavar="FILE",
+                      help="Write the manifest to FILE for review (default: print to stdout)")
+    scan.add_argument("--archive", metavar="PATH",
+                      help="Archive root (env: DARKROOM_ARCHIVE)")
+    scan.add_argument("--catalog", metavar="PATH",
+                      help="astro_catalog.db (env: DARKROOM_CATALOG, default: ~/.config/darkroom/astro_catalog.db)")
+    scan.set_defaults(func=_run_scan)
+
+    # ── review ────────────────────────────────────────────────────────────
+    review = verbs.add_parser(
+        "review",
+        help="Interactively resolve needs_review items in a manifest",
+        description="Interactively resolve needs_review (missing-filter) items in a saved manifest.",
+    )
+    review.add_argument("manifest", metavar="FILE",
+                        help="Manifest file to review in place")
+    review.set_defaults(func=cmd_review)
+
+    # ── commit ────────────────────────────────────────────────────────────
+    commit = verbs.add_parser(
+        "commit",
+        help="Execute a manifest (copy files + register in catalog)",
+        description="Execute a manifest: copy files and register sessions. "
+                    "With no FILE, scans --asiair and commits in one step.",
+    )
+    commit.add_argument("manifest", nargs="?", metavar="FILE",
+                        help="Manifest to execute (omit to scan + commit directly)")
+    commit.add_argument("--asiair", metavar="PATH",
+                        help="ASIAir Autorun/ folder (required when no manifest FILE is given)")
+    commit.add_argument("--archive", metavar="PATH",
+                        help="Archive root (env: DARKROOM_ARCHIVE)")
+    commit.add_argument("--catalog", metavar="PATH",
+                        help="astro_catalog.db (env: DARKROOM_CATALOG, default: ~/.config/darkroom/astro_catalog.db)")
+    commit.set_defaults(func=cmd_commit)

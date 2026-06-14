@@ -25,7 +25,7 @@ pipeline); now one package with subcommands:
 | `darkroom catalog mark <id> <status>` | Update processed_status for one session |
 | `darkroom catalog list [--target X]` | Browse the catalog |
 | `darkroom catalog migrate-archive --archive <path> [--dry-run]` | Migrate archive from old filter-in-folder layout to `Lights/<filter>/` |
-| `darkroom ingest --asiair <path> [--dry-run \| --manifest F \| --review F \| --commit [F]]` | Archive an ASIAir session |
+| `darkroom ingest scan --asiair <path> [--manifest F]` / `ingest review F` / `ingest commit [F]` | Archive an ASIAir session (scan → review → commit) |
 | `darkroom wbpp --target X [--date Y \| --session ID] [--flat-window DAYS]` | Build SESSION_N symlink dirs for PixInsight |
 | `darkroom finish --target X [--date Y]` | Copy WBPP stacks back to archive and mark sessions processed |
 | `darkroom serve` | Browse the catalog in datasette |
@@ -145,12 +145,14 @@ Ported from `asiair-ingestion/scripts/create_wbpp_input.py`. Use these everywher
 
 ## `darkroom ingest` (was `archive_ingest.py`)
 
-### Inputs
-- `--asiair <path>`: ASIAir output folder (an `Autorun/` directory or equivalent)
-- `--archive <path>`: NAS/local archive root (env: `DARKROOM_ARCHIVE`)
-- `--dry-run`: print what would happen, create no files
-- `--manifest <yaml>`: path to pre-generated manifest to commit
-- `--commit`: execute a previously generated manifest
+### Verbs (subcommands, not mode flags)
+- `ingest scan --asiair <path> [--manifest <yaml>]`: scan + emit manifest.
+  No `--manifest` prints to stdout (a dry run); `--manifest FILE` writes it.
+- `ingest review <yaml>`: interactively resolve `needs_review` (missing-filter) items.
+- `ingest commit [<yaml>]`: execute a manifest. With no FILE, scans `--asiair` and
+  commits in one step.
+- Shared: `--archive <path>` (env `DARKROOM_ARCHIVE`), `--catalog <path>` on
+  `scan`/`commit`.
 
 ### Workflow
 1. Scan source for FITS files; extract metadata from filenames + headers.
@@ -293,7 +295,7 @@ package. Treat it as a historical reference only.
 
 ## Catalog integration
 
-`darkroom ingest --commit` calls `upsert_session`/`upsert_calibration_set` from
+`darkroom ingest commit` calls `upsert_session`/`upsert_calibration_set` from
 `darkroom.cataloger` directly — no shell-out, no manual SQL. `darkroom finish`
 calls `mark_processed` for every session_id resolved from the WBPP target's
 SESSION_N symlinks. The catalog is the single source of truth.
