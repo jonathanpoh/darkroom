@@ -28,6 +28,8 @@ pipeline); now one package with subcommands:
 | `darkroom wbpp --target X [--date Y \| --session ID]` | Build SESSION_N symlink dirs for PixInsight |
 | `darkroom finish --target X [--date Y]` | Copy WBPP stacks back to archive and mark sessions processed |
 | `darkroom serve` | Browse the catalog in datasette |
+| `darkroom triage scan <archive>` | Scan archive for issues, populate triage.db |
+| `darkroom triage serve <archive>` | Review/fix flagged items in a web UI (port 8002) |
 
 Shared flags and config resolution (CLI → env → `darkroom.toml`, see `darkroom/config.py`):
 
@@ -226,7 +228,7 @@ uv sync --extra dev
 uv run darkroom --help
 uv run darkroom catalog list
 darkroom serve                           # browse catalog in datasette (installed globally)
-uv run pytest                            # 165 tests
+uv run pytest                            # run the suite
 ```
 
 ## Package Layout
@@ -245,7 +247,27 @@ darkroom/
   finish.py         ← `darkroom finish`
   serve.py          ← `darkroom serve`
   wbpp.py           ← symlink helpers used by prep/finish
+  triage/           ← `darkroom triage` — archive-cleanup web UI
+    scanner.py      ← walk archive, flag issues (checks.py: OBJECT, RA/DEC)
+    suggest.py      ← propose corrected paths/values
+    actions.py      ← move/rename/copy_corrected/trash/revert
+    db.py           ← triage_items table (separate triage.db, NOT the catalog)
+    server.py       ← FastAPI app; cli.py registers `triage scan|serve`
+  templates/triage/ ← Jinja2 templates for the triage UI
 ```
+
+## `darkroom triage` (transient cleanup tool)
+
+A web UI for cleaning up the **existing** NAS archive — not part of the steady-state
+ingest pipeline. `triage scan` walks the archive, flags problems (placeholder FITS
+`OBJECT`, RA/DEC mismatches, mis-filed calibration, legacy session naming), and
+proposes corrections; `triage serve` (port 8002) lets you review each item and
+apply move/rename/copy-corrected/trash, or revert a prior action.
+
+State lives in a **separate `triage.db`** (default `<archive>/triage.db`), distinct
+from `astro_catalog.db` — triage does not write to the catalog, so the "catalog is
+the single source of truth" rule still holds. This tool is expected to be removed
+once the archive backlog is cleaned up; treat it as scaffolding, not core.
 
 ## Relationship to `asiair-ingestion`
 
