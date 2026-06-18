@@ -558,7 +558,7 @@ def add_subparser(subparsers) -> None:
         description="Scan the ASIAir source; print the manifest to stdout, or write it to a file with --manifest.",
     )
     scan.add_argument("--asiair", required=True, metavar="PATH",
-                      help="ASIAir Autorun/ folder")
+                      help="ASIAir root or Autorun/Plan folder")
     scan.add_argument("--manifest", metavar="FILE",
                       help="Write the manifest to FILE for review (default: print to stdout)")
     scan.add_argument("--archive", metavar="PATH",
@@ -587,7 +587,7 @@ def add_subparser(subparsers) -> None:
     commit.add_argument("manifest", nargs="?", metavar="FILE",
                         help="Manifest to execute (omit to scan + commit directly)")
     commit.add_argument("--asiair", metavar="PATH",
-                        help="ASIAir Autorun/ folder (required when no manifest FILE is given)")
+                        help="ASIAir root or Autorun/Plan folder (required when no manifest FILE is given)")
     commit.add_argument("--archive", metavar="PATH",
                         help="Archive root (env: DARKROOM_ARCHIVE)")
     commit.add_argument("--catalog", metavar="PATH",

@@ -47,12 +47,30 @@ class ScanResult:
     calibration: list[CalibrationGroup] = field(default_factory=list)
 
 
+_ASIAIR_SUBDIRS = ("Autorun", "Plan")
+
+
 def scan_source(source: Path) -> ScanResult:
-    """Scan an Autorun or Plan folder and return all sessions and calibration groups."""
-    return ScanResult(
-        sessions=_scan_lights(source / "Light"),
-        calibration=_scan_calibration(source),
-    )
+    """Scan an ASIAir source folder for sessions and calibration groups.
+
+    If *source* contains Light/Dark/Flat dirs directly (e.g. pointing at
+    Autorun/), scan it as-is.  Otherwise, scan the Autorun/ and Plan/
+    children and merge results.
+    """
+    roots = _resolve_scan_roots(source)
+    sessions: list[Session] = []
+    calibration: list[CalibrationGroup] = []
+    for root in roots:
+        sessions.extend(_scan_lights(root / "Light"))
+        calibration.extend(_scan_calibration(root))
+    return ScanResult(sessions=sessions, calibration=calibration)
+
+
+def _resolve_scan_roots(source: Path) -> list[Path]:
+    if (source / "Light").is_dir():
+        return [source]
+    roots = [source / d for d in _ASIAIR_SUBDIRS if (source / d).is_dir()]
+    return roots or [source]
 
 
 def _scan_lights(light_root: Path) -> list[Session]:
