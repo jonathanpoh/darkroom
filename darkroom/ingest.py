@@ -71,7 +71,7 @@ def cal_dest_rel(
 # Filter prompt
 # ---------------------------------------------------------------------------
 
-KNOWN_FILTERS = ["L-Pro", "L-Extreme", "AstronomikL2", "BaaderNeodymium", "OmegonHelievo"]
+KNOWN_FILTERS = ["L-Pro", "L-Extreme", "L-Synergy", "L-Enhance", "L-Ultimate", "AstronomikL2", "BaaderNeodymium", "OmegonHelievo"]
 
 
 def resolve_filter(

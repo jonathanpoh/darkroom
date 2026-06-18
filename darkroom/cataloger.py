@@ -24,6 +24,8 @@ from astropy.coordinates import SkyCoord
 from astropy.io import fits
 from astropy.time import Time
 
+from darkroom.parse import parse_filter, parse_ota
+
 
 def _parse_coords(ra, dec) -> tuple[float | None, float | None]:
     """Return (ra_deg, dec_deg) from FITS header values, or (None, None).
@@ -69,57 +71,8 @@ def compute_imaging_night(date_obs_utc: str) -> str | None:
 
 
 # ============================================================================
-# Filter and OTA parsing (filename-first, FITS header fallback)
+# Session ID construction
 # ============================================================================
-
-_TEMP_RE = re.compile(r"^-?\d+\.?\d*C$")
-
-
-def parse_filter(stem: str) -> str | None:
-    """Return filter from filename stem, or None if not present.
-
-    ASIAir cameras don't write FILTER to FITS headers. The filter name
-    appears in the filename stem at parts[-2], unless that position holds
-    a temperature reading (e.g. "-20C").
-
-    Args:
-        stem: Filename stem (without extension), e.g.
-              "Light_M 81_180.0s_Bin1_0C_20260219_L-Pro_0186"
-
-    Returns:
-        Filter name (normalized: "LExtreme" → "L-Extreme"), or None if
-        no filter found or parts[-2] matches temperature regex.
-    """
-    parts = stem.split("_")
-    if len(parts) < 2:
-        return None
-    candidate = parts[-2]
-    if _TEMP_RE.match(candidate):
-        return None
-    return "L-Extreme" if candidate == "LExtreme" else candidate
-
-
-def parse_ota(focallen) -> str:
-    """Infer OTA name from FOCALLEN header value or input.
-
-    Args:
-        focallen: FITS header FOCALLEN value (int, str, or None).
-                  Common values: 180 (FMA180), 400 (FRA400).
-
-    Returns:
-        OTA abbreviation: "FMA180", "FRA400", or "Unknown".
-    """
-    try:
-        fl = int(focallen)
-    except (TypeError, ValueError):
-        return "Unknown"
-    # Tolerance windows — ASIAir reports measured focal length, not nominal
-    # (e.g. FRA400 reports 402).
-    if 170 <= fl <= 190:
-        return "FMA180"
-    if 390 <= fl <= 410:
-        return "FRA400"
-    return "Unknown"
 
 
 def make_session_id(target: str, obs_date: str, ota: str, camera: str, filter_: str | None) -> str:

@@ -9,9 +9,8 @@ from darkroom.cataloger import (
     _normalize_camera,
     _round_exposure,
     compute_imaging_night,
-    parse_ota,
 )
-from darkroom.parse import fits_files, parse_filter
+from darkroom.parse import fits_files, parse_filter, parse_ota
 
 
 @dataclass

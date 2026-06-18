@@ -17,9 +17,9 @@ from pathlib import Path
 
 from astropy.time import Time
 
-from darkroom.cataloger import FITSHeaderExtractor, _normalize_camera, parse_ota
+from darkroom.cataloger import FITSHeaderExtractor, _normalize_camera
 from darkroom.ingest import cal_dest_rel
-from darkroom.parse import parse_filter
+from darkroom.parse import parse_filter, parse_ota
 
 _FITS_SUFFIXES = {".fit", ".fits"}
 _FLAT_DARK_THRESHOLD_SEC = 10.0

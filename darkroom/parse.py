@@ -16,11 +16,19 @@ import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from darkroom.cataloger import parse_ota as _fits_parse_ota
 
 TEMP_RE = re.compile(r"^-?\d+\.?\d*C$")
 EXPOSURE_RE = re.compile(r"_(\d+\.?\d*(?:ms|s))_")
 DATETIME_RE = re.compile(r"_(\d{8}-\d{6})_")
+
+# ASIAir custom-text field strips non-alphanumeric chars; map back to canonical names
+_FILTER_ALIASES: dict[str, str] = {
+    "LExtreme": "L-Extreme",
+    "LSynergy": "L-Synergy",
+    "LPro": "L-Pro",
+    "LEnhance": "L-Enhance",
+    "LUltimate": "L-Ultimate",
+}
 
 SESSION_GAP = timedelta(hours=4)
 
@@ -30,7 +38,6 @@ def parse_filter(stem: str) -> str | None:
 
     Filter sits at parts[-2] of the underscore-split stem. If that slot
     matches a temperature pattern (-20.0C) there is no filter in the filename.
-    Normalises 'LExtreme' → 'L-Extreme'.
     """
     parts = stem.split("_")
     if len(parts) < 2:
@@ -38,7 +45,7 @@ def parse_filter(stem: str) -> str | None:
     s = parts[-2]
     if TEMP_RE.match(s):
         return None
-    return "L-Extreme" if s == "LExtreme" else s
+    return _FILTER_ALIASES.get(s, s)
 
 
 def parse_exposure(stem: str) -> str | None:
@@ -62,9 +69,26 @@ def flat_morning_date(end_dt: datetime) -> date:
     return end_dt.date() if end_dt.hour < 12 else end_dt.date() + timedelta(days=1)
 
 
+def parse_ota(focallen) -> str:
+    """Infer OTA name from FOCALLEN header value.
+
+    Tolerance windows — ASIAir reports measured focal length, not nominal
+    (e.g. FRA400 reports 402).
+    """
+    try:
+        fl = int(focallen)
+    except (TypeError, ValueError):
+        return "Unknown"
+    if 170 <= fl <= 190:
+        return "FMA180"
+    if 390 <= fl <= 410:
+        return "FRA400"
+    return "Unknown"
+
+
 def ota_from_focallen(focal_length: int | float | None) -> str:
-    """Infer OTA name from focal length header value (delegates to fits_cataloger)."""
-    return _fits_parse_ota(focal_length)
+    """Alias kept for backward compatibility."""
+    return parse_ota(focal_length)
 
 
 def fits_files(directory: Path) -> list[Path]:
