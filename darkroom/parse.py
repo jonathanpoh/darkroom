@@ -81,6 +81,8 @@ def parse_ota(focallen) -> str:
         return "Unknown"
     if 170 <= fl <= 190:
         return "FMA180"
+    if 270 <= fl <= 290:
+        return "FRA400-07x"
     if 390 <= fl <= 410:
         return "FRA400"
     return "Unknown"

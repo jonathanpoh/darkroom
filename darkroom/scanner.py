@@ -23,6 +23,7 @@ class Session:
     gain: int
     temperature_c: float
     exposure_sec: float
+    focal_length: float | None
     ra_deg: float | None
     dec_deg: float | None
     files: list[Path] = field(default_factory=list)
@@ -109,15 +110,17 @@ def _scan_lights(light_root: Path) -> list[Session]:
                 if filter_ is not None:
                     break
 
+            focallen = first_meta.get("focallen")
             sessions.append(Session(
                 target=target_dir.name,
                 obs_date=night,
-                ota=parse_ota(first_meta.get("focallen")),
+                ota=parse_ota(focallen),
                 camera=_normalize_camera(first_meta["camera"]),
                 filter=filter_,
                 gain=first_meta["gain"],
                 temperature_c=first_meta["temperature"],
                 exposure_sec=_round_exposure(first_meta["exposure"]),
+                focal_length=float(focallen) if focallen is not None else None,
                 ra_deg=first_meta.get("ra_deg"),
                 dec_deg=first_meta.get("dec_deg"),
                 files=[path for _, path in frames],

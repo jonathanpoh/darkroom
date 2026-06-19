@@ -121,8 +121,15 @@ class TestParseOta:
         assert parse_ota(170) == "FMA180"
         assert parse_ota(190) == "FMA180"
 
+    def test_280_is_fra400_reducer(self):
+        assert parse_ota(280) == "FRA400-07x"
+
+    def test_tolerance_fra400_reducer(self):
+        assert parse_ota(270) == "FRA400-07x"
+        assert parse_ota(290) == "FRA400-07x"
+
     def test_outside_tolerance_is_unknown(self):
-        assert parse_ota(300) == "Unknown"
+        assert parse_ota(250) == "Unknown"
         assert parse_ota(411) == "Unknown"
         assert parse_ota(169) == "Unknown"
 
@@ -369,6 +376,7 @@ class TestMarkProcessed:
             "gain": 200,
             "temperature_c": -10.0,
             "exposure_sec": 180.0,
+            "focal_length": 400.0,
             "frame_count": 10,
             "total_integration_sec": 1800,
             "ra_deg": None,
@@ -415,6 +423,7 @@ class TestSQLiteCatalog:
             "gain": 200,
             "temperature_c": -10.0,
             "exposure_sec": 180.0,
+            "focal_length": 400.0,
             "frame_count": 10,
             "total_integration_sec": 1800,
             "ra_deg": None,
@@ -539,6 +548,7 @@ class TestMarkProcessedByTarget:
                 "session_id": sid, "target": target, "obs_date": obs_date,
                 "ota": "FRA400", "camera": "ZWO ASI585MC", "filter": filt,
                 "gain": 200, "temperature_c": -10.0, "exposure_sec": 180.0,
+                "focal_length": 400.0,
                 "frame_count": 10, "total_integration_sec": 1800,
                 "ra_deg": None, "dec_deg": None, "lights_path": "/fake",
                 "processed_status": "", "notes": "",
@@ -598,6 +608,7 @@ class TestFinishCommand:
                 "session_id": sid, "target": target, "obs_date": obs_date,
                 "ota": "FRA400", "camera": "ZWO ASI585MC", "filter": filt,
                 "gain": 200, "temperature_c": -10.0, "exposure_sec": 180.0,
+                "focal_length": 400.0,
                 "frame_count": 10, "total_integration_sec": 1800,
                 "ra_deg": None, "dec_deg": None, "lights_path": "/fake",
                 "processed_status": "", "notes": "",

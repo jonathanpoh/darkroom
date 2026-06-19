@@ -177,8 +177,8 @@ def _make_session(filter_="L-Pro", n_files=3) -> Session:
         return Session(
             target="M 81", obs_date="2026-02-19", ota="FRA400",
             camera="ZWO ASI585MC Pro", filter=filter_, gain=200,
-            temperature_c=-20.0, exposure_sec=180.0, ra_deg=148.888,
-            dec_deg=69.065, files=files,
+            temperature_c=-20.0, exposure_sec=180.0, focal_length=400.0,
+            ra_deg=148.888, dec_deg=69.065, files=files,
         )
 
 

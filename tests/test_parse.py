@@ -24,6 +24,12 @@ def test_ota_tolerance():
     assert ota_from_focallen(410) == "FRA400"
 
 
+def test_ota_reducer():
+    assert ota_from_focallen(280) == "FRA400-07x"
+    assert ota_from_focallen(270) == "FRA400-07x"
+    assert ota_from_focallen(290) == "FRA400-07x"
+
+
 def test_ota_unknown():
     assert ota_from_focallen(250) == "Unknown"
     assert ota_from_focallen(None) == "Unknown"

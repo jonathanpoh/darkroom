@@ -253,6 +253,7 @@ def init_db(db_path: Path) -> None:
                 gain                    INTEGER,
                 temperature_c           REAL,
                 exposure_sec            REAL,
+                focal_length            REAL,
                 frame_count             INTEGER,
                 total_integration_sec   INTEGER,
                 total_integration_hours REAL GENERATED ALWAYS AS (total_integration_sec / 3600.0) VIRTUAL,
@@ -276,6 +277,10 @@ def init_db(db_path: Path) -> None:
                 folder_path   TEXT
             );
         """)
+        # Migration: add focal_length column to existing databases
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(sessions)")}
+        if "focal_length" not in cols:
+            conn.execute("ALTER TABLE sessions ADD COLUMN focal_length REAL")
 
 
 # Canonical camera names, keyed on the whitespace-stripped form of the
@@ -321,13 +326,13 @@ def upsert_session(db_path: Path, session: dict) -> None:
             """
             INSERT INTO sessions (
                 session_id, target, obs_date, ota, camera, filter,
-                gain, temperature_c, exposure_sec, frame_count,
-                total_integration_sec, ra_deg, dec_deg,
+                gain, temperature_c, exposure_sec, focal_length,
+                frame_count, total_integration_sec, ra_deg, dec_deg,
                 lights_path, processed_status, notes
             ) VALUES (
                 :session_id, :target, :obs_date, :ota, :camera, :filter,
-                :gain, :temperature_c, :exposure_sec, :frame_count,
-                :total_integration_sec, :ra_deg, :dec_deg,
+                :gain, :temperature_c, :exposure_sec, :focal_length,
+                :frame_count, :total_integration_sec, :ra_deg, :dec_deg,
                 :lights_path, :processed_status, :notes
             )
             ON CONFLICT(session_id) DO UPDATE SET
@@ -339,6 +344,7 @@ def upsert_session(db_path: Path, session: dict) -> None:
                 gain                  = excluded.gain,
                 temperature_c         = excluded.temperature_c,
                 exposure_sec          = excluded.exposure_sec,
+                focal_length          = excluded.focal_length,
                 frame_count           = excluded.frame_count,
                 total_integration_sec = excluded.total_integration_sec,
                 ra_deg                = excluded.ra_deg,
@@ -582,15 +588,17 @@ class SessionAnalyzer:
             if filter_ is None:
                 filter_ = first.get("filter_header") or _filter_from_path(lights_path) or ""
 
+            focallen = first.get("focallen")
             sessions.append({
                 "target": _normalize_target(first["object"] or _target_from_path(lights_path)),
                 "obs_date": night,
-                "ota": parse_ota(first.get("focallen")),
+                "ota": parse_ota(focallen),
                 "camera": first["camera"],
                 "filter": filter_,
                 "gain": first["gain"],
                 "temperature_c": first["temperature"],
                 "exposure_sec": first["exposure"],
+                "focal_length": float(focallen) if focallen is not None else None,
                 "frame_count": len(frames),
                 "total_integration_sec": int(sum(f["exposure"] for f in frames)),
                 "ra_deg": first.get("ra_deg"),
@@ -721,7 +729,8 @@ class CalibrationCataloger:
 
 
 def scan_calibration_command(args):
-    calibration_root = Path(args.calibration_path)
+    calibration_root = Path(args.calibration_path).resolve()
+    archive_root = calibration_root.parent
     db_path = Path(args.db)
 
     if not calibration_root.exists():
@@ -736,6 +745,12 @@ def scan_calibration_command(args):
         sys.exit(0)
 
     for cal_set in cal_sets:
+        try:
+            cal_set["folder_path"] = str(
+                Path(cal_set["folder_path"]).relative_to(archive_root)
+            )
+        except ValueError:
+            pass
         upsert_calibration_set(db_path, cal_set)
         print(f"  {cal_set['set_id']}  ({cal_set['frame_count']} frames)")
 
@@ -757,7 +772,8 @@ def scan_all_command(args):
     2. Partial: Target/Date_Equipment_Filter/  (Lights optional)
     3. Old: Target/Lights - Label/
     """
-    root = Path(args.root_path)
+    root = Path(args.root_path).resolve()
+    archive_root = root.parent
     db_path = Path(args.db)
 
     if not root.exists():
@@ -800,6 +816,7 @@ def scan_all_command(args):
                 session["ota"], session["camera"], session["filter"],
             )
             session["session_id"] = session_id
+            session["lights_path"] = str(lights_path.relative_to(archive_root))
             upsert_session(db_path, session)
             print(f"  {session_id}  ({session['frame_count']} frames, {session['total_integration_sec']}s)")
             added += 1
