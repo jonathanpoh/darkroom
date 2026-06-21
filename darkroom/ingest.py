@@ -7,7 +7,7 @@ import re
 import shutil
 import sqlite3
 import sys
-from datetime import datetime, timezone
+from datetime import date as Date, datetime, timedelta, timezone
 from pathlib import Path
 
 import yaml
@@ -117,6 +117,64 @@ def resolve_filter(
             return "NoFilter", False
 
 
+def infer_flat_filter(
+    group: CalibrationGroup,
+    sessions: list[Session],
+) -> list[str]:
+    """Infer flat filter from matching Light sessions by camera, OTA, and date.
+
+    Flats are typically taken the morning after imaging, so we match when the
+    flat capture_date equals the session obs_date or obs_date + 1.
+
+    Returns a sorted list of candidate filter names (empty = no match).
+    """
+    if not group.capture_date:
+        return []
+    flat_date = Date.fromisoformat(group.capture_date)
+    candidates: set[str] = set()
+    for sess in sessions:
+        if sess.filter is None:
+            continue
+        if sess.camera != group.camera or sess.ota != group.ota:
+            continue
+        sess_date = Date.fromisoformat(sess.obs_date)
+        delta = (flat_date - sess_date).days
+        if 0 <= delta <= 1:
+            candidates.add(sess.filter)
+    return sorted(candidates)
+
+
+def _prompt_flat_filter_candidates(
+    candidates: list[str],
+    group: CalibrationGroup,
+    interactive: bool,
+) -> tuple[str, bool]:
+    """Prompt to choose among inferred filter candidates for a Flat group."""
+    context = f"Flat on {group.capture_date} ({group.ota}/{group.camera})"
+    if not interactive:
+        if len(candidates) == 1:
+            return candidates[0], False
+        return "NoFilter", True
+
+    print(f"\n{context}: multiple filters found in matching Light sessions:")
+    for i, f in enumerate(candidates, 1):
+        print(f"  {i}) {f}")
+    print("  [Enter] NoFilter")
+
+    while True:
+        try:
+            raw = input("> ").strip()
+            if not raw:
+                return "NoFilter", False
+            n = int(raw)
+            if 1 <= n <= len(candidates):
+                return candidates[n - 1], False
+        except ValueError:
+            print("Please enter a number.")
+        except EOFError:
+            return "NoFilter", True
+
+
 # ---------------------------------------------------------------------------
 # Catalog helpers
 # ---------------------------------------------------------------------------
@@ -223,15 +281,29 @@ def build_cal_entry(
     group: CalibrationGroup,
     output: Path,
     interactive: bool,
+    sessions: list[Session] | None = None,
 ) -> dict:
     """Build one calibration[] manifest entry for the given CalibrationGroup."""
     # Filter resolution only matters for Flat frames (FlatDarks are short darks, filter irrelevant)
     if group.frame_type in ("Flat",):
-        filter_, needs_review = resolve_filter(
-            group.filter,
-            interactive=interactive,
-            context=f"{group.frame_type} on {group.capture_date}",
-        )
+        if group.filter is not None:
+            filter_, needs_review = group.filter, False
+        else:
+            candidates = infer_flat_filter(group, sessions or [])
+            if len(candidates) == 1:
+                filter_ = candidates[0]
+                needs_review = False
+                print(f"  Flat {group.capture_date}: inferred filter '{filter_}' from matching Light session", file=sys.stderr)
+            elif len(candidates) > 1:
+                filter_, needs_review = _prompt_flat_filter_candidates(
+                    candidates, group, interactive,
+                )
+            else:
+                filter_, needs_review = resolve_filter(
+                    None,
+                    interactive=interactive,
+                    context=f"{group.frame_type} on {group.capture_date}",
+                )
     else:
         filter_ = group.filter
         needs_review = False
@@ -290,7 +362,7 @@ def build_manifest(
         for s in scan.sessions
     ]
     cal_entries = [
-        build_cal_entry(g, output, interactive)
+        build_cal_entry(g, output, interactive, sessions=scan.sessions)
         for g in scan.calibration
     ]
 

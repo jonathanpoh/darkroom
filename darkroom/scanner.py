@@ -92,23 +92,19 @@ def _scan_lights(light_root: Path) -> list[Session]:
         if not pairs:
             continue
 
-        # Group by imaging night (local Lisbon civil date)
-        nights: dict[str, list[tuple[dict, Path]]] = {}
+        # Group by imaging night + filter so multi-filter nights
+        # produce separate sessions (each gets its own catalog entry
+        # and archive Lights/<filter>/ subdir).
+        groups: dict[tuple[str, str | None], list[tuple[dict, Path]]] = {}
         for meta, path in pairs:
             night = compute_imaging_night(meta.get("date_obs", ""))
             if night is None:
                 continue
-            nights.setdefault(night, []).append((meta, path))
+            filt = parse_filter(meta["filename_stem"])
+            groups.setdefault((night, filt), []).append((meta, path))
 
-        for night, frames in sorted(nights.items()):
+        for (night, filter_), frames in sorted(groups.items(), key=lambda kv: (kv[0][0], kv[0][1] or "")):
             first_meta = frames[0][0]
-
-            # Filter: first filename that carries one wins
-            filter_: str | None = None
-            for meta, _ in frames:
-                filter_ = parse_filter(meta["filename_stem"])
-                if filter_ is not None:
-                    break
 
             focallen = first_meta.get("focallen")
             sessions.append(Session(

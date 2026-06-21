@@ -295,3 +295,109 @@ def test_build_cal_entry_dark_no_filter():
 
     assert entry["needs_review"] is False
     assert entry["folder_rel_path"] == "00_Calibration/Darks/ZWOASI585MCPro"
+
+
+# ---------------------------------------------------------------------------
+# Flat filter inference from Light sessions
+# ---------------------------------------------------------------------------
+
+from darkroom.ingest import infer_flat_filter
+from darkroom.scanner import Session
+
+
+def _make_light_session(obs_date="2026-06-16", filter_="L-Extreme", camera="ZWOASI585MCPro", ota="FRA400"):
+    return Session(
+        target="NGC 6992", obs_date=obs_date, ota=ota, camera=camera,
+        filter=filter_, gain=200, temperature_c=-10.0, exposure_sec=180.0,
+        focal_length=400.0, ra_deg=None, dec_deg=None, files=[],
+    )
+
+
+def test_infer_flat_filter_single_match():
+    """Flat taken morning after imaging → infer from the single matching session."""
+    sessions = [_make_light_session(obs_date="2026-06-16", filter_="L-Extreme")]
+    group = _make_cal_group(filter_=None)
+    group.capture_date = "2026-06-17"
+    group.camera = "ZWOASI585MCPro"
+    group.ota = "FRA400"
+    assert infer_flat_filter(group, sessions) == ["L-Extreme"]
+
+
+def test_infer_flat_filter_same_day():
+    """Flat taken same day as imaging → still matches."""
+    sessions = [_make_light_session(obs_date="2026-06-16", filter_="L-Synergy")]
+    group = _make_cal_group(filter_=None)
+    group.capture_date = "2026-06-16"
+    group.camera = "ZWOASI585MCPro"
+    group.ota = "FRA400"
+    assert infer_flat_filter(group, sessions) == ["L-Synergy"]
+
+
+def test_infer_flat_filter_multiple_candidates():
+    """Two filters on the same night → returns both sorted."""
+    sessions = [
+        _make_light_session(obs_date="2026-06-16", filter_="L-Extreme"),
+        _make_light_session(obs_date="2026-06-16", filter_="L-Synergy"),
+    ]
+    group = _make_cal_group(filter_=None)
+    group.capture_date = "2026-06-17"
+    group.camera = "ZWOASI585MCPro"
+    group.ota = "FRA400"
+    assert infer_flat_filter(group, sessions) == ["L-Extreme", "L-Synergy"]
+
+
+def test_infer_flat_filter_no_match_wrong_camera():
+    """Camera mismatch → no candidates."""
+    sessions = [_make_light_session(camera="Canon6D")]
+    group = _make_cal_group(filter_=None)
+    group.capture_date = "2026-06-17"
+    group.camera = "ZWOASI585MCPro"
+    group.ota = "FRA400"
+    assert infer_flat_filter(group, sessions) == []
+
+
+def test_infer_flat_filter_no_match_too_far():
+    """Session 2+ days before flat → no match."""
+    sessions = [_make_light_session(obs_date="2026-06-14")]
+    group = _make_cal_group(filter_=None)
+    group.capture_date = "2026-06-17"
+    group.camera = "ZWOASI585MCPro"
+    group.ota = "FRA400"
+    assert infer_flat_filter(group, sessions) == []
+
+
+def test_infer_flat_filter_skips_sessions_without_filter():
+    """Sessions with filter=None are ignored."""
+    sessions = [_make_light_session(filter_=None)]
+    group = _make_cal_group(filter_=None)
+    group.capture_date = "2026-06-17"
+    group.camera = "ZWOASI585MCPro"
+    group.ota = "FRA400"
+    assert infer_flat_filter(group, sessions) == []
+
+
+def test_build_cal_entry_flat_infers_filter_from_sessions(tmp_path):
+    """build_cal_entry uses session inference for filterless flats."""
+    group = _make_cal_group(filter_=None)
+    group.capture_date = "2026-06-17"
+    group.camera = "ZWOASI585MCPro"
+    group.ota = "FRA400"
+    sessions = [_make_light_session(obs_date="2026-06-16", filter_="L-Extreme")]
+    entry = build_cal_entry(group, output=tmp_path, interactive=False, sessions=sessions)
+    assert entry["filter"] == "L-Extreme"
+    assert entry["needs_review"] is False
+    assert "L-Extreme" in entry["folder_rel_path"]
+
+
+def test_build_cal_entry_flat_ambiguous_non_interactive(tmp_path):
+    """Multiple candidate filters in non-interactive mode → needs_review."""
+    group = _make_cal_group(filter_=None)
+    group.capture_date = "2026-06-17"
+    group.camera = "ZWOASI585MCPro"
+    group.ota = "FRA400"
+    sessions = [
+        _make_light_session(obs_date="2026-06-16", filter_="L-Extreme"),
+        _make_light_session(obs_date="2026-06-16", filter_="L-Synergy"),
+    ]
+    entry = build_cal_entry(group, output=tmp_path, interactive=False, sessions=sessions)
+    assert entry["needs_review"] is True
