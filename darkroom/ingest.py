@@ -47,7 +47,7 @@ def session_dest_rel(
     """Return relative destination path for a session's Lights/<filter>/ folder."""
     f = filter_ or "NoFilter"
     folder = f"{obs_date}_{ota}_{camera_slug(camera)}"
-    return Path("04_Deep Sky Objects") / target / folder / "Lights" / f
+    return Path("01_Deep Sky Objects") / target / folder / "Lights" / f
 
 
 def cal_dest_rel(

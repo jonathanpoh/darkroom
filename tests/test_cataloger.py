@@ -202,6 +202,31 @@ class TestFindLightsFolders:
         result = find_lights_folders(tmp_path)
         assert eadir not in result
 
+    def test_skips_processed_folder(self, tmp_path):
+        processed = tmp_path / "M81" / "_Processed" / "2026-05-15"
+        processed.mkdir(parents=True)
+        (processed / "master_Light.fit").touch()
+        result = find_lights_folders(tmp_path)
+        assert processed not in result
+
+    def test_skips_reject_folder(self, tmp_path):
+        lights = tmp_path / "M81" / "session" / "Lights"
+        lights.mkdir(parents=True)
+        (lights / "frame001.fit").touch()
+        reject = lights.parent / "reject"
+        reject.mkdir()
+        (reject / "bad001.fit").touch()
+        result = find_lights_folders(tmp_path)
+        assert lights in result
+        assert reject not in result
+
+    def test_skips_bad_folder(self, tmp_path):
+        bad = tmp_path / "M81" / "session" / "bad"
+        bad.mkdir(parents=True)
+        (bad / "frame001.fit").touch()
+        result = find_lights_folders(tmp_path)
+        assert bad not in result
+
     def test_empty_root(self, tmp_path):
         assert find_lights_folders(tmp_path) == []
 
@@ -635,7 +660,7 @@ class TestFinishCommand:
     def test_archive_flag_detects_date_from_processed_dir(self, tmp_path):
         db = tmp_path / "test.db"
         self._populate(db)
-        processed_dir = tmp_path / "04_Deep Sky Objects" / "M 81" / "_Processed" / "2026-05-15"
+        processed_dir = tmp_path / "01_Deep Sky Objects" / "M 81" / "_Processed" / "2026-05-15"
         processed_dir.mkdir(parents=True)
         finish_command(self._args(db=str(db), archive=str(tmp_path)))
         with sqlite3.connect(db) as conn:

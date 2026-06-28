@@ -21,6 +21,14 @@ TEMP_RE = re.compile(r"^-?\d+\.?\d*C$")
 EXPOSURE_RE = re.compile(r"_(\d+\.?\d*(?:ms|s))_")
 DATETIME_RE = re.compile(r"_(\d{8}-\d{6})_")
 
+# Patterns that appear at parts[-2] in filenames without a filter field
+_NOT_FILTER_RE = re.compile(
+    r"^\d+$"                        # sequence number (0001, 0025)
+    r"|^\d+\.?\d*(ms|s)$"          # exposure (20.00s, 180.0s)
+    r"|\d{4}-\d{2}-\d{2}T"         # old datetime (2023-07-15T23-57-14)
+    r"|^\d{8}-\d{6}$"              # new datetime (20250915-010333)
+)
+
 # ASIAir custom-text field strips non-alphanumeric chars; map back to canonical names
 _FILTER_ALIASES: dict[str, str] = {
     "LExtreme": "L-Extreme",
@@ -33,17 +41,23 @@ _FILTER_ALIASES: dict[str, str] = {
 SESSION_GAP = timedelta(hours=4)
 
 
+def normalize_filter(raw: str) -> str:
+    """Apply canonical filter aliases (e.g. 'LPro' → 'L-Pro')."""
+    return _FILTER_ALIASES.get(raw, raw)
+
+
 def parse_filter(stem: str) -> str | None:
     """Return filter string from filename stem, or None if absent.
 
-    Filter sits at parts[-2] of the underscore-split stem. If that slot
-    matches a temperature pattern (-20.0C) there is no filter in the filename.
+    Filter sits at parts[-2] of the underscore-split stem. Returns None if
+    that slot is a temperature (-20.0C), sequence number (0001), exposure
+    (20.00s), or datetime — all of which appear there in filterless files.
     """
     parts = stem.split("_")
     if len(parts) < 2:
         return None
     s = parts[-2]
-    if TEMP_RE.match(s):
+    if TEMP_RE.match(s) or _NOT_FILTER_RE.search(s):
         return None
     return _FILTER_ALIASES.get(s, s)
 

@@ -24,7 +24,7 @@ from astropy.coordinates import SkyCoord
 from astropy.io import fits
 from astropy.time import Time
 
-from darkroom.parse import parse_filter, parse_ota
+from darkroom.parse import normalize_filter, parse_filter, parse_ota
 
 
 def _parse_coords(ra, dec) -> tuple[float | None, float | None]:
@@ -104,6 +104,15 @@ def make_session_id(target: str, obs_date: str, ota: str, camera: str, filter_: 
 
 _CALIB_FOLDER_NAMES = frozenset({"flats", "darks", "bias", "flatdarks", "flat darks"})
 
+# Folders to prune entirely during os.walk (never descend into or collect from)
+_SKIP_DIR_NAMES_LOWER = frozenset({
+    "_processed",
+    "reject", "rejects", "rejected",
+    "bad",
+    "delete",
+    "masterbias", "masterdark",
+})
+
 
 _DSLR_RE = re.compile(r"canon|nikon|sony|pentax|fuji", re.IGNORECASE)
 
@@ -161,14 +170,15 @@ def _normalize_target(name: str) -> str:
 def _target_from_path(lights_path: Path) -> str:
     """Extract target name from NAS folder path.
 
-    Looks for the component immediately after '04_Deep Sky Objects'. Falls back
-    based on directory depth:
+    Looks for the component immediately after any '*Deep Sky Objects' folder
+    (e.g. '01_Deep Sky Objects', '04_Deep Sky Objects'). Falls back based on
+    directory depth:
       old layout: Target/Date_OTA_Camera_Filter/Lights     → parts[-3]
       new layout: Target/Date_OTA_Camera/Lights/Filter     → parts[-4]
     """
     parts = lights_path.parts
     for i, part in enumerate(parts):
-        if part == "04_Deep Sky Objects" and i + 1 < len(parts):
+        if "Deep Sky Objects" in part and i + 1 < len(parts):
             return parts[i + 1]
     # New layout has one extra level (filter subdir under Lights/)
     if lights_path.parent.name == "Lights" and len(parts) >= 4:
@@ -179,20 +189,24 @@ def _target_from_path(lights_path: Path) -> str:
 
 
 def _filter_from_path(lights_path: Path) -> str | None:
-    """Extract filter from path, handling two layouts:
+    """Extract filter from path, handling three layouts:
 
-    New: Target/Date_OTA_Camera/Lights/FilterName  → filter = dir name
-    Old: Target/Date_OTA_Camera_Filter/Lights       → filter = last _ component of parent
+    New:    Target/Date_OTA_Camera/Lights/FilterName   → filter = dir name
+    Old-L:  Target/Date_OTA_Camera_Filter/Lights       → filter = last _ of parent
+    Old-D:  Target/Date_OTA_Camera_Filter              → filter = last _ of folder name
+                (FITS directly in session folder, no Lights subdir)
+
+    Aliases are applied so e.g. 'LPro' normalises to 'L-Pro'.
     """
     if lights_path.parent.name == "Lights":
-        # New layout: filter is the directory name itself
-        return lights_path.name
-    if lights_path.name == "Lights":
-        # Old layout: filter encoded in session folder name
+        raw = lights_path.name
+    elif lights_path.name == "Lights":
         parts = lights_path.parent.name.split("_")
-        if len(parts) >= 4:
-            return parts[-1]
-    return None
+        raw = parts[-1] if len(parts) >= 4 else None
+    else:
+        parts = lights_path.name.split("_")
+        raw = parts[-1] if len(parts) >= 4 else None
+    return normalize_filter(raw) if raw else None
 
 
 def find_lights_folders(root: Path) -> list[Path]:
@@ -216,8 +230,11 @@ def find_lights_folders(root: Path) -> list[Path]:
     """
     result = []
     for dirpath, dirnames, filenames in os.walk(root):
-        # In-place modification prevents os.walk from descending into @eaDir
-        dirnames[:] = [d for d in dirnames if d != "@eaDir"]
+        # Prune directories we never want to descend into or collect from
+        dirnames[:] = [
+            d for d in dirnames
+            if d != "@eaDir" and d.lower() not in _SKIP_DIR_NAMES_LOWER
+        ]
         if Path(dirpath).name.lower() in _CALIB_FOLDER_NAMES:
             continue
         if any(f.lower().endswith((".fit", ".fits")) for f in filenames):
@@ -489,7 +506,7 @@ def finish_command(args) -> None:
         date_str = args.date
     else:
         processed_root = (
-            Path(args.archive) / "04_Deep Sky Objects" / target / "_Processed"
+            Path(args.archive) / "01_Deep Sky Objects" / target / "_Processed"
         )
         date_str = _find_latest_processed_date(processed_root)
 

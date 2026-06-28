@@ -50,6 +50,29 @@ def test_parse_filter_no_filter():
     assert parse_filter(stem) is None
 
 
+def test_parse_filter_f_suffix_no_filter():
+    # Files ending in _<seq>_f.fit: parts[-2] is sequence number, not filter
+    stem = "Light_M 31_180.0s_Bin1_585MC_gain200_20250915-010333_-10.0C_0001_f"
+    assert parse_filter(stem) is None
+
+
+def test_parse_filter_sequence_number_returns_none():
+    # Sequence number at parts[-2] should not be treated as filter
+    stem = "Light_IC4604_60.0s_20230715-235142_0001"
+    assert parse_filter(stem) is None
+
+
+def test_parse_filter_old_datetime_returns_none():
+    # Old ASIAir: datetime at parts[-2] should not be treated as filter
+    stem = "Light_IC4604_60.0s_2023-07-15T23-57-14_0001"
+    assert parse_filter(stem) is None
+
+
+def test_parse_filter_exposure_returns_none():
+    stem = "Light_M42_20.00s_0001"
+    assert parse_filter(stem) is None
+
+
 def test_parse_exposure():
     assert parse_exposure("Light_M 81_180.0s_Bin1_585MC_gain200_20260219-220000_-20.0C_L-Pro_0001") == "180.0s"
     assert parse_exposure("Flat_130.0ms_Bin1_585MC_gain200_20260221-093939_-20.0C_0001") == "130.0ms"

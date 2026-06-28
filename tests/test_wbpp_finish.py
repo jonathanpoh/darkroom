@@ -57,12 +57,12 @@ def test_find_processing_date_no_files_exits(tmp_path):
 
 def test_build_dest(tmp_path):
     dest = _build_dest(tmp_path, "M 81", "2026-05-15")
-    assert dest == tmp_path / "04_Deep Sky Objects" / "M 81" / "_Processed" / "2026-05-15"
+    assert dest == tmp_path / "01_Deep Sky Objects" / "M 81" / "_Processed" / "2026-05-15"
 
 
 def test_build_dest_target_with_spaces(tmp_path):
     dest = _build_dest(tmp_path, "NGC 1499", "2026-03-01")
-    assert dest == tmp_path / "04_Deep Sky Objects" / "NGC 1499" / "_Processed" / "2026-03-01"
+    assert dest == tmp_path / "01_Deep Sky Objects" / "NGC 1499" / "_Processed" / "2026-03-01"
 
 
 def test_copy_flat_copies_files(tmp_path):

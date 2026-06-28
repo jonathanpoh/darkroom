@@ -42,17 +42,17 @@ def _find_processing_date(
 
 
 def _build_dest(output: Path, target: str, date_str: str) -> Path:
-    """Return <output>/04_Deep Sky Objects/<target>/_Processed/<date_str>."""
-    return output / "04_Deep Sky Objects" / target / "_Processed" / date_str
+    """Return <output>/01_Deep Sky Objects/<target>/_Processed/<date_str>."""
+    return output / "01_Deep Sky Objects" / target / "_Processed" / date_str
 
 
-def _collect_session_folders(wbpp_target: Path) -> set[tuple[str, str]]:
-    """Walk SESSION_N symlinks and return unique (target_folder_name, session_folder_name) pairs.
+def _collect_session_folders(wbpp_target: Path) -> set[tuple[str, str, str]]:
+    """Walk SESSION_N symlinks and return unique (dso_folder, target_folder, session_folder) triples.
 
     Symlinks point to absolute NAS paths shaped like:
-        .../04_Deep Sky Objects/<target>/<session_folder>/Lights/<file>.fit
+        .../<dso_folder>/<target>/<session_folder>/Lights/<file>.fit
     """
-    pairs: set[tuple[str, str]] = set()
+    pairs: set[tuple[str, str, str]] = set()
     for session_dir in wbpp_target.glob("SESSION_*"):
         if not session_dir.is_dir():
             continue
@@ -65,7 +65,8 @@ def _collect_session_folders(wbpp_target: Path) -> set[tuple[str, str]]:
                 continue
             session_folder = resolved.parent.parent
             target_folder = session_folder.parent
-            pairs.add((target_folder.name, session_folder.name))
+            dso_folder = target_folder.parent
+            pairs.add((dso_folder.name, target_folder.name, session_folder.name))
     return pairs
 
 
@@ -77,8 +78,8 @@ def _resolve_session_ids(wbpp_target: Path, catalog: Path) -> list[str]:
     ids: list[str] = []
     with sqlite3.connect(catalog) as conn:
         conn.row_factory = sqlite3.Row
-        for target, folder in pairs:
-            rel = f"04_Deep Sky Objects/{target}/{folder}/Lights"
+        for dso_folder, target, folder in pairs:
+            rel = f"{dso_folder}/{target}/{folder}/Lights"
             row = conn.execute(
                 "SELECT session_id FROM sessions WHERE target = ? AND lights_path = ?",
                 (target, rel),
