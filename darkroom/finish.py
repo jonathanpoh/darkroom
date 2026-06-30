@@ -46,13 +46,17 @@ def _build_dest(output: Path, target: str, date_str: str) -> Path:
     return output / "01_Deep Sky Objects" / target / "_Processed" / date_str
 
 
-def _collect_session_folders(wbpp_target: Path) -> set[tuple[str, str, str]]:
-    """Walk SESSION_N symlinks and return unique (dso_folder, target_folder, session_folder) triples.
+def _collect_light_dirs(wbpp_target: Path) -> set[Path]:
+    """Return the resolved archive directories the Lights symlinks point into.
 
-    Symlinks point to absolute NAS paths shaped like:
-        .../<dso_folder>/<target>/<session_folder>/Lights/<file>.fit
+    Each SESSION_N/Lights/** symlink resolves to a light frame inside the
+    archive; its parent directory is the session's stored ``lights_path``. We
+    compare those directories — not a fixed number of ``.parent`` hops — so the
+    match is agnostic to how many components sit between the archive root and the
+    frames (e.g. the ``Lights/<filter>/`` split added when sessions were split by
+    filter).
     """
-    pairs: set[tuple[str, str, str]] = set()
+    dirs: set[Path] = set()
     for session_dir in wbpp_target.glob("SESSION_*"):
         if not session_dir.is_dir():
             continue
@@ -63,37 +67,38 @@ def _collect_session_folders(wbpp_target: Path) -> set[tuple[str, str, str]]:
                 resolved = symlink.resolve(strict=True)
             except FileNotFoundError:
                 continue
-            session_folder = resolved.parent.parent
-            target_folder = session_folder.parent
-            dso_folder = target_folder.parent
-            pairs.add((dso_folder.name, target_folder.name, session_folder.name))
-    return pairs
+            dirs.add(resolved.parent)
+    return dirs
 
 
-def _resolve_session_ids(wbpp_target: Path, catalog: Path) -> list[str]:
-    """Look up catalog session_ids for the lights symlinked under wbpp_target."""
-    pairs = _collect_session_folders(wbpp_target)
-    if not pairs:
+def _resolve_session_ids(
+    wbpp_target: Path, catalog: Path, archive_root: Path
+) -> list[str]:
+    """Look up catalog session_ids for the lights symlinked under wbpp_target.
+
+    Matches each Lights symlink's resolved archive directory against the
+    catalog's stored ``lights_path`` (resolved under ``archive_root``).
+    """
+    light_dirs = _collect_light_dirs(wbpp_target)
+    if not light_dirs:
         return []
     ids: list[str] = []
     with sqlite3.connect(catalog) as conn:
         conn.row_factory = sqlite3.Row
-        for dso_folder, target, folder in pairs:
-            rel = f"{dso_folder}/{target}/{folder}/Lights"
-            row = conn.execute(
-                "SELECT session_id FROM sessions WHERE target = ? AND lights_path = ?",
-                (target, rel),
-            ).fetchone()
-            if row:
-                ids.append(row["session_id"])
+        rows = conn.execute(
+            "SELECT session_id, lights_path FROM sessions WHERE lights_path IS NOT NULL"
+        ).fetchall()
+    for row in rows:
+        if (archive_root / row["lights_path"]).resolve() in light_dirs:
+            ids.append(row["session_id"])
     return sorted(set(ids))
 
 
 def _mark_sessions_processed(
-    wbpp_target: Path, catalog: Path, status: str
+    wbpp_target: Path, catalog: Path, archive_root: Path, status: str
 ) -> None:
     """Mark every session resolved from wbpp_target as processed with the given status."""
-    session_ids = _resolve_session_ids(wbpp_target, catalog)
+    session_ids = _resolve_session_ids(wbpp_target, catalog, archive_root)
     if not session_ids:
         print("\nWarning: no catalog sessions matched symlinks — nothing to mark.")
         return
@@ -207,7 +212,7 @@ def cmd_finish(
 
     if not dry_run:
         status = str(dest.relative_to(output))
-        _mark_sessions_processed(wbpp_target, catalog, status)
+        _mark_sessions_processed(wbpp_target, catalog, output, status)
 
     _confirm_and_delete(
         [wbpp_output] if wbpp_output.exists() else [],

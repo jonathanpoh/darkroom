@@ -3,10 +3,12 @@ from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 
+from darkroom.cataloger import init_db, upsert_calibration_set, upsert_session
 from darkroom.finish import (
     _find_processing_date, _build_dest, _copy_flat,
-    _list_session_dirs, _confirm_and_delete,
+    _list_session_dirs, _confirm_and_delete, _resolve_session_ids,
 )
+from darkroom.prep import _build_night
 
 
 def touch(p: Path, content: bytes = b"") -> Path:
@@ -157,3 +159,100 @@ def test_confirm_and_delete_no_skips(tmp_path):
 
 def test_confirm_and_delete_empty_list(tmp_path):
     _confirm_and_delete([], "Intermediates", dry_run=False)  # should not raise
+
+
+# ── B1: finish resolves sessions under the Lights/<filter>/ layout ─────────────
+
+def test_resolve_session_ids_filter_subdir_layout(tmp_path):
+    """Regression for B1: lights_path now carries a Lights/<filter>/ subdir.
+
+    finish must still resolve the session_id by matching each symlink's resolved
+    archive directory against the catalog's stored lights_path — not by walking
+    a fixed number of .parent levels.
+    """
+    archive = tmp_path / "archive"
+    catalog = tmp_path / "cat.db"
+    init_db(catalog)
+
+    lights_rel = "01_Deep Sky Objects/M 81/2026-02-19_FRA400_ZWOASI585MCPro/Lights/L-Pro"
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(catalog, {
+        "session_id": sid, "target": "M 81", "obs_date": "2026-02-19",
+        "ota": "FRA400", "camera": "ZWOASI585MCPro", "filter": "L-Pro",
+        "gain": 200, "temperature_c": -20.0, "exposure_sec": 180.0,
+        "focal_length": 400.0, "frame_count": 1, "total_integration_sec": 180,
+        "ra_deg": None, "dec_deg": None, "lights_path": lights_rel,
+        "processed_status": "", "notes": "",
+    })
+
+    lights_dir = archive / lights_rel
+    light = touch(lights_dir / "Light_M81_180.0s_FRA400_L-Pro_20260219-230000_-20C_0001.fit")
+
+    wbpp_target = tmp_path / "WBPP" / "M81"
+    link_dir = wbpp_target / "SESSION_1" / "Lights" / "FILTER_L-Pro"
+    link_dir.mkdir(parents=True)
+    (link_dir / light.name).symlink_to(light.resolve())
+
+    assert _resolve_session_ids(wbpp_target, catalog, archive) == [sid]
+
+
+def test_resolve_session_ids_no_match_returns_empty(tmp_path):
+    archive = tmp_path / "archive"
+    catalog = tmp_path / "cat.db"
+    init_db(catalog)
+    wbpp_target = tmp_path / "WBPP" / "M81"
+    link_dir = wbpp_target / "SESSION_1" / "Lights" / "FILTER_L-Pro"
+    link_dir.mkdir(parents=True)
+    stray = touch(archive / "elsewhere" / "x.fit")
+    (link_dir / "x.fit").symlink_to(stray.resolve())
+    assert _resolve_session_ids(wbpp_target, catalog, archive) == []
+
+
+# ── B2: flat darks captured the morning after the flats ───────────────────────
+
+def test_build_night_symlinks_flat_darks_dated_next_morning(tmp_path):
+    """Regression for B2: flat darks captured on flat_date+1 must be symlinked.
+
+    find_flat_darks accepts flat_date or flat_date+1, but prep previously filtered
+    the files by the flat's own date, dropping the +1 set silently.
+    """
+    archive = tmp_path / "archive"
+    catalog = tmp_path / "cat.db"
+    init_db(catalog)
+
+    cam = "ZWOASI585MCPro"
+    flat_date = "2026-02-19"
+    flatdark_date = "2026-02-20"  # captured the following morning
+
+    flats_rel = "00_Calibration/Flats/FRA400_ZWOASI585MCPro_L-Pro/2026-02-19"
+    flat = touch(archive / flats_rel / "Flat_L-Pro_2.0s_20260219-080000_-20C_0001.fit")
+    upsert_calibration_set(catalog, {
+        "set_id": "flat1", "frame_type": "Flat", "camera": cam, "ota": "FRA400",
+        "filter": "L-Pro", "gain": 200, "exposure_sec": 2.0, "temperature_c": -20.0,
+        "frame_count": 1, "capture_date": flat_date, "folder_path": flats_rel,
+        "is_master": 0,
+    })
+
+    fd_rel = "00_Calibration/FlatDarks/ZWOASI585MCPro"
+    touch(archive / fd_rel / f"FlatDark_2.0s_20260220-090000_-20C_0001.fit")
+    upsert_calibration_set(catalog, {
+        "set_id": "fd1", "frame_type": "FlatDark", "camera": cam, "ota": None,
+        "filter": None, "gain": 200, "exposure_sec": 2.0, "temperature_c": -20.0,
+        "frame_count": 1, "capture_date": flatdark_date, "folder_path": fd_rel,
+        "is_master": 0,
+    })
+
+    lights_rel = "01_Deep Sky Objects/M 81/2026-02-19_FRA400_ZWOASI585MCPro/Lights/L-Pro"
+    touch(archive / lights_rel / "Light_M81_180.0s_L-Pro_20260219-230000_-20C_0001.fit")
+    session = {
+        "lights_path": lights_rel, "filter": "L-Pro", "camera": cam, "gain": 200,
+        "exposure_sec": 180.0, "ota": "FRA400", "obs_date": flat_date, "frame_count": 1,
+    }
+
+    session_dir = tmp_path / "WBPP" / "M81" / "SESSION_1"
+    _build_night([session], output=archive, catalog=catalog,
+                 session_dir=session_dir, flat_window=3)
+
+    fd_links = list((session_dir / "FlatDarks").glob("*"))
+    assert len(fd_links) == 1
+    assert fd_links[0].is_symlink()

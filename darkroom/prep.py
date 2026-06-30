@@ -180,7 +180,6 @@ def _build_night(
             flat_count = make_symlinks(files, session_dir / "Flats" / f"FILTER_{filter_name}")
             print(f"  Flats/FILTER_{filter_name}/      {flat_count} symlinks")
 
-            flat_date = Date.fromisoformat(chosen_flat["capture_date"])
             fd_rows = find_flat_darks(
                 catalog,
                 camera=sess["camera"],
@@ -189,8 +188,13 @@ def _build_night(
             )
             fd_count = 0
             for fd_row in fd_rows:
+                # Filter by the matched set's own capture_date — find_flat_darks
+                # accepts flat_date or flat_date+1 (morning-after darks), and the
+                # filenames in the shared FlatDarks/<camera>/ folder are dated to
+                # that set, not the flat's date.
                 files = discover_flat_darks(
-                    output / fd_row["folder_path"], capture_date=flat_date
+                    output / fd_row["folder_path"],
+                    capture_date=Date.fromisoformat(fd_row["capture_date"]),
                 )
                 fd_count += make_symlinks(files, session_dir / "FlatDarks")
             if fd_count == 0:
