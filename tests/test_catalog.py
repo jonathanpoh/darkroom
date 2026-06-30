@@ -1,4 +1,6 @@
 import sqlite3
+import subprocess
+import sys
 import pytest
 from pathlib import Path
 from darkroom.catalog import (
@@ -244,3 +246,17 @@ def test_find_flat_darks_no_match(tmp_path):
     rows = find_flat_darks(db, camera="ZWO ASI585MC Pro",
                            flat_exposure_sec=1.35, flat_capture_date="2026-02-15")
     assert rows == []
+
+
+def test_importing_catalog_does_not_pull_in_astropy():
+    """darkroom.catalog is the read layer for the future web UI — it must
+    not pay astropy's import cost. Run in a subprocess for a clean
+    sys.modules (other test files in this session import astropy-heavy
+    darkroom.cataloger first, which would otherwise pollute the check)."""
+    result = subprocess.run(
+        [sys.executable, "-c",
+         "import darkroom.catalog, sys; "
+         "assert 'astropy' not in sys.modules, sorted(k for k in sys.modules if 'astropy' in k)"],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr

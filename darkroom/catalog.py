@@ -3,7 +3,7 @@ import sqlite3
 from datetime import date, timedelta
 from pathlib import Path
 
-from darkroom.cataloger import _normalize_target
+from darkroom.names import _normalize_target
 
 
 def _connect(db: Path) -> sqlite3.Connection:
