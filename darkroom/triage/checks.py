@@ -6,6 +6,8 @@ from astropy.coordinates import SkyCoord
 from astropy.io import fits
 from astroquery.simbad import Simbad
 
+from darkroom.names import _parse_coords
+
 
 def check_object_value(value: str | None) -> str | None:
     """Return 'MISSING' or 'FOV' if the OBJECT header is problematic, else None."""
@@ -47,6 +49,10 @@ def check_ra_dec(
     if ra is None or dec is None:
         return None
 
+    ra_deg, dec_deg = _parse_coords(ra, dec)
+    if ra_deg is None or dec_deg is None:
+        return None
+
     if simbad_cache and "ra" in simbad_cache:
         simbad_ra = simbad_cache["ra"]
         simbad_dec = simbad_cache["dec"]
@@ -60,7 +66,7 @@ def check_ra_dec(
         simbad_ra = float(table[ra_col][0])
         simbad_dec = float(table[dec_col][0])
 
-    frame_coord = SkyCoord(ra=float(ra), dec=float(dec), unit="deg")
+    frame_coord = SkyCoord(ra=ra_deg, dec=dec_deg, unit="deg")
     simbad_coord = SkyCoord(ra=simbad_ra, dec=simbad_dec, unit="deg")
     sep = frame_coord.separation(simbad_coord).deg
 
@@ -68,8 +74,8 @@ def check_ra_dec(
         return None
 
     return {
-        "frame_ra": float(ra),
-        "frame_dec": float(dec),
+        "frame_ra": ra_deg,
+        "frame_dec": dec_deg,
         "simbad_ra": simbad_ra,
         "simbad_dec": simbad_dec,
         "separation_deg": sep,

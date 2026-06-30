@@ -106,3 +106,38 @@ class TestCheckRaDec:
             mock_simbad.query_object.return_value = None
             result = check_ra_dec(f, "Unknown Nebula X")
         assert result is None
+
+    def test_sexagesimal_coords_do_not_crash(self, tmp_path):
+        """Regression for B4: float(ra)/float(dec) crashed with ValueError on
+        sexagesimal strings ("09 55 33" / "+69 03 55") — older rigs write RA/DEC
+        that way instead of float degrees. That ValueError used to propagate all
+        the way out of scan_archive and abort the whole triage scan.
+
+        "09 55 33" hourangle == 148.8875 deg, "+69 03 55" == 69.065278 deg —
+        same M 81 coordinates already used in float-degree form elsewhere in
+        this file (148.888 / 69.065), so the mock SIMBAD position below matches.
+        """
+        f = make_fits(tmp_path / "sexagesimal.fit", RA="09 55 33", DEC="+69 03 55")
+        mock_table = self._make_mock_table(148.888, 69.065)
+
+        with patch("darkroom.triage.checks.Simbad") as mock_simbad:
+            mock_simbad.query_object.return_value = mock_table
+            result = check_ra_dec(f, "M 81", threshold_deg=5.0)
+
+        assert result is None
+
+    def test_sexagesimal_mismatch_returns_degree_values(self, tmp_path):
+        """Same sexagesimal input, but mismatched against a distant target — the
+        returned dict's frame_ra/frame_dec (line 71-72 of checks.py) must also
+        not crash, and must report parsed degree values, not the raw strings."""
+        f = make_fits(tmp_path / "wrong.fit", RA="09 55 33", DEC="+69 03 55")  # M 81
+        mock_table = self._make_mock_table(10.685, 41.269)  # M 31, far away
+
+        with patch("darkroom.triage.checks.Simbad") as mock_simbad:
+            mock_simbad.query_object.return_value = mock_table
+            result = check_ra_dec(f, "M 31", threshold_deg=5.0)
+
+        assert result is not None
+        assert result["frame_ra"] == pytest.approx(148.8875, abs=1e-3)
+        assert result["frame_dec"] == pytest.approx(69.065278, abs=1e-3)
+        assert result["separation_deg"] > 5.0
