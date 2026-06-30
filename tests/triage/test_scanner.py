@@ -36,6 +36,26 @@ def archive(tmp_path):
     return tmp_path / "staging"
 
 
+class TestScanArchive:
+    def test_finds_legacy_session_under_01_dso_root(self, archive):
+        """Regression for B3: scan_archive hardcoded '04_Deep Sky Objects' but
+        the real archive root is '01_Deep Sky Objects' — the DSO-side scanners
+        (legacy_session, calibration_in_target, processed_dir, fits_headers)
+        silently never ran."""
+        session = archive / "01_Deep Sky Objects" / "M 42" / "2023-11-23"
+        make_fits(session / "Lights" / "frame.fit")
+        candidates = scan_archive(archive)
+        assert any(c.category == "legacy_session" for c in candidates)
+
+    def test_ignores_dso_dir_under_stale_04_prefix(self, archive):
+        """The old '04_' prefix is no longer the canonical name anywhere —
+        scan_archive should not find anything under it."""
+        session = archive / "04_Deep Sky Objects" / "M 42" / "2023-11-23"
+        make_fits(session / "Lights" / "frame.fit")
+        candidates = scan_archive(archive)
+        assert candidates == []
+
+
 class TestScanFlatRestructure:
     def test_detects_yyyymmdd_flat_folder(self, archive):
         flat_dir = archive / "00_Calibration" / "Flats" / "20240110_FMA180_Canon6D_L-Pro"

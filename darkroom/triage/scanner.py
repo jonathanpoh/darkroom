@@ -271,7 +271,7 @@ def scan_fits_headers(dso_root: Path) -> list[TriageCandidate]:
 def scan_archive(archive_root: Path) -> list[TriageCandidate]:
     """Run all scanners and return combined candidates."""
     calib = archive_root / "00_Calibration"
-    dso = archive_root / "04_Deep Sky Objects"
+    dso = archive_root / "01_Deep Sky Objects"
     results: list[TriageCandidate] = []
     if calib.exists():
         results += scan_flat_restructure(calib)
