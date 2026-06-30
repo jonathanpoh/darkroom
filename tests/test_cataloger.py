@@ -443,6 +443,16 @@ class TestSQLiteCatalog:
             mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
         assert mode == "wal"
 
+    def test_init_db_creates_indexes(self, tmp_path):
+        db = tmp_path / "test.db"
+        init_db(db)
+        with sqlite3.connect(db) as conn:
+            names = {r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='index'"
+            )}
+        assert "idx_sessions_target" in names
+        assert "idx_sessions_obs_date" in names
+
     def test_upsert_session_insert(self, tmp_path):
         db = tmp_path / "test.db"
         init_db(db)

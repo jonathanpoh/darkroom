@@ -241,6 +241,8 @@ def init_db(db_path: Path) -> None:
                 folder_path   TEXT,
                 is_master     INTEGER DEFAULT 0
             );
+            CREATE INDEX IF NOT EXISTS idx_sessions_target ON sessions(target);
+            CREATE INDEX IF NOT EXISTS idx_sessions_obs_date ON sessions(obs_date);
         """)
         # Migrations for existing databases
         cols = {r[1] for r in conn.execute("PRAGMA table_info(sessions)")}
