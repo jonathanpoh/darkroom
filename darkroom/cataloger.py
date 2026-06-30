@@ -205,6 +205,7 @@ def init_db(db_path: Path) -> None:
         db_path: Path to SQLite database file
     """
     with sqlite3.connect(db_path) as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS sessions (
                 session_id              TEXT PRIMARY KEY,

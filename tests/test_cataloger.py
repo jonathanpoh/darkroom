@@ -436,6 +436,13 @@ class TestSQLiteCatalog:
         assert "sessions" in tables
         assert "calibration_sets" in tables
 
+    def test_init_db_enables_wal(self, tmp_path):
+        db = tmp_path / "test.db"
+        init_db(db)
+        with sqlite3.connect(db) as conn:
+            mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+        assert mode == "wal"
+
     def test_upsert_session_insert(self, tmp_path):
         db = tmp_path / "test.db"
         init_db(db)
