@@ -256,3 +256,92 @@ def test_build_night_symlinks_flat_darks_dated_next_morning(tmp_path):
     fd_links = list((session_dir / "FlatDarks").glob("*"))
     assert len(fd_links) == 1
     assert fd_links[0].is_symlink()
+
+
+# ── B5: wbpp prefers master calibration files over raw subs ───────────────────
+
+def test_build_night_prefers_master_dark_over_raw_subs(tmp_path):
+    """Regression for B5: when both a master dark and raw sub-frames match the
+    same camera/gain/exposure, only the master should be symlinked into Darks/
+    — not a mix of both.
+    """
+    archive = tmp_path / "archive"
+    catalog = tmp_path / "cat.db"
+    init_db(catalog)
+
+    cam = "ZWOASI585MCPro"
+
+    master_rel = "00_Calibration/Darks/ZWOASI585MCPro/Masters/masterDark_180s_gain200_-20C.xisf"
+    touch(archive / master_rel)
+    upsert_calibration_set(catalog, {
+        "set_id": "dark_master", "frame_type": "Dark", "camera": cam, "ota": None,
+        "filter": None, "gain": 200, "exposure_sec": 180.0, "temperature_c": -20.0,
+        "frame_count": 1, "capture_date": "2026-02-19", "folder_path": master_rel,
+        "is_master": 1,
+    })
+
+    raw_rel = "00_Calibration/Darks/ZWOASI585MCPro/Raw/2026-02-19"
+    touch(archive / raw_rel / "Dark_180.0s_Bin1_585MC_gain200_20260219-090000_-20.0C_0001.fit")
+    upsert_calibration_set(catalog, {
+        "set_id": "dark_raw", "frame_type": "Dark", "camera": cam, "ota": None,
+        "filter": None, "gain": 200, "exposure_sec": 180.0, "temperature_c": -20.0,
+        "frame_count": 1, "capture_date": "2026-02-19", "folder_path": raw_rel,
+        "is_master": 0,
+    })
+
+    lights_rel = "01_Deep Sky Objects/M 81/2026-02-19_FRA400_ZWOASI585MCPro/Lights/L-Pro"
+    touch(archive / lights_rel / "Light_M81_180.0s_L-Pro_20260219-230000_-20C_0001.fit")
+    session = {
+        "lights_path": lights_rel, "filter": "L-Pro", "camera": cam, "gain": 200,
+        "exposure_sec": 180.0, "ota": "FRA400", "obs_date": "2026-02-19", "frame_count": 1,
+    }
+
+    session_dir = tmp_path / "WBPP" / "M81" / "SESSION_1"
+    _build_night([session], output=archive, catalog=catalog,
+                 session_dir=session_dir, flat_window=3)
+
+    dark_links = list((session_dir / "Darks").glob("*"))
+    assert len(dark_links) == 1
+    assert dark_links[0].resolve().name == "masterDark_180s_gain200_-20C.xisf"
+
+
+def test_build_night_prefers_master_bias_over_raw_subs(tmp_path):
+    """Regression for B5 (Bias half — same bug, separate loop in prep.py)."""
+    archive = tmp_path / "archive"
+    catalog = tmp_path / "cat.db"
+    init_db(catalog)
+
+    cam = "ZWOASI585MCPro"
+
+    master_rel = "00_Calibration/Bias/ZWOASI585MCPro/Masters/masterBias_gain200.xisf"
+    touch(archive / master_rel)
+    upsert_calibration_set(catalog, {
+        "set_id": "bias_master", "frame_type": "Bias", "camera": cam, "ota": None,
+        "filter": None, "gain": 200, "exposure_sec": None, "temperature_c": -20.0,
+        "frame_count": 1, "capture_date": "2026-02-19", "folder_path": master_rel,
+        "is_master": 1,
+    })
+
+    raw_rel = "00_Calibration/Bias/ZWOASI585MCPro/Raw/2026-02-19"
+    touch(archive / raw_rel / "Bias_0.001s_Bin1_585MC_gain200_20260219-090000_-20.0C_0001.fit")
+    upsert_calibration_set(catalog, {
+        "set_id": "bias_raw", "frame_type": "Bias", "camera": cam, "ota": None,
+        "filter": None, "gain": 200, "exposure_sec": None, "temperature_c": -20.0,
+        "frame_count": 1, "capture_date": "2026-02-19", "folder_path": raw_rel,
+        "is_master": 0,
+    })
+
+    lights_rel = "01_Deep Sky Objects/M 81/2026-02-19_FRA400_ZWOASI585MCPro/Lights/L-Pro"
+    touch(archive / lights_rel / "Light_M81_180.0s_L-Pro_20260219-230000_-20C_0001.fit")
+    session = {
+        "lights_path": lights_rel, "filter": "L-Pro", "camera": cam, "gain": 200,
+        "exposure_sec": 180.0, "ota": "FRA400", "obs_date": "2026-02-19", "frame_count": 1,
+    }
+
+    session_dir = tmp_path / "WBPP" / "M81" / "SESSION_1"
+    _build_night([session], output=archive, catalog=catalog,
+                 session_dir=session_dir, flat_window=3)
+
+    bias_links = list((session_dir / "Bias").glob("*"))
+    assert len(bias_links) == 1
+    assert bias_links[0].resolve().name == "masterBias_gain200.xisf"

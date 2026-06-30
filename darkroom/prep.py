@@ -133,8 +133,9 @@ def _build_night(
     dark_rows = find_darks(
         catalog, camera=s0["camera"], gain=s0["gain"], exposure_sec=s0["exposure_sec"]
     )
+    master_dark_rows = [r for r in dark_rows if r.get("is_master")]
     dark_count = 0
-    for row in dark_rows:
+    for row in master_dark_rows or dark_rows:
         if row.get("is_master"):
             master_path = output / row["folder_path"]
             files = [master_path] if master_path.exists() else []
@@ -148,8 +149,9 @@ def _build_night(
 
     # Bias — camera/gain only (exposure irrelevant for bias)
     bias_rows = find_bias(catalog, camera=s0["camera"], gain=s0["gain"])
+    master_bias_rows = [r for r in bias_rows if r.get("is_master")]
     bias_count = 0
-    for row in bias_rows:
+    for row in master_bias_rows or bias_rows:
         if row.get("is_master"):
             master_path = output / row["folder_path"]
             files = [master_path] if master_path.exists() else []
