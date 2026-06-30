@@ -14,7 +14,7 @@ import os
 import re
 import sqlite3
 import sys
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -225,7 +225,9 @@ def init_db(db_path: Path) -> None:
                 dec_deg                 REAL,
                 lights_path             TEXT,
                 processed_status        TEXT,
-                notes                   TEXT
+                notes                   TEXT,
+                created_at              TEXT,
+                updated_at              TEXT
             );
             CREATE TABLE IF NOT EXISTS calibration_sets (
                 set_id        TEXT PRIMARY KEY,
@@ -239,7 +241,9 @@ def init_db(db_path: Path) -> None:
                 frame_count   INTEGER,
                 capture_date  TEXT,
                 folder_path   TEXT,
-                is_master     INTEGER DEFAULT 0
+                is_master     INTEGER DEFAULT 0,
+                created_at    TEXT,
+                updated_at    TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_sessions_target ON sessions(target);
             CREATE INDEX IF NOT EXISTS idx_sessions_obs_date ON sessions(obs_date);
@@ -248,9 +252,25 @@ def init_db(db_path: Path) -> None:
         cols = {r[1] for r in conn.execute("PRAGMA table_info(sessions)")}
         if "focal_length" not in cols:
             conn.execute("ALTER TABLE sessions ADD COLUMN focal_length REAL")
+        if "created_at" not in cols:
+            conn.execute("ALTER TABLE sessions ADD COLUMN created_at TEXT")
+        if "updated_at" not in cols:
+            conn.execute("ALTER TABLE sessions ADD COLUMN updated_at TEXT")
+        conn.execute(
+            "UPDATE sessions SET created_at = datetime('now'), updated_at = datetime('now') "
+            "WHERE created_at IS NULL"
+        )
         cal_cols = {r[1] for r in conn.execute("PRAGMA table_info(calibration_sets)")}
         if "is_master" not in cal_cols:
             conn.execute("ALTER TABLE calibration_sets ADD COLUMN is_master INTEGER DEFAULT 0")
+        if "created_at" not in cal_cols:
+            conn.execute("ALTER TABLE calibration_sets ADD COLUMN created_at TEXT")
+        if "updated_at" not in cal_cols:
+            conn.execute("ALTER TABLE calibration_sets ADD COLUMN updated_at TEXT")
+        conn.execute(
+            "UPDATE calibration_sets SET created_at = datetime('now'), updated_at = datetime('now') "
+            "WHERE created_at IS NULL"
+        )
 
 
 def upsert_session(db_path: Path, session: dict) -> None:
@@ -267,6 +287,9 @@ def upsert_session(db_path: Path, session: dict) -> None:
     session = dict(session)
     session["camera"] = _normalize_camera(session.get("camera"))
     session["exposure_sec"] = _round_exposure(session.get("exposure_sec"))
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    session.setdefault("created_at", now)
+    session["updated_at"] = now
     with sqlite3.connect(db_path) as conn:
         conn.execute(
             """
@@ -274,12 +297,12 @@ def upsert_session(db_path: Path, session: dict) -> None:
                 session_id, target, obs_date, ota, camera, filter,
                 gain, temperature_c, exposure_sec, focal_length,
                 frame_count, total_integration_sec, ra_deg, dec_deg,
-                lights_path, processed_status, notes
+                lights_path, processed_status, notes, created_at, updated_at
             ) VALUES (
                 :session_id, :target, :obs_date, :ota, :camera, :filter,
                 :gain, :temperature_c, :exposure_sec, :focal_length,
                 :frame_count, :total_integration_sec, :ra_deg, :dec_deg,
-                :lights_path, :processed_status, :notes
+                :lights_path, :processed_status, :notes, :created_at, :updated_at
             )
             ON CONFLICT(session_id) DO UPDATE SET
                 target                = excluded.target,
@@ -296,7 +319,8 @@ def upsert_session(db_path: Path, session: dict) -> None:
                 ra_deg                = excluded.ra_deg,
                 dec_deg               = excluded.dec_deg,
                 lights_path           = excluded.lights_path,
-                notes                 = excluded.notes
+                notes                 = excluded.notes,
+                updated_at            = excluded.updated_at
             """,
             session,
         )
@@ -316,24 +340,28 @@ def upsert_calibration_set(db_path: Path, cal_set: dict) -> None:
     cal_set["camera"] = _normalize_camera(cal_set.get("camera"))
     cal_set["exposure_sec"] = _round_exposure(cal_set.get("exposure_sec"))
     cal_set.setdefault("is_master", 0)
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    cal_set.setdefault("created_at", now)
+    cal_set["updated_at"] = now
     with sqlite3.connect(db_path) as conn:
         conn.execute(
             """
             INSERT INTO calibration_sets (
                 set_id, frame_type, camera, ota, filter,
                 gain, exposure_sec, temperature_c, frame_count,
-                capture_date, folder_path, is_master
+                capture_date, folder_path, is_master, created_at, updated_at
             ) VALUES (
                 :set_id, :frame_type, :camera, :ota, :filter,
                 :gain, :exposure_sec, :temperature_c, :frame_count,
-                :capture_date, :folder_path, :is_master
+                :capture_date, :folder_path, :is_master, :created_at, :updated_at
             )
             ON CONFLICT(set_id) DO UPDATE SET
                 filter       = excluded.filter,
                 frame_count  = excluded.frame_count,
                 capture_date = excluded.capture_date,
                 folder_path  = excluded.folder_path,
-                is_master    = excluded.is_master
+                is_master    = excluded.is_master,
+                updated_at   = excluded.updated_at
             """,
             cal_set,
         )

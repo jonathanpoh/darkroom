@@ -501,6 +501,76 @@ class TestSQLiteCatalog:
         assert row is not None
         assert row["frame_count"] == 30
 
+    def test_init_db_adds_timestamp_columns(self, tmp_path):
+        db = tmp_path / "test.db"
+        init_db(db)
+        with sqlite3.connect(db) as conn:
+            session_cols = {r[1] for r in conn.execute("PRAGMA table_info(sessions)")}
+            cal_cols = {r[1] for r in conn.execute("PRAGMA table_info(calibration_sets)")}
+        assert {"created_at", "updated_at"} <= session_cols
+        assert {"created_at", "updated_at"} <= cal_cols
+
+    def test_init_db_backfills_timestamps_on_existing_rows(self, tmp_path):
+        # Simulate a pre-migration DB: create the old schema (no timestamp
+        # columns) with one row already in it, then run init_db and confirm
+        # the migration backfills rather than crashing or leaving NULLs.
+        db = tmp_path / "test.db"
+        with sqlite3.connect(db) as conn:
+            conn.executescript("""
+                CREATE TABLE sessions (
+                    session_id TEXT PRIMARY KEY,
+                    target TEXT NOT NULL,
+                    obs_date TEXT NOT NULL
+                );
+                CREATE TABLE calibration_sets (
+                    set_id TEXT PRIMARY KEY,
+                    frame_type TEXT NOT NULL
+                );
+            """)
+            conn.execute(
+                "INSERT INTO sessions (session_id, target, obs_date) VALUES (?, ?, ?)",
+                ("M81_20260219_FRA400_ASI585MC_L-Pro", "M 81", "2026-02-19"),
+            )
+            conn.execute(
+                "INSERT INTO calibration_sets (set_id, frame_type) VALUES (?, ?)",
+                ("Dark_ASI585MC_200g_180s", "Dark"),
+            )
+
+        init_db(db)  # must not raise, must backfill
+
+        with sqlite3.connect(db) as conn:
+            row = conn.execute(
+                "SELECT created_at, updated_at FROM sessions WHERE session_id = ?",
+                ("M81_20260219_FRA400_ASI585MC_L-Pro",),
+            ).fetchone()
+            cal_row = conn.execute(
+                "SELECT created_at, updated_at FROM calibration_sets WHERE set_id = ?",
+                ("Dark_ASI585MC_200g_180s",),
+            ).fetchone()
+        assert row[0] is not None and row[1] is not None
+        assert cal_row[0] is not None and cal_row[1] is not None
+
+    def test_upsert_session_sets_created_and_updated_at(self, tmp_path):
+        db = tmp_path / "test.db"
+        init_db(db)
+        session = self._sample_session()
+        upsert_session(db, session)
+        with sqlite3.connect(db) as conn:
+            created1, updated1 = conn.execute(
+                "SELECT created_at, updated_at FROM sessions WHERE session_id = ?",
+                (session["session_id"],),
+            ).fetchone()
+        assert created1 is not None
+        assert updated1 is not None
+
+        upsert_session(db, session)  # re-scan: created_at preserved, updated_at refreshed
+        with sqlite3.connect(db) as conn:
+            created2, updated2 = conn.execute(
+                "SELECT created_at, updated_at FROM sessions WHERE session_id = ?",
+                (session["session_id"],),
+            ).fetchone()
+        assert created2 == created1
+
 
 class TestFindLatestProcessedDate:
     def test_single_date_dir_returned(self, tmp_path):
