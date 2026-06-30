@@ -52,7 +52,7 @@ See [`darkroom.toml.example`](darkroom.toml.example).
 ### `darkroom catalog`
 
 ```bash
-darkroom catalog scan-lights "/Volumes/Astrophotography/04_Deep Sky Objects"
+darkroom catalog scan-lights "/Volumes/Astrophotography/01_Deep Sky Objects"
 darkroom catalog scan-calibration "/Volumes/Astrophotography/00_Calibration"
 darkroom catalog list [--target "M 81"]
 darkroom catalog mark <session_id> "2026-05-15"
@@ -125,7 +125,7 @@ darkroom finish --target "M 81" --date 2026-05-15    # override
 darkroom finish --target "M 81" --dry-run            # preview
 ```
 
-Copies stacks to `<output>/04_Deep Sky Objects/<target>/_Processed/<date>/`,
+Copies stacks to `<output>/01_Deep Sky Objects/<target>/_Processed/<date>/`,
 then walks each `SESSION_N/`'s light symlinks back to the catalog to mark every
 contributing `session_id` as processed with the `_Processed/<date>` path. Then
 prompts to delete `SESSION_N/`, `calibrated/`, `debayered/`, `master/`,

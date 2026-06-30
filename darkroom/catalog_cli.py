@@ -80,7 +80,7 @@ def add_subparser(subparsers) -> None:
 
     sl = sub.add_parser("scan-lights", parents=[catalog_flag],
                         help="Recursively catalog all light sessions")
-    sl.add_argument("root_path", help="Root folder to scan (e.g. '04_Deep Sky Objects')")
+    sl.add_argument("root_path", help="Root folder to scan (e.g. '01_Deep Sky Objects')")
     sl.set_defaults(func=_scan_lights_run)
 
     sc = sub.add_parser("scan-calibration", parents=[catalog_flag],

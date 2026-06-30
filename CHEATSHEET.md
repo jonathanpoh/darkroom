@@ -136,7 +136,7 @@ the printed `Output/` path.
 ### 3. `darkroom finish` — push stacks back and mark processed
 
 After WBPP/PixInsight, copies `Output/master/` + `Output/processed/` into
-`<archive>/04_Deep Sky Objects/<target>/_Processed/<date>/` and marks every session under
+`<archive>/01_Deep Sky Objects/<target>/_Processed/<date>/` and marks every session under
 that WBPP target as processed in the catalog. Then offers to clean up the working dirs.
 
 ```bash
@@ -169,7 +169,7 @@ are for backfilling, browsing, and manual edits.
 
 ```bash
 # Backfill the catalog by scanning the NAS (idempotent upserts)
-darkroom catalog scan-lights "/Volumes/Astrophotography/04_Deep Sky Objects"
+darkroom catalog scan-lights "/Volumes/Astrophotography/01_Deep Sky Objects"
 darkroom catalog scan-calibration "/Volumes/Astrophotography/00_Calibration"
 
 # Browse

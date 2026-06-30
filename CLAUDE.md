@@ -52,7 +52,7 @@ ASIAir SD card
 [CCC copies to Mac]  ← Carbon Copy Cloner, triggered on SD mount (no TTY)
       │
       ▼
-darkroom ingest ──→ NAS: 04_Deep Sky Objects/<Target>/<Session>/Lights/
+darkroom ingest ──→ NAS: 01_Deep Sky Objects/<Target>/<Session>/Lights/
       │                  00_Calibration/Flats/<OTA_Camera_Filter>/<Date>/
       │                  00_Calibration/Darks/<Camera>/
       │
@@ -70,7 +70,7 @@ darkroom wbpp ──→ ~/WBPP/<Target>/SESSION_N/  (symlinks, temporary)
   PixInsight WBPP → Output/master/*.xisf + Output/processed/*.xisf
       │
       ▼
-darkroom finish ──→ NAS: 04_Deep Sky Objects/<Target>/_Processed/<date>/
+darkroom finish ──→ NAS: 01_Deep Sky Objects/<Target>/_Processed/<date>/
                     └─→ marks every session_id under that WBPP target as processed
 ```
 
@@ -93,7 +93,7 @@ Mounted on Mac via SMB (confirm mount path — likely `/Volumes/Astrophotography
 ### Light frames
 
 ```
-04_Deep Sky Objects/
+01_Deep Sky Objects/
   <Target with spaces, e.g. "M 81">/
     YYYY-MM-DD_{OTA}_{Camera}_{Filter}/
       Lights/

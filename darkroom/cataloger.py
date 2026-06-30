@@ -892,8 +892,8 @@ def scan_all_command(args):
 def migrate_archive_command(args) -> None:
     """Move sessions from old filter-in-folder layout to new Lights/<filter>/ layout.
 
-    Old: 04_Deep Sky Objects/<Target>/<Date>_<OTA>_<Camera>_<Filter>/Lights/*.fit
-    New: 04_Deep Sky Objects/<Target>/<Date>_<OTA>_<Camera>/Lights/<Filter>/*.fit
+    Old: 01_Deep Sky Objects/<Target>/<Date>_<OTA>_<Camera>_<Filter>/Lights/*.fit
+    New: 01_Deep Sky Objects/<Target>/<Date>_<OTA>_<Camera>/Lights/<Filter>/*.fit
     """
     from darkroom.ingest import camera_slug, session_dest_rel
 
@@ -977,7 +977,7 @@ def main():
         epilog="""
 Examples:
   # Initial scan of all sessions
-  %(prog)s scan-all "/Volumes/Astrophotography/04_Deep Sky Objects"
+  %(prog)s scan-all "/Volumes/Astrophotography/01_Deep Sky Objects"
 
   # Scan calibration frames
   %(prog)s scan-calibration /Volumes/Astrophotography/00_Calibration
@@ -1009,7 +1009,7 @@ Examples:
 
     # scan-all
     p_all = subparsers.add_parser("scan-all", help="Recursively catalog all light sessions")
-    p_all.add_argument("root_path", help="Root folder to scan (e.g. '04_Deep Sky Objects')")
+    p_all.add_argument("root_path", help="Root folder to scan (e.g. '01_Deep Sky Objects')")
 
     # scan-calibration
     p_cal = subparsers.add_parser("scan-calibration", help="Catalog calibration frames")
@@ -1034,8 +1034,8 @@ Examples:
         "--archive", metavar="PATH",
         help=(
             "NAS archive root — navigates to "
-            "<archive>/04_Deep Sky Objects/<target>/_Processed/ to detect the date "
-            "(targets outside 04_Deep Sky Objects/ should use --date instead)"
+            "<archive>/01_Deep Sky Objects/<target>/_Processed/ to detect the date "
+            "(targets outside 01_Deep Sky Objects/ should use --date instead)"
         ),
     )
     p_finish_date.add_argument(

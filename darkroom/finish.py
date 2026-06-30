@@ -252,7 +252,7 @@ def add_subparser(subparsers) -> None:
     p = subparsers.add_parser(
         "finish",
         help="Copy WBPP stacks to the archive and mark sessions processed",
-        description="Copy master/ and processed/ to <archive>/04_Deep Sky Objects/<target>/_Processed/<date>/, then mark each session as processed in the catalog.",
+        description="Copy master/ and processed/ to <archive>/01_Deep Sky Objects/<target>/_Processed/<date>/, then mark each session as processed in the catalog.",
     )
     p.add_argument("--target", metavar="NAME", required=True, help='Target name (e.g. "M 81")')
     p.add_argument("--archive", metavar="PATH",
