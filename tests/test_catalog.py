@@ -41,7 +41,8 @@ def make_db(tmp_path: Path) -> Path:
             temperature_c REAL,
             capture_date TEXT,
             folder_path TEXT,
-            frame_count INTEGER
+            frame_count INTEGER,
+            is_master INTEGER DEFAULT 0
         );
     """)
     conn.execute("""
@@ -62,25 +63,25 @@ def make_db(tmp_path: Path) -> Path:
         INSERT INTO calibration_sets VALUES
         ('Dark_ZWOASI585MCPro_180.0s_200g', 'Dark', 'ZWO ASI585MC Pro', NULL, NULL,
          200, 180.0, -20.0, '2026-02-01',
-         '00_Calibration/Darks/ZWOASI585MCPro', 30)
+         '00_Calibration/Darks/ZWOASI585MCPro', 30, 0)
     """)
     conn.execute("""
         INSERT INTO calibration_sets VALUES
         ('Flat_FRA400_ZWOASI585MCPro_L-Pro_20260219', 'Flat', 'ZWO ASI585MC Pro',
          'FRA400', 'L-Pro', 200, 1.35, -20.0, '2026-02-19',
-         '00_Calibration/Flats/FRA400_ZWOASI585MCPro_L-Pro/2026-02-19', 20)
+         '00_Calibration/Flats/FRA400_ZWOASI585MCPro_L-Pro/2026-02-19', 20, 0)
     """)
     conn.execute("""
         INSERT INTO calibration_sets VALUES
         ('Flat_FRA400_ZWOASI585MCPro_L-Pro_20260220', 'Flat', 'ZWO ASI585MC Pro',
          'FRA400', 'L-Pro', 200, 1.35, -20.0, '2026-02-20',
-         '00_Calibration/Flats/FRA400_ZWOASI585MCPro_L-Pro/2026-02-20', 20)
+         '00_Calibration/Flats/FRA400_ZWOASI585MCPro_L-Pro/2026-02-20', 20, 0)
     """)
     conn.execute("""
         INSERT INTO calibration_sets VALUES
         ('FlatDark_ZWOASI585MCPro_1.35s_20260220', 'FlatDark', 'ZWO ASI585MC Pro',
          NULL, NULL, 200, 1.35, -20.0, '2026-02-20',
-         '00_Calibration/FlatDarks/ZWOASI585MCPro', 20)
+         '00_Calibration/FlatDarks/ZWOASI585MCPro', 20, 0)
     """)
     conn.commit()
     conn.close()

@@ -8,6 +8,7 @@ from itertools import groupby
 from pathlib import Path
 
 from darkroom.catalog import (
+    find_bias,
     find_darks,
     find_flat_darks,
     find_flats,
@@ -15,6 +16,7 @@ from darkroom.catalog import (
     query_sessions,
 )
 from darkroom.config import resolve_catalog, resolve_path
+from darkroom.parse import fits_files
 from darkroom.wbpp import (
     clear_sessions,
     discover_darks,
@@ -133,12 +135,32 @@ def _build_night(
     )
     dark_count = 0
     for row in dark_rows:
-        files = discover_darks(output / row["folder_path"], exposure_sec=s0["exposure_sec"])
+        if row.get("is_master"):
+            master_path = output / row["folder_path"]
+            files = [master_path] if master_path.exists() else []
+        else:
+            files = discover_darks(output / row["folder_path"], exposure_sec=s0["exposure_sec"])
         dark_count += make_symlinks(files, session_dir / "Darks")
     if dark_count == 0:
         print("  Darks/                    0 symlinks  [no darks found]")
     else:
         print(f"  Darks/                    {dark_count} symlinks")
+
+    # Bias — camera/gain only (exposure irrelevant for bias)
+    bias_rows = find_bias(catalog, camera=s0["camera"], gain=s0["gain"])
+    bias_count = 0
+    for row in bias_rows:
+        if row.get("is_master"):
+            master_path = output / row["folder_path"]
+            files = [master_path] if master_path.exists() else []
+        else:
+            p = output / row["folder_path"]
+            files = fits_files(p) if p.exists() else []
+        bias_count += make_symlinks(files, session_dir / "Bias")
+    if bias_count == 0:
+        print("  Bias/                     0 symlinks  [no bias found]")
+    else:
+        print(f"  Bias/                     {bias_count} symlinks")
 
     # Flats + FlatDarks — per filter
     for sess in sessions:

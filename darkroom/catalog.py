@@ -52,12 +52,27 @@ def query_sessions(
 def find_darks(
     db: Path, *, camera: str, gain: int, exposure_sec: float
 ) -> list[dict]:
-    """Return Dark calibration sets matching camera+gain+exposure."""
+    """Return Dark calibration sets matching camera+gain+exposure, masters first."""
     with _connect(db) as conn:
         rows = conn.execute(
             """SELECT * FROM calibration_sets
-               WHERE frame_type = 'Dark' AND camera = ? AND gain = ? AND exposure_sec = ?""",
+               WHERE frame_type = 'Dark' AND camera = ? AND gain = ? AND exposure_sec = ?
+               ORDER BY is_master DESC""",
             (camera, gain, exposure_sec),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def find_bias(
+    db: Path, *, camera: str, gain: int
+) -> list[dict]:
+    """Return Bias calibration sets matching camera+gain, masters first."""
+    with _connect(db) as conn:
+        rows = conn.execute(
+            """SELECT * FROM calibration_sets
+               WHERE frame_type = 'Bias' AND camera = ? AND gain = ?
+               ORDER BY is_master DESC""",
+            (camera, gain),
         ).fetchall()
     return [dict(r) for r in rows]
 

@@ -291,13 +291,17 @@ def init_db(db_path: Path) -> None:
                 temperature_c REAL,
                 frame_count   INTEGER,
                 capture_date  TEXT,
-                folder_path   TEXT
+                folder_path   TEXT,
+                is_master     INTEGER DEFAULT 0
             );
         """)
-        # Migration: add focal_length column to existing databases
+        # Migrations for existing databases
         cols = {r[1] for r in conn.execute("PRAGMA table_info(sessions)")}
         if "focal_length" not in cols:
             conn.execute("ALTER TABLE sessions ADD COLUMN focal_length REAL")
+        cal_cols = {r[1] for r in conn.execute("PRAGMA table_info(calibration_sets)")}
+        if "is_master" not in cal_cols:
+            conn.execute("ALTER TABLE calibration_sets ADD COLUMN is_master INTEGER DEFAULT 0")
 
 
 # Canonical camera names, keyed on the whitespace-stripped form of the
@@ -386,23 +390,25 @@ def upsert_calibration_set(db_path: Path, cal_set: dict) -> None:
     cal_set = dict(cal_set)
     cal_set["camera"] = _normalize_camera(cal_set.get("camera"))
     cal_set["exposure_sec"] = _round_exposure(cal_set.get("exposure_sec"))
+    cal_set.setdefault("is_master", 0)
     with sqlite3.connect(db_path) as conn:
         conn.execute(
             """
             INSERT INTO calibration_sets (
                 set_id, frame_type, camera, ota, filter,
                 gain, exposure_sec, temperature_c, frame_count,
-                capture_date, folder_path
+                capture_date, folder_path, is_master
             ) VALUES (
                 :set_id, :frame_type, :camera, :ota, :filter,
                 :gain, :exposure_sec, :temperature_c, :frame_count,
-                :capture_date, :folder_path
+                :capture_date, :folder_path, :is_master
             )
             ON CONFLICT(set_id) DO UPDATE SET
                 filter       = excluded.filter,
                 frame_count  = excluded.frame_count,
                 capture_date = excluded.capture_date,
-                folder_path  = excluded.folder_path
+                folder_path  = excluded.folder_path,
+                is_master    = excluded.is_master
             """,
             cal_set,
         )
@@ -660,28 +666,91 @@ def _infer_frame_type(fits_path: Path, imagetyp: str | None) -> str:
     return "Unknown"
 
 
+_MASTER_PREFIX_RE = re.compile(r"^master(dark|bias|flat)", re.IGNORECASE)
+_MASTER_EXPOSURE_RE = re.compile(r"_(\d+(?:\.\d+)?)s(?:_|$)", re.IGNORECASE)
+_MASTER_TEMP_RE = re.compile(r"_(-?\d+)C(?:_|$)", re.IGNORECASE)
+_MASTER_GAIN_RE = re.compile(r"_gain(\d+)", re.IGNORECASE)
+_MASTER_ISO_RE = re.compile(r"_ISO(\d+)", re.IGNORECASE)
+
+_MASTER_TYPE_MAP = {"dark": "Dark", "bias": "Bias", "flat": "Flat"}
+
+
+def _parse_master_filename(stem: str, camera: str) -> dict | None:
+    """Parse metadata from a master calibration filename (no FITS header needed).
+
+    Returns None if the stem doesn't match a recognised master pattern.
+    Camera is supplied from the directory structure (grandparent of Masters/).
+    """
+    m = _MASTER_PREFIX_RE.match(stem)
+    if not m:
+        return None
+    frame_type = _MASTER_TYPE_MAP.get(m.group(1).lower())
+    if not frame_type:
+        return None
+
+    exp_m = _MASTER_EXPOSURE_RE.search(stem)
+    exposure = _round_exposure(float(exp_m.group(1))) if exp_m else None
+
+    temp_m = _MASTER_TEMP_RE.search(stem)
+    temp = int(temp_m.group(1)) if temp_m else None
+
+    gain_m = _MASTER_GAIN_RE.search(stem)
+    iso_m = _MASTER_ISO_RE.search(stem)
+    if gain_m:
+        gain = int(gain_m.group(1))
+    elif iso_m:
+        gain = int(iso_m.group(1))
+    else:
+        gain = 0
+
+    return {
+        "frame_type": frame_type,
+        "camera": camera,
+        "gain": gain,
+        "exposure_sec": exposure,
+        "temperature_c": float(temp) if temp is not None else None,
+    }
+
+
 class CalibrationCataloger:
     @staticmethod
     def scan(calibration_root: Path) -> list[dict]:
-        """Recursively find and group calibration FITS files."""
+        """Recursively find and group calibration FITS files and master .xisf files."""
         groups: dict[tuple, dict] = {}
+
+        masters: list[dict] = []
 
         for dirpath, dirnames, filenames in os.walk(calibration_root):
             dirnames[:] = [d for d in dirnames if d != "@eaDir"]
+            cur_dir = Path(dirpath)
+            in_masters_dir = cur_dir.name.lower() == "masters"
+
             for fname in filenames:
-                if not fname.lower().endswith((".fit", ".fits")):
+                fpath = cur_dir / fname
+                flower = fname.lower()
+
+                # Master .xisf files live in Masters/ subdirs — parse from filename.
+                if flower.endswith(".xisf") and in_masters_dir:
+                    # Camera is the grandparent dir name (e.g. Darks/ZWOASI585MCPro/Masters/)
+                    camera = _normalize_camera(cur_dir.parent.name)
+                    parsed = _parse_master_filename(fpath.stem, camera)
+                    if parsed:
+                        masters.append({**parsed, "folder_path": str(fpath)})
                     continue
-                fits_path = Path(dirpath) / fname
-                meta = FITSHeaderExtractor.extract_metadata(fits_path)
+
+                if not flower.endswith((".fit", ".fits")):
+                    continue
+
+                meta = FITSHeaderExtractor.extract_metadata(fpath)
                 if not meta:
                     continue
 
-                frame_type = _infer_frame_type(fits_path, meta.get("imagetyp"))
+                frame_type = _infer_frame_type(fpath, meta.get("imagetyp"))
                 camera = _normalize_camera(meta["camera"])
                 gain = meta["gain"]
                 exposure = _round_exposure(meta["exposure"])
                 temp = round(meta["temperature"])
-                folder = str(fits_path.parent)
+                folder = str(fpath.parent)
                 obs_date = ""
                 if meta.get("date_obs"):
                     try:
@@ -741,6 +810,29 @@ class CalibrationCataloger:
                 "frame_count": group["count"],
                 "capture_date": group["capture_date"],
                 "folder_path": group["folder_path"],
+                "is_master": 0,
+            })
+
+        for m in masters:
+            camera = m["camera"]
+            camera_slug = _normalize_camera(camera)
+            gain_str = _format_gain(camera, m["gain"])
+            temp_str = f"{int(m['temperature_c'])}C" if m["temperature_c"] is not None else "unknownC"
+            exp_str = f"{m['exposure_sec']:.3g}s" if m["exposure_sec"] is not None else "0s"
+            set_id = f"{m['frame_type']}Master_{camera_slug}_{exp_str}_{gain_str}_{temp_str}"
+            cal_sets.append({
+                "set_id": set_id,
+                "frame_type": m["frame_type"],
+                "camera": camera,
+                "ota": None,
+                "filter": None,
+                "gain": m["gain"],
+                "exposure_sec": m["exposure_sec"],
+                "temperature_c": m["temperature_c"],
+                "frame_count": 1,
+                "capture_date": "",
+                "folder_path": m["folder_path"],
+                "is_master": 1,
             })
 
         return cal_sets
