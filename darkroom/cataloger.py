@@ -19,8 +19,6 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-import astropy.units as u
-from astropy.coordinates import SkyCoord
 from astropy.io import fits
 from astropy.time import Time
 
