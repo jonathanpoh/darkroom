@@ -13,12 +13,12 @@ from pathlib import Path
 import yaml
 
 from darkroom.cataloger import (
-    _normalize_camera,
     init_db,
     make_session_id,
     upsert_calibration_set,
     upsert_session,
 )
+from darkroom.names import _normalize_camera
 from darkroom.config import resolve_catalog, resolve_path
 from darkroom.scanner import CalibrationGroup, Session, ScanResult, scan_source
 

@@ -4,12 +4,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from astropy.time import Time
-from darkroom.cataloger import (
-    FITSHeaderExtractor,
-    _normalize_camera,
-    _round_exposure,
-    compute_imaging_night,
-)
+from darkroom.cataloger import FITSHeaderExtractor, compute_imaging_night
+from darkroom.names import _normalize_camera, _round_exposure
 from darkroom.parse import fits_files, parse_filter, parse_ota
 
 

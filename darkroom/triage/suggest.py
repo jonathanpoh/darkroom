@@ -17,7 +17,8 @@ from pathlib import Path
 
 from astropy.time import Time
 
-from darkroom.cataloger import FITSHeaderExtractor, _normalize_camera
+from darkroom.cataloger import FITSHeaderExtractor
+from darkroom.names import _normalize_camera
 from darkroom.ingest import cal_dest_rel
 from darkroom.parse import parse_filter, parse_ota
 
