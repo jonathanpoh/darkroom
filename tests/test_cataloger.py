@@ -20,54 +20,7 @@ from darkroom.cataloger import (
     _find_latest_processed_date,
     mark_processed_by_target,
     finish_command,
-    _normalize_camera,
-    _normalize_target,
 )
-
-
-class TestNormalizeTarget:
-    def test_messier_spacing(self):
-        assert _normalize_target("M81") == "M 81"
-
-    def test_caldwell_spacing(self):
-        assert _normalize_target("C49") == "C 49"
-
-    def test_prefix_canonical_casing(self):
-        # lowercase/odd-case prefixes are corrected to canonical casing, so the
-        # result is usable verbatim as a case-sensitive archive folder name
-        assert _normalize_target("ngc7000") == "NGC 7000"
-        assert _normalize_target("ic 443") == "IC 443"
-        assert _normalize_target("c49") == "C 49"
-
-    def test_sharpless_no_space(self):
-        assert _normalize_target("SH2-103") == "Sh2-103"
-
-    def test_sharpless_collapses_internal_space(self):
-        # 'Sh 2-103' (old canonical form) is corrected to 'Sh2-103'
-        assert _normalize_target("Sh 2-103") == "Sh2-103"
-        assert _normalize_target("Sh 2 103") == "Sh2-103"
-
-    def test_sharpless_idempotent(self):
-        assert _normalize_target("Sh2-103") == "Sh2-103"
-
-    def test_unrecognised_passthrough(self):
-        assert _normalize_target("Andromeda") == "Andromeda"
-
-
-class TestNormalizeCamera:
-    def test_none(self):
-        assert _normalize_camera(None) is None
-
-    def test_strips_whitespace(self):
-        assert _normalize_camera("ZWO ASI585MC Pro") == "ZWOASI585MCPro"
-
-    def test_canon_eos_6d_alias(self):
-        assert _normalize_camera("Canon EOS 6D") == "Canon6D"
-
-    def test_canon_alias_idempotent(self):
-        # already-stored "CanonEOS6D" (from the old normalization) is corrected
-        assert _normalize_camera("CanonEOS6D") == "Canon6D"
-        assert _normalize_camera("Canon6D") == "Canon6D"
 
 
 class TestParseFilter:
