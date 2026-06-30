@@ -84,7 +84,7 @@ def _scan_lights(light_root: Path) -> list[Session]:
             continue
 
         pairs: list[tuple[dict, Path]] = []
-        for path in fits_files(target_dir):
+        for path in fits_files(target_dir, recursive=True):
             meta = FITSHeaderExtractor.extract_metadata(path)
             if meta:
                 pairs.append((meta, path))
@@ -166,7 +166,10 @@ def _scan_calibration(source: Path) -> list[CalibrationGroup]:
             camera = _normalize_camera(meta["camera"])
             exposure = _round_exposure(meta["exposure"])
             ota = parse_ota(meta.get("focallen"))
-            key = (frame_type, camera, ota, filter_, meta["gain"], exposure, temp_rounded, capture_date)
+            # Flats and FlatDarks are temperature-insensitive (like bias frames),
+            # so don't split groups by temperature.
+            temp_key = None if frame_type in ("Flat", "FlatDark", "Bias") else temp_rounded
+            key = (frame_type, camera, ota, filter_, meta["gain"], exposure, temp_key, capture_date)
 
             if key not in groups:
                 groups[key] = CalibrationGroup(

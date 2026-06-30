@@ -107,11 +107,12 @@ def ota_from_focallen(focal_length: int | float | None) -> str:
     return parse_ota(focal_length)
 
 
-def fits_files(directory: Path) -> list[Path]:
+def fits_files(directory: Path, recursive: bool = False) -> list[Path]:
     """Return sorted FITS files in directory, excluding thumbnails."""
     if not directory.is_dir():
         return []
+    iterator = directory.rglob("*") if recursive else directory.iterdir()
     return sorted(
-        f for f in directory.iterdir()
+        f for f in iterator
         if f.suffix.lower() in (".fit", ".fits") and "_thn" not in f.name
     )

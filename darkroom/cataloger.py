@@ -399,6 +399,7 @@ def upsert_calibration_set(db_path: Path, cal_set: dict) -> None:
                 :capture_date, :folder_path
             )
             ON CONFLICT(set_id) DO UPDATE SET
+                filter       = excluded.filter,
                 frame_count  = excluded.frame_count,
                 capture_date = excluded.capture_date,
                 folder_path  = excluded.folder_path
