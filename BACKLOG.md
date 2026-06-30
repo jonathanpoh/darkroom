@@ -59,7 +59,13 @@ docs · **R** = refactor · **W** = web-UI prep.
 - **Tests:** Add a case where flat darks are dated one day after the flats and
   assert they get symlinked.
 
-### B3. `darkroom triage scan` scans the wrong DSO root
+### B3. `darkroom triage scan` scans the wrong DSO root — ✅ FIXED
+> Confirmed with the user: `01_Deep Sky Objects` is the actual current name on
+> both the work SSD and the NAS — no dual-support needed. Changed the constant
+> at `darkroom/triage/scanner.py:274`. Added the first-ever test coverage for
+> `scan_archive` itself (previously zero, which is why this went unnoticed).
+> Tests: `tests/triage/test_scanner.py::TestScanArchive`.
+
 - **Where:** `darkroom/triage/scanner.py:274` (`dso = archive_root / "04_Deep Sky Objects"`)
 - **Problem:** Canonical DSO root was renamed to `01_Deep Sky Objects` (commit
   4799a2b; `ingest.py:50`, `finish.py:46`, `cataloger.py:516` all use `01_`).
@@ -72,7 +78,14 @@ docs · **R** = refactor · **W** = web-UI prep.
   "04_Deep Sky Objects"): if (archive_root / name).exists(): …`). Triage is
   scaffolding, but right now it's a no-op on the current archive.
 
-### B4. `check_ra_dec` crashes the whole triage scan on sexagesimal RA/DEC
+### B4. `check_ra_dec` crashes the whole triage scan on sexagesimal RA/DEC — ✅ FIXED
+> Reused `darkroom.names._parse_coords` (the shared helper from R6) for both
+> the `SkyCoord` construction and the returned mismatch dict's `frame_ra`/
+> `frame_dec` fields (the same `float()` bug was duplicated in both places).
+> Returns `None` early when parsing fails instead of raising.
+> Tests: `tests/triage/test_checks.py::TestCheckRaDec` (`test_sexagesimal_coords_do_not_crash`,
+> `test_sexagesimal_mismatch_returns_degree_values`).
+
 - **Where:** `darkroom/triage/checks.py:63` (`SkyCoord(ra=float(ra), dec=float(dec), unit="deg")`)
 - **Problem:** `float(ra)` is *outside* the `try` block. The cataloger's
   `_parse_coords` (`cataloger.py:30-45`) deliberately handles both float-degrees
@@ -84,7 +97,17 @@ docs · **R** = refactor · **W** = web-UI prep.
   see **R6/W5**) to parse RA/DEC, and skip the frame (return `None`) when it
   can't be parsed.
 
-### B5. `wbpp` symlinks both the master AND the raw subs
+### B5. `wbpp` symlinks both the master AND the raw subs — ✅ FIXED
+> Confirmed intent from commit `5c8936d`'s message ("prefer... falling back to
+> raw subs"). Fixed by partitioning each matched row list into master-vs-raw
+> and using only the masters when any exist — not "break after the first
+> master row", which would have silently dropped legitimate additional master
+> rows at different capture temperatures (`find_darks`/`find_bias` don't filter
+> on temperature). Applied identically to both the Darks and Bias loops in
+> `darkroom/prep.py:_build_night`.
+> Tests: `tests/test_wbpp_finish.py` (`test_build_night_prefers_master_dark_over_raw_subs`,
+> `test_build_night_prefers_master_bias_over_raw_subs`).
+
 - **Where:** `darkroom/prep.py:137-143` (darks), `:152-159` (bias)
 - **Problem:** The loops iterate every row from `find_darks`/`find_bias`
   (masters ordered first) and symlink all of them. When a master `.xisf` *and*
@@ -100,7 +123,15 @@ docs · **R** = refactor · **W** = web-UI prep.
 
 ## P2 — Minor / docs
 
-### B6. Stale `04_Deep Sky Objects` in help/docstrings
+### B6. Stale `04_Deep Sky Objects` in help/docstrings — ✅ FIXED
+> Renamed all 15 remaining `04_` occurrences across `darkroom/catalog_cli.py`,
+> `darkroom/cataloger.py`, `darkroom/finish.py`, `CLAUDE.md`, `CHEATSHEET.md`,
+> `README.md`. Deliberately left untouched: `docs/superpowers/plans/*.md` /
+> `docs/superpowers/specs/*.md` (historical records from when `04_` was
+> current), test fixture literals (arbitrary placeholder strings, behaviorally
+> inert), and `darkroom/cataloger.py:120`'s docstring (deliberately documents
+> that `_target_from_path`'s matching logic supports either prefix).
+
 - `darkroom/finish.py:250` (subparser description says `04_`, code writes `01_`),
   `darkroom/cataloger.py:1027`, `:1084-1085` (legacy epilog/help).
 - Update to `01_`. Also reconcile `CLAUDE.md`, which mixes `04_` and `01_`.
@@ -150,7 +181,14 @@ docs · **R** = refactor · **W** = web-UI prep.
   uses `parse.fits_files` (recursive option). Route both through
   `parse.fits_files`.
 
-### R6. Extract name/coord helpers out of `cataloger.py` into a lightweight module
+### R6. Extract name/coord helpers out of `cataloger.py` into a lightweight module — ✅ FIXED
+> Moved `_normalize_target`, `_normalize_camera`, `_format_gain`, `_parse_coords`,
+> `_round_exposure` into `darkroom/names.py` — stdlib-only at module load; the
+> astropy import for `_parse_coords`'s sexagesimal fallback is lazy (inside the
+> function, not at module scope). `cataloger.py` and all other callers
+> (`ingest.py`, `scanner.py`, `triage/suggest.py`) now import from there.
+> Tests: `tests/test_names.py`.
+
 - `_normalize_target`, `_normalize_camera`, `_format_gain`, `_parse_coords`,
   `_round_exposure` live in `cataloger.py`, which top-level imports
   `astropy.io.fits`, `SkyCoord`, `Time`, `astroquery`. Anything importing these
@@ -211,18 +249,43 @@ docs · **R** = refactor · **W** = web-UI prep.
   `query_all_sessions` has no pagination (full-table) — fine at current scale
   (dozens–hundreds of rows) but add `LIMIT/OFFSET` before the UI grows.
 
-### W5. Decouple the read layer from astropy
+### W5. Decouple the read layer from astropy — ✅ FIXED
+> `catalog.py:6` now imports `_normalize_target` from `darkroom.names` instead of
+> `darkroom.cataloger`. Regression test (subprocess-isolated, since sibling test
+> files import astropy-heavy `cataloger.py` first and would otherwise pollute an
+> in-process `sys.modules` check):
+> `tests/test_catalog.py::test_importing_catalog_does_not_pull_in_astropy`.
+
 - See **R6**. The web backend's read path should not pay astropy import cost /
   dependency surface. After R6, `catalog.py` and the new `catalog/db.py` import
   only the lightweight name helpers.
 
-### W6. Enable WAL mode in `init_db`
+### W6. Enable WAL mode in `init_db` — ✅ FIXED
+> `init_db` now runs `conn.execute("PRAGMA journal_mode=WAL")` immediately after
+> connecting, before `executescript`. Test:
+> `tests/test_cataloger.py::TestSQLiteCatalog::test_init_db_enables_wal`.
+
 - No `PRAGMA journal_mode=WAL` today. A browser reading while `ingest commit` /
   `finish` writes will hit `database is locked`. Add
   `conn.execute("PRAGMA journal_mode=WAL")` in `init_db` (`cataloger.py:252`).
   One line, big concurrency win.
 
-### W7. Indexes + timestamps
+### W7. Indexes + timestamps — ✅ FIXED (target/obs_date indexes + created_at/updated_at)
+> Added `idx_sessions_target` / `idx_sessions_obs_date`. Added `created_at` /
+> `updated_at` `TEXT` columns to `sessions` and `calibration_sets` — set
+> explicitly in Python inside `upsert_session` / `upsert_calibration_set`, **not**
+> a SQL `DEFAULT`: SQLite refuses a non-constant `ALTER TABLE ADD COLUMN` default
+> on a table that already has rows (verified empirically against the populated-DB
+> migration path), so `DEFAULT (datetime('now'))` as originally suggested below
+> would crash on the real `astro_catalog.db`. `created_at` is preserved across
+> re-scans (excluded from `ON CONFLICT DO UPDATE`); `updated_at` refreshes on
+> every write. Migration backfills existing `NULL` rows once. The
+> `processed_state` index from the original ask is deferred — that column
+> doesn't exist until **W1** lands.
+> Tests: `tests/test_cataloger.py::TestSQLiteCatalog` (`test_init_db_creates_indexes`,
+> `test_init_db_adds_timestamp_columns`, `test_init_db_backfills_timestamps_on_existing_rows`,
+> `test_upsert_session_sets_created_and_updated_at`).
+
 - Only the PK is indexed. Add indexes on `target`, `obs_date`, `processed_state`
   (post-W1). Add `created_at` / `updated_at` (`DEFAULT (datetime('now'))`, as
   triage's tables have) to `sessions` and `calibration_sets` so the UI can show
@@ -237,12 +300,13 @@ docs · **R** = refactor · **W** = web-UI prep.
 ---
 
 ## Suggested order for a future session
-1. **B1 + B2** (finish + flat-darks) — silent data-pipeline failures, with tests.
+1. **B1 + B2** (finish + flat-darks) — silent data-pipeline failures, with tests. ✅ DONE
 2. **R6 + W5/W6/W7** schema+helper groundwork (move name helpers, WAL, indexes,
-   timestamps) — unblocks the web work and B4.
+   timestamps) — unblocks the web work and B4. ✅ DONE
 3. **B4** (reuse `_parse_coords`), **B3** (confirm `01_` vs `04_`), **B5** (after
-   verifying intended master/raw behaviour).
-4. **W1/W2/W3/W4** the real web-UI data-model + API prep.
-5. **R1–R5, B6, B7** cleanup as capacity allows.
+   verifying intended master/raw behaviour). ✅ DONE — B6 (doc-wide `04_`→`01_`
+   rename) folded in alongside B3 at the user's request.
+4. **W1/W2/W3/W4** the real web-UI data-model + API prep. ← next
+5. **R1–R5, B7** cleanup as capacity allows.
 </content>
 </invoke>
