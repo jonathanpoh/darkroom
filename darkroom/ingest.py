@@ -18,8 +18,8 @@ from darkroom.cataloger import (
     upsert_calibration_set,
     upsert_session,
 )
-from darkroom.names import _normalize_camera
 from darkroom.config import resolve_catalog, resolve_path
+from darkroom.names import _normalize_camera
 from darkroom.scanner import CalibrationGroup, Session, ScanResult, scan_source
 
 
