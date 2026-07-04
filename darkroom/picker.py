@@ -14,17 +14,30 @@ from darkroom.catalog import query_all_sessions
 # ── pure helpers ─────────────────────────────────────────────────────────────
 
 def is_processed(row: dict) -> bool:
-    """True iff processed_status is set to a non-blank value."""
-    status = row.get("processed_status")
-    return status is not None and status.strip() != ""
+    """True iff the session's structured processed_state is 'processed'."""
+    return row.get("processed_state") == "processed"
+
+
+def needs_processing(row: dict) -> bool:
+    """True iff the session is still a candidate for processing.
+
+    Only 'unprocessed' sessions are candidates. 'processed' and 'skipped' are
+    both *settled* states: a skipped night was deliberately set aside (bad
+    tracking, clouds, …), so the picker treats it like a processed one — not
+    pre-checked, not counted as backlog — while still listing it so the choice
+    can be overridden. Anything without an explicit state defaults to a
+    candidate.
+    """
+    return (row.get("processed_state") or "unprocessed") == "unprocessed"
 
 
 def summarize_targets(rows: list[dict]) -> list[dict]:
     """One summary dict per target, sorted by latest_date descending.
 
     Each summary: target, night_count (distinct obs_dates), unprocessed_count
-    (distinct obs_dates with at least one unprocessed row), total_hours
-    (sum of total_integration_sec/3600, None-safe), latest_date.
+    (distinct obs_dates with at least one row still needing processing —
+    skipped nights don't count), total_hours (sum of total_integration_sec/
+    3600, None-safe), latest_date.
     """
     by_target: dict[str, list[dict]] = {}
     for row in rows:
@@ -33,7 +46,7 @@ def summarize_targets(rows: list[dict]) -> list[dict]:
     summaries = []
     for target, trows in by_target.items():
         dates = {r["obs_date"] for r in trows}
-        unprocessed_dates = {r["obs_date"] for r in trows if not is_processed(r)}
+        unprocessed_dates = {r["obs_date"] for r in trows if needs_processing(r)}
         total_hours = sum(r["total_integration_sec"] or 0 for r in trows) / 3600
         summaries.append({
             "target": target,
@@ -47,10 +60,10 @@ def summarize_targets(rows: list[dict]) -> list[dict]:
 
 
 def target_meta(summary: dict) -> str:
-    """e.g. '3 nights · 15.9h · 2 unprocessed', or '... · all processed'."""
+    """e.g. '3 nights · 15.9h · 2 unprocessed', or '... · nothing to process'."""
     base = f"{summary['night_count']} nights · {summary['total_hours']:.1f}h"
     if summary["unprocessed_count"] == 0:
-        return f"{base} · all processed"
+        return f"{base} · nothing to process"
     return f"{base} · {summary['unprocessed_count']} unprocessed"
 
 
@@ -59,7 +72,9 @@ def group_nights(rows: list[dict]) -> list[dict]:
 
     Each night dict: obs_date, filters (comma-joined, filter or "NoFilter"),
     frame_count (sum, None-safe), total_hours, processed (True iff every row
-    in the night is processed), rows (the original row dicts).
+    in the night is processed), candidate (True iff any row still needs
+    processing — drives the pre-check; a night that is entirely
+    processed/skipped is not a candidate), rows (the original row dicts).
     """
     by_date: dict[str, list[dict]] = {}
     for row in rows:
@@ -76,6 +91,7 @@ def group_nights(rows: list[dict]) -> list[dict]:
             "frame_count": frame_count,
             "total_hours": total_hours,
             "processed": all(is_processed(r) for r in drows),
+            "candidate": any(needs_processing(r) for r in drows),
             "rows": drows,
         })
     nights.sort(key=lambda n: n["obs_date"], reverse=True)
@@ -83,13 +99,21 @@ def group_nights(rows: list[dict]) -> list[dict]:
 
 
 def night_label(night: dict) -> str:
-    """e.g. '2026-06-21  L-Pro  132f  6.6h', with '  [processed ✓]' appended."""
+    """e.g. '2026-06-21  L-Pro  132f  6.6h'.
+
+    Appends '  [processed ✓]' when every row is processed, or '  [skipped]'
+    when the night is settled (nothing left to process) but not fully
+    processed — i.e. one or more rows were deliberately skipped. A night with
+    work still to do gets no tag.
+    """
     label = (
         f"{night['obs_date']}  {night['filters']}  "
         f"{night['frame_count']}f  {night['total_hours']:.1f}h"
     )
     if night["processed"]:
         label += "  [processed ✓]"
+    elif not night.get("candidate", True):
+        label += "  [skipped]"
     return label
 
 
@@ -170,7 +194,7 @@ def pick_sessions(catalog: Path) -> list[dict] | None:
     nights = group_nights(target_rows)
     choices = [
         questionary.Choice(
-            title=night_label(night), value=night["obs_date"], checked=not night["processed"]
+            title=night_label(night), value=night["obs_date"], checked=night["candidate"]
         )
         for night in nights
     ]

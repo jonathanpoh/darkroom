@@ -8,6 +8,7 @@ from darkroom.cataloger import init_db, upsert_session
 from darkroom.picker import (
     group_nights,
     is_processed,
+    needs_processing,
     night_label,
     summarize_targets,
     target_meta,
@@ -23,7 +24,7 @@ def make_session(
     filter_: str | None = None,
     frame_count: int | None = 10,
     total_integration_sec: int | None = 3600,
-    processed_status: str = "",
+    processed_state: str = "unprocessed",
 ) -> dict:
     return {
         "session_id": session_id,
@@ -41,27 +42,46 @@ def make_session(
         "ra_deg": None,
         "dec_deg": None,
         "lights_path": f"path/{session_id}",
-        "processed_status": processed_status,
+        "processed_state": processed_state,
         "notes": "",
     }
 
 
 # ── is_processed ─────────────────────────────────────────────────────────────
 
-def test_is_processed_none():
-    assert is_processed({"processed_status": None}) is False
+def test_is_processed_missing_key():
+    assert is_processed({}) is False
 
 
-def test_is_processed_empty_string():
-    assert is_processed({"processed_status": ""}) is False
+def test_is_processed_unprocessed():
+    assert is_processed({"processed_state": "unprocessed"}) is False
 
 
-def test_is_processed_whitespace_only():
-    assert is_processed({"processed_status": "  "}) is False
+def test_is_processed_skipped():
+    assert is_processed({"processed_state": "skipped"}) is False
 
 
 def test_is_processed_real_value():
-    assert is_processed({"processed_status": "2026-06-05"}) is True
+    assert is_processed({"processed_state": "processed"}) is True
+
+
+# ── needs_processing ─────────────────────────────────────────────────────────
+
+def test_needs_processing_unprocessed_is_candidate():
+    assert needs_processing({"processed_state": "unprocessed"}) is True
+
+
+def test_needs_processing_missing_key_defaults_candidate():
+    assert needs_processing({}) is True
+
+
+def test_needs_processing_processed_is_not_candidate():
+    assert needs_processing({"processed_state": "processed"}) is False
+
+
+def test_needs_processing_skipped_is_not_candidate():
+    # A skipped night is settled — deliberately set aside, not a candidate.
+    assert needs_processing({"processed_state": "skipped"}) is False
 
 
 # ── summarize_targets ────────────────────────────────────────────────────────
@@ -69,13 +89,13 @@ def test_is_processed_real_value():
 def test_summarize_targets_counts_and_ordering():
     rows = [
         make_session("m81_1", "M 81", "2026-06-01", filter_="L-Pro",
-                     total_integration_sec=1800, processed_status=""),
+                     total_integration_sec=1800, processed_state="unprocessed"),
         make_session("m81_2", "M 81", "2026-06-01", filter_="Ha",
-                     total_integration_sec=None, processed_status="2026-06-05"),
+                     total_integration_sec=None, processed_state="processed"),
         make_session("m81_3", "M 81", "2026-06-10", filter_=None,
-                     total_integration_sec=3600, processed_status=""),
+                     total_integration_sec=3600, processed_state="unprocessed"),
         make_session("ngc_1", "NGC 7000", "2026-06-15", filter_="L-eXtreme",
-                     total_integration_sec=7200, processed_status="2026-06-20"),
+                     total_integration_sec=7200, processed_state="processed"),
     ]
     summaries = summarize_targets(rows)
 
@@ -99,7 +119,20 @@ def test_summarize_targets_counts_and_ordering():
 
 def test_target_meta_all_processed():
     summary = {"night_count": 1, "total_hours": 2.0, "unprocessed_count": 0}
-    assert target_meta(summary) == "1 nights · 2.0h · all processed"
+    assert target_meta(summary) == "1 nights · 2.0h · nothing to process"
+
+
+def test_summarize_targets_skipped_night_not_counted_unprocessed():
+    rows = [
+        make_session("s_1", "M 51", "2026-06-01", filter_="L-Pro",
+                     processed_state="skipped"),
+        make_session("s_2", "M 51", "2026-06-02", filter_="L-Pro",
+                     processed_state="unprocessed"),
+    ]
+    summary = next(s for s in summarize_targets(rows) if s["target"] == "M 51")
+    # Two nights, but only the unprocessed one counts as backlog.
+    assert summary["night_count"] == 2
+    assert summary["unprocessed_count"] == 1
 
 
 def test_target_meta_some_unprocessed():
@@ -112,12 +145,12 @@ def test_target_meta_some_unprocessed():
 def test_group_nights_multi_filter_and_ordering_and_nofilter():
     rows = [
         make_session("m81_1", "M 81", "2026-06-01", filter_="L-Pro",
-                     frame_count=50, total_integration_sec=1800, processed_status=""),
+                     frame_count=50, total_integration_sec=1800, processed_state="unprocessed"),
         make_session("m81_2", "M 81", "2026-06-01", filter_="Ha",
                      frame_count=None, total_integration_sec=None,
-                     processed_status="2026-06-05"),
+                     processed_state="processed"),
         make_session("m81_3", "M 81", "2026-06-10", filter_=None,
-                     frame_count=132, total_integration_sec=3600, processed_status=""),
+                     frame_count=132, total_integration_sec=3600, processed_state="unprocessed"),
     ]
     nights = group_nights(rows)
 
@@ -129,27 +162,56 @@ def test_group_nights_multi_filter_and_ordering_and_nofilter():
     assert night_10["frame_count"] == 132
     assert night_10["total_hours"] == pytest.approx(1.0)
     assert night_10["processed"] is False
+    assert night_10["candidate"] is True
 
     night_01 = nights[1]
     # Multi-filter night grouped into a single entry, filters comma-joined
     assert night_01["filters"] == "L-Pro, Ha"
     assert night_01["frame_count"] == 50  # None-safe sum
     assert night_01["total_hours"] == pytest.approx(0.5)
-    # Mixed processed/unprocessed rows -> not fully processed
+    # Mixed processed/unprocessed rows -> not fully processed, still a candidate
     assert night_01["processed"] is False
+    assert night_01["candidate"] is True
     assert len(night_01["rows"]) == 2
 
 
 def test_group_nights_processed_true_only_when_all_rows_processed():
     rows = [
         make_session("ngc_1", "NGC 7000", "2026-06-15", filter_="L-eXtreme",
-                     processed_status="2026-06-20"),
+                     processed_state="processed"),
         make_session("ngc_2", "NGC 7000", "2026-06-15", filter_="SII",
-                     processed_status="2026-06-20"),
+                     processed_state="processed"),
     ]
     nights = group_nights(rows)
     assert len(nights) == 1
     assert nights[0]["processed"] is True
+    assert nights[0]["candidate"] is False
+
+
+def test_group_nights_skipped_night_is_settled_not_candidate():
+    rows = [
+        make_session("sk_1", "M 51", "2026-06-15", filter_="L-Pro",
+                     processed_state="skipped"),
+    ]
+    nights = group_nights(rows)
+    assert len(nights) == 1
+    # Skipped is settled: not a candidate (won't be pre-checked) and not
+    # "processed" (so it gets the [skipped] label, not [processed ✓]).
+    assert nights[0]["candidate"] is False
+    assert nights[0]["processed"] is False
+
+
+def test_group_nights_unprocessed_plus_skipped_is_candidate():
+    # If even one row still needs processing, the night stays a candidate.
+    rows = [
+        make_session("mix_1", "M 51", "2026-06-15", filter_="L-Pro",
+                     processed_state="skipped"),
+        make_session("mix_2", "M 51", "2026-06-15", filter_="Ha",
+                     processed_state="unprocessed"),
+    ]
+    nights = group_nights(rows)
+    assert nights[0]["candidate"] is True
+    assert nights[0]["processed"] is False
 
 
 # ── night_label ──────────────────────────────────────────────────────────────
@@ -168,6 +230,15 @@ def test_night_label_processed():
         "frame_count": 132, "total_hours": 6.6, "processed": True,
     }
     assert night_label(night) == "2026-06-21  L-Pro  132f  6.6h  [processed ✓]"
+
+
+def test_night_label_skipped():
+    night = {
+        "obs_date": "2026-06-21", "filters": "L-Pro",
+        "frame_count": 132, "total_hours": 6.6, "processed": False,
+        "candidate": False,
+    }
+    assert night_label(night) == "2026-06-21  L-Pro  132f  6.6h  [skipped]"
 
 
 # ── _resolve_rows ────────────────────────────────────────────────────────────
