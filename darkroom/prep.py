@@ -17,6 +17,7 @@ from darkroom.catalog import (
 )
 from darkroom.config import resolve_catalog, resolve_path
 from darkroom.parse import fits_files
+from darkroom.picker import group_nights, pick_sessions
 from darkroom.wbpp import (
     clear_sessions,
     discover_darks,
@@ -207,34 +208,69 @@ def _build_night(
             print(f"  Flats/FILTER_{filter_name}/      0 symlinks  [no flats found — skipped]")
 
 
-def cmd_prep(
-    *,
+def _resolve_rows(
     catalog: Path,
-    output: Path,
-    wbpp_root: Path,
+    *,
     target: str | None,
-    obs_date: str | None,
+    dates: list[str] | None,
     session_id: str | None,
-    overwrite: bool = False,
-    flat_window: int = 3,
-) -> None:
+) -> tuple[str, list[dict]]:
+    """Resolve --target/--date(s)/--session into (canonical target name, rows).
+
+    Never silently narrows to a subset: if any requested date has no rows,
+    exits loudly listing what was missing and what nights ARE available.
+    """
     if session_id:
         rows = query_sessions(catalog, session_id=session_id)
         if not rows:
             sys.exit(f"Session not found: {session_id}")
-        target_name = rows[0]["target"]
-    elif target:
-        rows = query_sessions(catalog, target=target, obs_date=obs_date)
+        return rows[0]["target"], rows
+
+    if target:
+        rows = query_sessions(catalog, target=target)
         if not rows:
-            date_info = f" on {obs_date}" if obs_date else ""
-            sys.exit(f"No sessions found for target '{target}'{date_info}")
+            sys.exit(
+                f"No sessions found for target '{target}'.\n"
+                "Run 'darkroom wbpp' with no arguments for the interactive picker, "
+                "or 'darkroom wbpp --list' to browse targets."
+            )
         # Use the canonical target name from the catalog, not the raw arg, so the
         # WBPP folder name is stable regardless of how --target was typed. This
         # keeps the wbpp→finish handoff working (finish derives the same slug).
         target_name = rows[0]["target"]
-    else:
-        sys.exit("Specify --target or --session")
 
+        if dates:
+            wanted = set(dates)
+            selected = [r for r in rows if r["obs_date"] in wanted]
+            missing = sorted(wanted - {r["obs_date"] for r in selected})
+            if missing:
+                lines = [
+                    f"No sessions found for '{target_name}' on: {', '.join(missing)}",
+                    "Available nights:",
+                ]
+                for night in group_nights(rows):
+                    lines.append(
+                        f"  {night['obs_date']}  {night['filters']}  {night['frame_count']} frames"
+                    )
+                sys.exit("\n".join(lines))
+            return target_name, selected
+
+        return target_name, rows
+
+    sys.exit("Specify --target or --session")
+
+
+def build_wbpp_sessions(
+    rows: list[dict],
+    *,
+    catalog: Path,
+    output: Path,
+    wbpp_root: Path,
+    target_name: str,
+    overwrite: bool = False,
+    flat_window: int = 3,
+) -> None:
+    """Build SESSION_N dirs under wbpp_root/<slug>/ for the given (resolved) rows."""
     slug = _target_slug(target_name)
     target_dir = wbpp_root / slug
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -267,6 +303,77 @@ def cmd_prep(
     print(f"\nSet WBPP output directory to: {output_dir}/")
 
 
+def cmd_prep(
+    *,
+    catalog: Path,
+    output: Path,
+    wbpp_root: Path,
+    target: str | None,
+    obs_dates: list[str] | None = None,
+    session_id: str | None = None,
+    overwrite: bool = False,
+    flat_window: int = 3,
+) -> None:
+    """Resolve --target/--date(s)/--session, then build SESSION_N dirs."""
+    target_name, rows = _resolve_rows(
+        catalog, target=target, dates=obs_dates, session_id=session_id
+    )
+    build_wbpp_sessions(
+        rows,
+        catalog=catalog,
+        output=output,
+        wbpp_root=wbpp_root,
+        target_name=target_name,
+        overwrite=overwrite,
+        flat_window=flat_window,
+    )
+
+
+# ── interactive picker ───────────────────────────────────────────────────────
+
+def _run_interactive(
+    catalog: Path, *, output: Path, wbpp_root: Path, overwrite: bool, flat_window: int
+) -> None:
+    """Prompt for a target + nights, confirm, then build SESSION_N dirs."""
+    import questionary  # lazy: only the interactive path needs the dependency
+
+    rows = pick_sessions(catalog)
+    if not rows:
+        sys.exit("Nothing selected.")
+
+    target_name = rows[0]["target"]
+    target_dir = wbpp_root / _target_slug(target_name)
+
+    if next_session_num(target_dir) > 1:
+        action = questionary.select(
+            f"{target_dir} already has SESSION_N dirs. What now?",
+            choices=[
+                "Append new SESSION dirs",
+                "Regenerate (clear existing SESSION dirs)",
+                "Abort",
+            ],
+        ).ask()
+        if action is None or action == "Abort":
+            sys.exit("Aborted.")
+        overwrite = action.startswith("Regenerate")
+
+    nights = sorted({r["obs_date"] for r in rows})
+    total_lights = sum(r["frame_count"] or 0 for r in rows)
+    summary = f"{len(nights)} night(s), {total_lights} light frames → {target_dir}/"
+    if not questionary.confirm(f"Proceed? {summary}", default=True).ask():
+        sys.exit("Aborted.")
+
+    build_wbpp_sessions(
+        rows,
+        catalog=catalog,
+        output=output,
+        wbpp_root=wbpp_root,
+        target_name=target_name,
+        overwrite=overwrite,
+        flat_window=flat_window,
+    )
+
+
 # ── argument parsing ──────────────────────────────────────────────────────────
 
 def run(args: argparse.Namespace) -> None:
@@ -277,8 +384,12 @@ def run(args: argparse.Namespace) -> None:
         cmd_list(catalog, args.target)
         return
 
-    if not args.target and not args.session:
-        sys.exit("Error: specify --target or --session (or --list to browse)")
+    interactive = not args.target and not args.session
+    if interactive and not sys.stdin.isatty():
+        sys.exit(
+            "Error: no --target/--session given and no TTY for the interactive "
+            "picker. Specify --target or --session (or --list to browse)."
+        )
 
     output = resolve_path(args.archive, "DARKROOM_ARCHIVE", "archive_path")
     if output is None:
@@ -286,12 +397,22 @@ def run(args: argparse.Namespace) -> None:
 
     wbpp_root = resolve_path(args.wbpp, "DARKROOM_WBPP", "wbpp_path") or Path("./WBPP")
 
+    if interactive:
+        _run_interactive(
+            catalog,
+            output=output,
+            wbpp_root=wbpp_root,
+            overwrite=args.overwrite,
+            flat_window=args.flat_window,
+        )
+        return
+
     cmd_prep(
         catalog=catalog,
         output=output,
         wbpp_root=wbpp_root,
         target=args.target,
-        obs_date=args.date,
+        obs_dates=args.date,
         session_id=args.session,
         overwrite=args.overwrite,
         flat_window=args.flat_window,
@@ -306,7 +427,9 @@ def add_subparser(subparsers) -> None:
     )
     p.add_argument("--list", action="store_true", help="List sessions from catalog")
     p.add_argument("--target", metavar="NAME", help='Target name (e.g. "M 81")')
-    p.add_argument("--date", metavar="YYYY-MM-DD", help="Restrict --target to one night")
+    p.add_argument("--date", metavar="YYYY-MM-DD", action="append",
+                   help="Restrict --target to this night (may be repeated to select "
+                        "multiple nights)")
     p.add_argument("--session", metavar="ID", help="Select single session by catalog ID")
     p.add_argument("--overwrite", action="store_true",
                    help="Clear and regenerate target WBPP dir before creating symlinks")

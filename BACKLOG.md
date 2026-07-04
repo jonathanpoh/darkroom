@@ -299,6 +299,56 @@ docs · **R** = refactor · **W** = web-UI prep.
 
 ---
 
+## U — CLI UX / interactive modes
+
+Captured 2026-07-04. Root complaint: the CLI demands exact recall (target
+designations, dates, session IDs, flag syntax) that nobody retains between
+bursty imaging runs, and mismatches fail with a shrug instead of showing what
+*does* exist. Recognition over recall.
+
+### U1. `darkroom wbpp` interactive session picker
+- Bare `darkroom wbpp` on a TTY launches a questionary-based picker:
+  fuzzy-autocomplete target selection (annotated with unprocessed-night count +
+  total integration) → per-night checkbox multi-select (unprocessed pre-checked,
+  processed shown ✓ unchecked) → confirm → existing build pipeline.
+- Kills the two worst frictions: remembering exact `--target`/`--date` values,
+  and the one-session-or-all-sessions limitation (arbitrary night subsets,
+  e.g. "just the four June 2026 nights").
+- Also: `--date` becomes repeatable (`--date A --date B`) for scripted subsets.
+- Design agreed 2026-07-04 (questionary dep; bare-invocation entry; repeatable
+  `--date`, no `--from/--to`). Internal refactor: split "resolve sessions" from
+  "build dirs" in `prep.py:cmd_prep` so picker and flags feed the same build path.
+
+### U2. Filter-assignment cleanup queue for `NoFilter`/`UnknownFilter` sessions
+- ASIAir doesn't write FILTER headers and Jonathan didn't always log filters, so
+  the archive has sessions cataloged `NoFilter`/`UnknownFilter` that may be
+  wrong — which silently poisons flat matching (`find_flats` keys on filter).
+- Wanted: a review queue (natural fit: triage UI, alongside its existing checks)
+  listing suspect sessions with context to jog memory — flats sets that exist
+  near the session date, filters used by neighbouring sessions of the same
+  target/OTA, exposure/gain hints.
+- Applying a fix must update **both** the folder name (session dir encodes the
+  filter) and the catalog row — note this crosses triage's current "never writes
+  the catalog" boundary; either extend triage deliberately or make it a
+  `catalog`-native command. Related to the deferred triage finalize/promote
+  workflow.
+
+### U3. `darkroom ingest` interactive confirmation mode
+- Extend the existing `ingest review` verb (today: a bare missing-filter prompt
+  loop, `ingest.py:85-117`) into a full interactive confirmation pass over a
+  scanned manifest: for each session/calibration group, confirm or correct the
+  values parsed from ASIAir-generated FITS filenames — **filter**, **target
+  name** (normalize odd ASIAir spellings to catalog designations), and
+  **OTA+camera** (focal-length inference can be wrong for new/unknown optics).
+- Same questionary UX as U1: autocomplete against known catalog values
+  (existing targets, known filters, known OTA/camera combos) so corrections are
+  picks, not typing. Writes the corrected manifest; `ingest commit` stays
+  non-interactive (CCC/no-TTY constraint untouched).
+- Goal: stop `NoFilter`/`Unknown` values entering the archive at ingest time —
+  U2 cleans up the backlog, U3 closes the tap.
+
+---
+
 ## Suggested order for a future session
 1. **B1 + B2** (finish + flat-darks) — silent data-pipeline failures, with tests. ✅ DONE
 2. **R6 + W5/W6/W7** schema+helper groundwork (move name helpers, WAL, indexes,
@@ -306,7 +356,10 @@ docs · **R** = refactor · **W** = web-UI prep.
 3. **B4** (reuse `_parse_coords`), **B3** (confirm `01_` vs `04_`), **B5** (after
    verifying intended master/raw behaviour). ✅ DONE — B6 (doc-wide `04_`→`01_`
    rename) folded in alongside B3 at the user's request.
-4. **W1/W2/W3/W4** the real web-UI data-model + API prep. ← next
-5. **R1–R5, B7** cleanup as capacity allows.
+4. **U1** wbpp interactive picker — biggest daily-use friction, small scope. ← in progress 2026-07-04
+5. **W1/W2/W3/W4** the real web-UI data-model + API prep.
+6. **U2/U3** filter cleanup queue + interactive ingest review (U3 benefits from
+   U1's picker helpers; U2 may want the W-series catalog write API first).
+7. **R1–R5, B7** cleanup as capacity allows.
 </content>
 </invoke>
