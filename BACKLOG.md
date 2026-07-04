@@ -306,7 +306,15 @@ designations, dates, session IDs, flag syntax) that nobody retains between
 bursty imaging runs, and mismatches fail with a shrug instead of showing what
 *does* exist. Recognition over recall.
 
-### U1. `darkroom wbpp` interactive session picker
+### U1. `darkroom wbpp` interactive session picker — ✅ DONE
+> Shipped 2026-07-04: `af69b4b` (picker + repeatable `--date`) and `e966200`
+> (explicit prompt style — questionary's default dropdown is unreadable on dark
+> terminals). New `darkroom/picker.py` (questionary imported lazily; module
+> import stays dep/TTY-free), `prep.py` split into `_resolve_rows` +
+> `build_wbpp_sessions`, loud failures listing available nights. Tests:
+> `tests/test_picker.py`. Interactive prompts verified by pty (pexpect), not
+> covered by the suite.
+
 - Bare `darkroom wbpp` on a TTY launches a questionary-based picker:
   fuzzy-autocomplete target selection (annotated with unprocessed-night count +
   total integration) → per-night checkbox multi-select (unprocessed pre-checked,
@@ -356,8 +364,8 @@ bursty imaging runs, and mismatches fail with a shrug instead of showing what
 3. **B4** (reuse `_parse_coords`), **B3** (confirm `01_` vs `04_`), **B5** (after
    verifying intended master/raw behaviour). ✅ DONE — B6 (doc-wide `04_`→`01_`
    rename) folded in alongside B3 at the user's request.
-4. **U1** wbpp interactive picker — biggest daily-use friction, small scope. ← in progress 2026-07-04
-5. **W1/W2/W3/W4** the real web-UI data-model + API prep.
+4. **U1** wbpp interactive picker — biggest daily-use friction, small scope. ✅ DONE 2026-07-04
+5. **W1/W2/W3/W4** the real web-UI data-model + API prep. ← next
 6. **U2/U3** filter cleanup queue + interactive ingest review (U3 benefits from
    U1's picker helpers; U2 may want the W-series catalog write API first).
 7. **R1–R5, B7** cleanup as capacity allows.
