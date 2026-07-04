@@ -61,7 +61,10 @@ def test_classify_target_subs_only_dir_both_lists_empty(tmp_path):
 
     ev = classify_target(target_dir, tmp_path)
 
-    assert ev == {"export_dates": [], "inprogress_dates": []}
+    assert ev == {
+        "export_dates": [], "inprogress_dates": [],
+        "logged_processed_nights": frozenset(), "logged_inprogress_nights": frozenset(),
+    }
 
 
 def test_classify_target_masterlight_xisf_is_inprogress_not_export(tmp_path):
@@ -140,7 +143,7 @@ def test_classify_target_nested_processed_date_at_depth(tmp_path):
 def test_classify_session_before_edit_date_is_processed():
     target_ev = {"export_dates": ["2025-04-26"], "inprogress_dates": []}
     state, evidence, ev_date = classify_session("2025-03-10", target_ev)
-    assert (state, evidence, ev_date) == ("processed", "export", "2025-04-26")
+    assert (state, evidence, ev_date) == ("processed", "date-bound", "2025-04-26")
 
 
 def test_classify_session_after_newest_edit_stays_unprocessed():
@@ -154,7 +157,7 @@ def test_classify_session_after_newest_edit_stays_unprocessed():
 def test_classify_session_in_progress_when_only_xisf_evidence():
     target_ev = {"export_dates": [], "inprogress_dates": ["2025-05-01"]}
     state, evidence, ev_date = classify_session("2025-04-01", target_ev)
-    assert (state, evidence, ev_date) == ("in_progress", "xisf/master", "2025-05-01")
+    assert (state, evidence, ev_date) == ("in_progress", "date-bound", "2025-05-01")
 
 
 def test_classify_session_export_outranks_inprogress():
@@ -175,6 +178,81 @@ def test_classify_session_no_evidence_is_unprocessed():
     assert classify_session("2026-02-19", {"export_dates": [], "inprogress_dates": []}) == (
         "unprocessed", "", None,
     )
+
+
+# ── classify_target / classify_session: F2 log evidence ─────────────────────
+
+def test_classify_target_no_logs_regresses_to_f1_behavior(tmp_path):
+    """A target with no WBPP logs at all: logged_* sets are empty and the
+    *_dates pools + classify_session outcome are byte-identical to F1."""
+    target_dir = tmp_path / "01_Deep Sky Objects" / "M 81"
+    touch(target_dir / "_Processed" / "2025-04-26" / "M81_final.tif")
+    touch(target_dir / "master" / "masterLight_stack.xisf")
+
+    ev = classify_target(target_dir, tmp_path)
+
+    assert ev["logged_processed_nights"] == frozenset()
+    assert ev["logged_inprogress_nights"] == frozenset()
+    assert ev["export_dates"] == ["2025-04-26"]
+    assert len(ev["inprogress_dates"]) == 1
+
+    state, evidence, ev_date = classify_session("2025-03-10", ev)
+    assert (state, evidence, ev_date) == ("processed", "date-bound", "2025-04-26")
+
+
+def test_classify_target_distinguishes_log_vs_date_bound_evidence(tmp_path):
+    archive = tmp_path / "archive"
+    target_dir = archive / "01_Deep Sky Objects" / "M 81"
+    run_dir = target_dir / "_Processed" / "2025-04-26" / "Title"
+    touch(run_dir / "logs" / "one.log",
+          b"Light_M81_180.0s_Bin1_ISO3200_20250320-233000_14.0C_0001.fit\n")
+    touch(run_dir / "M81_final.tif")
+    # A separate, un-logged loose master elsewhere under the target.
+    touch(target_dir / "loose" / "masterLight_stack.xisf")
+
+    ev = classify_target(target_dir, archive)
+
+    assert ev["logged_processed_nights"] == frozenset({"2025-03-20"})
+    # The run's own export is claimed by the run and excluded from the
+    # date-bound pool -- only the un-logged loose master remains there.
+    assert ev["export_dates"] == []
+    assert len(ev["inprogress_dates"]) == 1
+
+    state, evidence, ev_date = classify_session("2025-03-20", ev)
+    assert (state, evidence) == ("processed", "log")
+
+    state, evidence, ev_date = classify_session("2020-01-01", ev)
+    assert (state, evidence) == ("in_progress", "date-bound")
+
+
+def test_classify_session_logged_inprogress_when_run_has_no_export():
+    target_ev = {
+        "export_dates": [], "inprogress_dates": [],
+        "logged_processed_nights": frozenset(),
+        "logged_inprogress_nights": frozenset({"2025-03-20"}),
+    }
+    assert classify_session("2025-03-20", target_ev) == ("in_progress", "log", "2025-03-20")
+
+
+def test_classify_session_logged_processed_wins_over_logged_inprogress():
+    # A night present in both logged sets resolves to processed (checked first).
+    target_ev = {
+        "export_dates": [], "inprogress_dates": [],
+        "logged_processed_nights": frozenset({"2025-03-20"}),
+        "logged_inprogress_nights": frozenset({"2025-03-20"}),
+    }
+    assert classify_session("2025-03-20", target_ev) == ("processed", "log", "2025-03-20")
+
+
+def test_classify_session_logged_night_ignores_date_bound_pools():
+    # Even if a date-bound pool would also cover it, a logged night takes the
+    # exact log attribution (evidence == "log", not "date-bound").
+    target_ev = {
+        "export_dates": ["2025-04-26"], "inprogress_dates": [],
+        "logged_processed_nights": frozenset({"2025-03-20"}),
+        "logged_inprogress_nights": frozenset(),
+    }
+    assert classify_session("2025-03-20", target_ev) == ("processed", "log", "2025-03-20")
 
 
 # ── scan: monotonic upgrade rules ────────────────────────────────────────────
@@ -271,6 +349,63 @@ def test_scan_tolerates_row_missing_processed_state_key(tmp_path):
     assert transitions[0].current_state == "unprocessed"
 
 
+# ── scan: F2 log evidence / over-attribution fix ─────────────────────────────
+
+def test_scan_log_evidence_prevents_date_bound_over_attribution(tmp_path):
+    """The F2 headline fix: a has-export run's logged nights get exact
+    'processed' attribution, but the run's export file is claimed by the run
+    and excluded from the date-bound pool -- so an EARLIER, un-logged night
+    is NOT swept up by the run's edit date the way F1 would have swept it.
+    """
+    archive = tmp_path / "archive"
+    target_dir = archive / "01_Deep Sky Objects" / "M 81"
+    run_dir = target_dir / "_Processed" / "2025-04-26" / "Title"
+    touch(
+        run_dir / "logs" / "one.log",
+        b"Light_M81_180.0s_Bin1_ISO3200_20250320-233000_14.0C_0001.fit\n"
+        b"Light_M81_180.0s_Bin1_ISO3200_20250321-233000_14.0C_0001.fit\n",
+    )
+    touch(run_dir / "M81_final.tif")
+
+    db = _build_catalog(tmp_path, [
+        _session("s_a", obs_date="2025-03-20"),  # night A: logged
+        _session("s_b", obs_date="2025-03-21"),  # night B: logged
+        _session("s_c", obs_date="2025-03-15"),  # earlier, NOT in the log
+    ])
+
+    transitions = scan(archive, db)
+    by_id = {t.session_id: t for t in transitions}
+
+    assert by_id["s_a"].proposed_state == "processed"
+    assert by_id["s_a"].evidence == "log"
+    assert by_id["s_a"].evidence_date == "2025-03-20"
+
+    assert by_id["s_b"].proposed_state == "processed"
+    assert by_id["s_b"].evidence == "log"
+
+    # Without the claimed-subtree exclusion, s_c would be swept to
+    # 'processed' by the run's export date-bound heuristic (its export is
+    # dated 2025-04-26, which is >= 2025-03-15). It must NOT be.
+    assert by_id["s_c"].proposed_state == "unprocessed"
+    assert by_id["s_c"].change is False
+
+
+def test_apply_sets_processed_date_from_log_evidence(tmp_path):
+    archive = tmp_path / "archive"
+    run_dir = archive / "01_Deep Sky Objects" / "M 81" / "_Processed" / "2025-04-26" / "Title"
+    touch(run_dir / "logs" / "one.log",
+          b"Light_M81_180.0s_Bin1_ISO3200_20250320-233000_14.0C_0001.fit\n")
+    touch(run_dir / "M81_final.tif")
+    db = _build_catalog(tmp_path, [_session("s1", obs_date="2025-03-20")])
+
+    transitions = scan(archive, db)
+    apply(db, transitions)
+
+    row = query_all_sessions(db)[0]
+    assert row["processed_state"] == "processed"
+    assert row["processed_date"] == "2025-03-20"
+
+
 # ── apply ─────────────────────────────────────────────────────────────────
 
 def test_apply_only_applies_changed_transitions(tmp_path):
@@ -350,6 +485,31 @@ def test_cli_apply_mutates_catalog(tmp_path, capsys):
     row = query_all_sessions(db)[0]
     assert row["processed_state"] == "processed"
     assert row["processed_date"] == "2026-05-01"
+
+
+def test_cli_dry_run_shows_log_evidence_kind(tmp_path, capsys):
+    archive = tmp_path / "archive"
+    run_dir = archive / "01_Deep Sky Objects" / "M 81" / "_Processed" / "2025-04-26" / "Title"
+    touch(run_dir / "logs" / "one.log",
+          b"Light_M81_180.0s_Bin1_ISO3200_20250320-233000_14.0C_0001.fit\n")
+    touch(run_dir / "M81_final.tif")
+    db = _build_catalog(tmp_path, [_session("s1", obs_date="2025-03-20")])
+
+    _scan_processed_run(_cli_args(db, archive, apply_=False))
+
+    out = capsys.readouterr().out
+    assert "[log 2025-03-20]" in out
+
+
+def test_cli_dry_run_shows_date_bound_evidence_kind(tmp_path, capsys):
+    archive = tmp_path / "archive"
+    touch(archive / "01_Deep Sky Objects" / "M 81" / "_Processed" / "2026-05-01" / "final.tif")
+    db = _build_catalog(tmp_path, [_session("s1", obs_date="2026-02-19")])
+
+    _scan_processed_run(_cli_args(db, archive, apply_=False))
+
+    out = capsys.readouterr().out
+    assert "[date-bound 2026-05-01]" in out
 
 
 def test_cli_requires_archive(tmp_path, monkeypatch):

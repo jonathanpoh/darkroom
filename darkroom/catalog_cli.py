@@ -93,7 +93,7 @@ def _scan_processed_run(args: argparse.Namespace) -> None:
         ):
             print(f"\n{tgt}")
             for t in group:
-                tag = f"  [{t.evidence_date}]" if t.evidence_date else ""
+                tag = f"  [{t.evidence} {t.evidence_date}]" if t.evidence_date else ""
                 print(f"  {t.obs_date}  {t.session_id}  {t.current_state} -> {t.proposed_state}{tag}")
         counts = Counter(t.proposed_state for t in changed)
         parts = [f"{n} -> {state}" for state, n in sorted(counts.items())]
