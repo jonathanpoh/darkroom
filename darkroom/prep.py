@@ -17,7 +17,7 @@ from darkroom.catalog import (
 )
 from darkroom.config import resolve_catalog, resolve_path
 from darkroom.parse import fits_files
-from darkroom.picker import group_nights, pick_sessions
+from darkroom.picker import group_nights, pick_sessions, picker_style
 from darkroom.wbpp import (
     clear_sessions,
     discover_darks,
@@ -352,6 +352,7 @@ def _run_interactive(
                 "Regenerate (clear existing SESSION dirs)",
                 "Abort",
             ],
+            style=picker_style(),
         ).ask()
         if action is None or action == "Abort":
             sys.exit("Aborted.")
@@ -360,7 +361,7 @@ def _run_interactive(
     nights = sorted({r["obs_date"] for r in rows})
     total_lights = sum(r["frame_count"] or 0 for r in rows)
     summary = f"{len(nights)} night(s), {total_lights} light frames → {target_dir}/"
-    if not questionary.confirm(f"Proceed? {summary}", default=True).ask():
+    if not questionary.confirm(f"Proceed? {summary}", default=True, style=picker_style()).ask():
         sys.exit("Aborted.")
 
     build_wbpp_sessions(

@@ -95,6 +95,43 @@ def night_label(night: dict) -> str:
 
 # ── interactive flow ─────────────────────────────────────────────────────────
 
+def picker_style():
+    """Shared questionary Style for all wbpp prompts.
+
+    The autocomplete dropdown is unreadable on a dark terminal by default:
+    prompt_toolkit's completion-menu background is a hardcoded light gray
+    (bg:#bbbbbb), and questionary's own WordCompleter stamps every candidate
+    with "class:answer" (bold orange/yellow) — which, being the rightmost
+    class in the compound style string prompt_toolkit builds per item, wins
+    over any plain completion-menu/completion-menu.completion override. So a
+    bare override of those two classes changes the box color but the text
+    stays orange-on-whatever. To actually reclaim the text color we have to
+    match the *combined* class set ("completion-menu.completion answer") that
+    prompt_toolkit assembles for each candidate. The highlighted-row variant
+    additionally picks up a bare "selected" class (rightmost of all, so it
+    wins last) that prompt_toolkit's own base style defines as plain
+    "reverse" — that flips our explicit fg/bg back to the default look, so
+    every current-row rule below also has to repeat "noreverse" and the
+    three progressively-larger combos ("...current", "...current answer",
+    "...current answer selected") all need to be pinned, since whichever
+    combo is matched last as prompt_toolkit walks the style string left to
+    right is the one that sticks.
+    """
+    import questionary  # lazy: keep this module importable without a TTY/dep
+
+    current = "bg:#00afaf fg:#000000 bold noreverse"
+    return questionary.Style([
+        ("completion-menu", "bg:#262626 fg:#d7d7d7"),
+        ("completion-menu.completion", "bg:#262626 fg:#d7d7d7"),
+        ("completion-menu.completion answer", "bg:#262626 fg:#d7d7d7"),
+        ("completion-menu.completion.current", current),
+        ("completion-menu.completion.current answer", current),
+        ("completion-menu.completion.current answer selected", current),
+        ("completion-menu.meta.completion", "bg:#262626 fg:#9e9e9e"),
+        ("completion-menu.meta.completion.current", "bg:#00afaf fg:#000000 bold"),
+    ])
+
+
 def pick_sessions(catalog: Path) -> list[dict] | None:
     """Interactively pick a target then one or more nights. None if cancelled.
 
@@ -124,6 +161,7 @@ def pick_sessions(catalog: Path) -> list[dict] | None:
         match_middle=True,
         ignore_case=True,
         validate=_validate,
+        style=picker_style(),
     ).ask()
     if not target:
         return None
@@ -137,7 +175,7 @@ def pick_sessions(catalog: Path) -> list[dict] | None:
         for night in nights
     ]
     selected_dates = questionary.checkbox(
-        f"Select nights for {target}:", choices=choices
+        f"Select nights for {target}:", choices=choices, style=picker_style()
     ).ask()
     if not selected_dates:
         return None
