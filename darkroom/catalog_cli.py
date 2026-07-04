@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import sqlite3
 import sys
+from collections import Counter
 from itertools import groupby
+from pathlib import Path
 
 from darkroom.catalog import query_all_sessions, query_sessions
 from darkroom.cataloger import (
@@ -12,7 +15,7 @@ from darkroom.cataloger import (
     scan_all_command,
     scan_calibration_command,
 )
-from darkroom.config import resolve_catalog
+from darkroom.config import resolve_catalog, resolve_path
 
 
 def _resolve_db(args: argparse.Namespace) -> None:
@@ -66,6 +69,54 @@ def _migrate_run(args: argparse.Namespace) -> None:
     migrate_archive_command(args)
 
 
+def _scan_processed_run(args: argparse.Namespace) -> None:
+    """Scan the archive for processing output and reconcile processed_state.
+
+    Dry run (default) is pure-read: it never calls init_db and never opens
+    the catalog for writing, so it's safe to point at a live catalog just to
+    preview. --apply writes via darkroom.procscan.apply (set_processed_state).
+    """
+    from darkroom import procscan
+
+    _resolve_db(args)
+    archive = resolve_path(args.archive, "DARKROOM_ARCHIVE", "archive_path")
+    if archive is None:
+        sys.exit("Error: --archive / DARKROOM_ARCHIVE / darkroom.toml archive_path required")
+
+    db_path = Path(args.db)
+    transitions = procscan.scan(archive, db_path)
+    changed = [t for t in transitions if t.change]
+
+    if not args.apply:
+        for tgt, group in groupby(
+            sorted(changed, key=lambda t: (t.target, t.obs_date)), key=lambda t: t.target
+        ):
+            print(f"\n{tgt}")
+            for t in group:
+                tag = f"  [{t.evidence_date}]" if t.evidence_date else ""
+                print(f"  {t.obs_date}  {t.session_id}  {t.current_state} -> {t.proposed_state}{tag}")
+        counts = Counter(t.proposed_state for t in changed)
+        parts = [f"{n} -> {state}" for state, n in sorted(counts.items())]
+        parts.append(f"{len(transitions) - len(changed)} unchanged")
+        print(f"\n{', '.join(parts)}; run with --apply to write")
+        return
+
+    try:
+        applied = procscan.apply(db_path, transitions)
+    except sqlite3.OperationalError as e:
+        sys.exit(
+            f"Error writing to catalog: {e}\n"
+            "Hint: run any `darkroom catalog` command against this catalog once "
+            "(e.g. `catalog list`) to ensure it's migrated to the current schema, "
+            "then retry --apply."
+        )
+
+    for t in changed:
+        tag = f"  [{t.evidence_date}]" if t.evidence_date else ""
+        print(f"  {t.session_id}  {t.current_state} -> {t.proposed_state}{tag}")
+    print(f"\nApplied {applied} change(s), {len(transitions) - applied} unchanged")
+
+
 def add_subparser(subparsers) -> None:
     p = subparsers.add_parser(
         "catalog",
@@ -102,7 +153,7 @@ def add_subparser(subparsers) -> None:
                     "path, or a note.",
     )
     m.add_argument("session_id", help="Session ID (see `catalog list`)")
-    m.add_argument("state", choices=["unprocessed", "processed", "skipped"],
+    m.add_argument("state", choices=["unprocessed", "in_progress", "processed", "skipped"],
                    help="New processed_state")
     m.add_argument("--date", metavar="YYYY-MM-DD", help="processed_date")
     m.add_argument("--path", metavar="PATH", help="processed_path (archive-relative _Processed path)")
@@ -122,3 +173,19 @@ def add_subparser(subparsers) -> None:
     mig.add_argument("--archive", required=True, metavar="PATH", help="Archive root directory")
     mig.add_argument("--dry-run", action="store_true", help="Print moves without executing")
     mig.set_defaults(func=_migrate_run)
+
+    sp = sub.add_parser(
+        "scan-processed", parents=[catalog_flag],
+        help="Scan the archive for processing output and reconcile processed_state",
+        description="Scan <archive>/01_Deep Sky Objects/<target>/ for stacked/edited "
+                    "output (.xisf masters/intermediates, PixInsight project files, "
+                    "final exports) and propose a processed_state upgrade "
+                    "(unprocessed -> in_progress -> processed) for each session whose "
+                    "evidence date is on or after its obs_date. Never downgrades and "
+                    "never touches a skipped session. Dry run by default (prints "
+                    "proposed changes, writes nothing); pass --apply to write them.",
+    )
+    sp.add_argument("--archive", metavar="PATH", help="Archive root (env: DARKROOM_ARCHIVE)")
+    sp.add_argument("--apply", action="store_true",
+                     help="Write proposed changes to the catalog (default: dry run, read-only)")
+    sp.set_defaults(func=_scan_processed_run)

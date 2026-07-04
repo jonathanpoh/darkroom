@@ -317,6 +317,17 @@ def test_update_invalid_processed_state_raises(tmp_path):
         )
 
 
+def test_update_in_progress_state_accepted(tmp_path):
+    # F1: 'in_progress' is a valid archive-derived state alongside the
+    # original three ('unprocessed', 'processed', 'skipped').
+    conn = open_db(make_db(tmp_path))
+    sid = "M81_20260220_FRA400_ZWOASI585MCPro_L-Extreme"
+    ok = update_session_fields(conn, sid, processed_state="in_progress")
+    assert ok is True
+    row = conn.execute("SELECT processed_state FROM sessions WHERE session_id = ?", (sid,)).fetchone()
+    assert row["processed_state"] == "in_progress"
+
+
 def test_update_unknown_session_id_returns_false(tmp_path):
     conn = open_db(make_db(tmp_path))
     ok = update_session_fields(conn, "does_not_exist", notes="x")

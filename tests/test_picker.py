@@ -65,6 +65,12 @@ def test_is_processed_real_value():
     assert is_processed({"processed_state": "processed"}) is True
 
 
+def test_is_processed_in_progress():
+    # F1: 'in_progress' means editing has started but isn't finished — not
+    # (yet) processed.
+    assert is_processed({"processed_state": "in_progress"}) is False
+
+
 # ── needs_processing ─────────────────────────────────────────────────────────
 
 def test_needs_processing_unprocessed_is_candidate():
@@ -82,6 +88,12 @@ def test_needs_processing_processed_is_not_candidate():
 def test_needs_processing_skipped_is_not_candidate():
     # A skipped night is settled — deliberately set aside, not a candidate.
     assert needs_processing({"processed_state": "skipped"}) is False
+
+
+def test_needs_processing_in_progress_is_not_candidate():
+    # F1: 'in_progress' is already underway — not a wbpp candidate, but also
+    # not "processed" (see test_is_processed_in_progress).
+    assert needs_processing({"processed_state": "in_progress"}) is False
 
 
 # ── summarize_targets ────────────────────────────────────────────────────────

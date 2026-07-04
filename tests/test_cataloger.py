@@ -1051,6 +1051,18 @@ class TestSetProcessedState:
         with pytest.raises(ValueError):
             set_processed_state(db, "S1", state="bogus")
 
+    def test_in_progress_state_accepted(self, tmp_path):
+        # F1: 'in_progress' is a valid archive-derived state alongside the
+        # original three.
+        db = tmp_path / "test.db"
+        self._insert(db)
+        assert set_processed_state(db, "S1", state="in_progress") is True
+        with sqlite3.connect(db) as conn:
+            state = conn.execute(
+                "SELECT processed_state FROM sessions WHERE session_id='S1'"
+            ).fetchone()[0]
+        assert state == "in_progress"
+
     def test_unknown_session_id_returns_false(self, tmp_path):
         db = tmp_path / "test.db"
         self._insert(db)

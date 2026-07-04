@@ -170,8 +170,10 @@ def find_lights_folders(root: Path) -> list[Path]:
 
 
 # Valid values for sessions.processed_state (W1: structured processed status,
-# replacing the overloaded free-text processed_status column).
-PROCESSED_STATES = frozenset({"unprocessed", "processed", "skipped"})
+# replacing the overloaded free-text processed_status column). F1 adds
+# 'in_progress' — archive-derived evidence that stacking/editing has started
+# (xisf masters/intermediates) but no final export exists yet.
+PROCESSED_STATES = frozenset({"unprocessed", "in_progress", "processed", "skipped"})
 
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
