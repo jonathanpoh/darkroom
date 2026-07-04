@@ -29,6 +29,7 @@ from darkroom.names import (
     _normalize_target,
     _parse_coords,
     _round_exposure,
+    make_session_id,  # re-exported for back-compat (moved to names.py in W4)
 )
 
 
@@ -60,33 +61,6 @@ def compute_imaging_night(date_obs_utc: str) -> str | None:
 # ============================================================================
 # Session ID construction
 # ============================================================================
-
-
-def make_session_id(target: str, obs_date: str, ota: str, camera: str, filter_: str | None) -> str:
-    """Build collision-resistant session primary key.
-
-    Removes spaces from target and camera, strips dashes from date, and uses
-    "UnknownFilter" when filter detection failed (signals needs-review, distinct
-    from a session deliberately shot bare).
-
-    Args:
-        target: Target name (e.g. "M 81", "NGC 7380")
-        obs_date: Observation date in YYYY-MM-DD format
-        ota: OTA abbreviation (e.g. "FRA400", "FMA180")
-        camera: Camera model (e.g. "ASI585MC", "Canon6D")
-        filter_: Filter name (e.g. "L-Pro", "L-Extreme"), or None/empty string
-
-    Returns:
-        Session ID: {TargetSlug}_{YYYYMMDD}_{OTA}_{Camera}_{Filter}
-        (e.g. "M81_20260219_FRA400_ASI585MC_L-Pro")
-    """
-    slug = re.sub(r"\s+", "", target)
-    camera_slug = _normalize_camera(camera)
-    date = obs_date.replace("-", "")
-    # "UnknownFilter" means parse failed AND no FITS FILTER header — needs manual review.
-    # A session legitimately shot bare would need to be flagged explicitly (future work).
-    f = filter_ or "UnknownFilter"
-    return f"{slug}_{date}_{ota}_{camera_slug}_{f}"
 
 
 _CALIB_FOLDER_NAMES = frozenset({"flats", "darks", "bias", "flatdarks", "flat darks"})
@@ -195,40 +169,117 @@ def find_lights_folders(root: Path) -> list[Path]:
 # ============================================================================
 
 
+# Valid values for sessions.processed_state (W1: structured processed status,
+# replacing the overloaded free-text processed_status column).
+PROCESSED_STATES = frozenset({"unprocessed", "processed", "skipped"})
+
+_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+_SESSIONS_SCHEMA = """
+    CREATE TABLE IF NOT EXISTS sessions (
+        id                       INTEGER PRIMARY KEY,
+        session_id               TEXT NOT NULL UNIQUE,
+        target                   TEXT NOT NULL,
+        obs_date                 TEXT NOT NULL,
+        ota                      TEXT,
+        camera                   TEXT,
+        filter                   TEXT,
+        gain                     INTEGER,
+        temperature_c            REAL,
+        exposure_sec             REAL,
+        focal_length             REAL,
+        frame_count              INTEGER,
+        total_integration_sec    INTEGER,
+        total_integration_hours  REAL GENERATED ALWAYS AS (total_integration_sec / 3600.0) VIRTUAL,
+        ra_deg                   REAL,
+        dec_deg                  REAL,
+        lights_path              TEXT,
+        processed_status         TEXT,
+        processed_state          TEXT NOT NULL DEFAULT 'unprocessed',
+        processed_path           TEXT,
+        processed_date           TEXT,
+        notes                    TEXT,
+        created_at               TEXT,
+        updated_at               TEXT
+    )
+"""
+
+# Legacy (pre-W3) column set, in a stable order, used to migrate an old
+# session_id-PK table into the new id-PK table via CREATE ... SELECT. Only the
+# columns that actually exist in the old table (after the additive migrations
+# below have run) are copied — this keeps the rebuild safe against the various
+# historical shapes this table has had.
+_LEGACY_SESSION_COLUMNS = [
+    "session_id", "target", "obs_date", "ota", "camera", "filter",
+    "gain", "temperature_c", "exposure_sec", "focal_length",
+    "frame_count", "total_integration_sec", "ra_deg", "dec_deg",
+    "lights_path", "processed_status", "notes", "created_at", "updated_at",
+]
+
+
+def _backfill_processed_state(conn: sqlite3.Connection) -> None:
+    """One-time parse of legacy free-text processed_status into structured columns.
+
+    Only ever called from the id-column table rebuild (see init_db), so this
+    runs exactly once per database — never on a DB that's already been
+    migrated — which is what makes it safe to derive processed_state from
+    processed_status without clobbering values set afterwards via
+    set_processed_state.
+    """
+    rows = conn.execute(
+        "SELECT session_id, processed_status, notes FROM sessions "
+        "WHERE processed_status IS NOT NULL AND TRIM(processed_status) != ''"
+    ).fetchall()
+    for session_id, processed_status, notes in rows:
+        text = processed_status.strip()
+        new_notes = None  # None = leave notes untouched
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+            state, path, date = "processed", None, text
+        elif "_Processed/" in text:
+            state, path = "processed", text
+            m = _DATE_RE.search(text)
+            date = m.group(0) if m else None
+        elif text.lower().startswith("skip"):
+            state, path, date = "skipped", None, None
+            if not notes or not notes.strip():
+                new_notes = text
+        else:
+            state, path = "processed", text
+            m = _DATE_RE.search(text)
+            date = m.group(0) if m else None
+
+        if new_notes is not None:
+            conn.execute(
+                "UPDATE sessions SET processed_state = ?, processed_path = ?, "
+                "processed_date = ?, notes = ? WHERE session_id = ?",
+                (state, path, date, new_notes, session_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE sessions SET processed_state = ?, processed_path = ?, "
+                "processed_date = ? WHERE session_id = ?",
+                (state, path, date, session_id),
+            )
+
+
 def init_db(db_path: Path) -> None:
     """Initialize SQLite database with sessions and calibration_sets tables.
 
     Creates the database if it doesn't exist, and creates tables with
-    idempotent IF NOT EXISTS clauses.
+    idempotent IF NOT EXISTS clauses. Existing databases are migrated forward
+    additively (new columns) and, once, via a full table rebuild for the
+    session_id -> id primary-key change (W3) — both paths converge to the
+    same final schema as a brand-new database.
 
     Args:
         db_path: Path to SQLite database file
     """
     with sqlite3.connect(db_path) as conn:
         conn.execute("PRAGMA journal_mode=WAL")
-        conn.executescript("""
-            CREATE TABLE IF NOT EXISTS sessions (
-                session_id              TEXT PRIMARY KEY,
-                target                  TEXT NOT NULL,
-                obs_date                TEXT NOT NULL,
-                ota                     TEXT,
-                camera                  TEXT,
-                filter                  TEXT,
-                gain                    INTEGER,
-                temperature_c           REAL,
-                exposure_sec            REAL,
-                focal_length            REAL,
-                frame_count             INTEGER,
-                total_integration_sec   INTEGER,
-                total_integration_hours REAL GENERATED ALWAYS AS (total_integration_sec / 3600.0) VIRTUAL,
-                ra_deg                  REAL,
-                dec_deg                 REAL,
-                lights_path             TEXT,
-                processed_status        TEXT,
-                notes                   TEXT,
-                created_at              TEXT,
-                updated_at              TEXT
-            );
+        conn.executescript(
+            _SESSIONS_SCHEMA
+            + """
+            ;
             CREATE TABLE IF NOT EXISTS calibration_sets (
                 set_id        TEXT PRIMARY KEY,
                 frame_type    TEXT NOT NULL,
@@ -245,10 +296,11 @@ def init_db(db_path: Path) -> None:
                 created_at    TEXT,
                 updated_at    TEXT
             );
-            CREATE INDEX IF NOT EXISTS idx_sessions_target ON sessions(target);
-            CREATE INDEX IF NOT EXISTS idx_sessions_obs_date ON sessions(obs_date);
-        """)
-        # Migrations for existing databases
+        """
+        )
+        # Additive migrations for existing (pre-W3) sessions tables. These must
+        # run before the id-column rebuild below so the rebuild's column
+        # detection sees the fully-migrated legacy column set.
         cols = {r[1] for r in conn.execute("PRAGMA table_info(sessions)")}
         if "focal_length" not in cols:
             conn.execute("ALTER TABLE sessions ADD COLUMN focal_length REAL")
@@ -260,6 +312,41 @@ def init_db(db_path: Path) -> None:
             "UPDATE sessions SET created_at = datetime('now'), updated_at = datetime('now') "
             "WHERE created_at IS NULL"
         )
+
+        # W3: rebuild the table to promote `id` to the primary key and demote
+        # session_id to a UNIQUE column. SQLite can't ALTER a primary key in
+        # place. Gated on `id` being absent so this runs exactly once — a
+        # fresh DB already has `id` from the CREATE TABLE above, and a
+        # previously-rebuilt DB will too.
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(sessions)")}
+        if "id" not in cols:
+            legacy_cols = [c for c in _LEGACY_SESSION_COLUMNS if c in cols]
+            col_list = ", ".join(legacy_cols)
+            conn.execute("DROP TABLE IF EXISTS sessions_new")
+            conn.execute(_SESSIONS_SCHEMA.replace("sessions", "sessions_new", 1))
+            conn.execute(
+                f"INSERT INTO sessions_new ({col_list}) SELECT {col_list} FROM sessions"
+            )
+            conn.execute("DROP TABLE sessions")
+            conn.execute("ALTER TABLE sessions_new RENAME TO sessions")
+            # W1: one-time backfill of the structured columns from the old
+            # free-text processed_status. Must happen only here, right after
+            # the rebuild — never on a DB that's already gone through this.
+            _backfill_processed_state(conn)
+
+        # Indexes are (re)created here, after the rebuild above (which drops
+        # them along with the old table) — safe to run every time.
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_target ON sessions(target)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_obs_date ON sessions(obs_date)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sessions_processed_state ON sessions(processed_state)"
+        )
+
+        # W2: NULL is the empty/unknown sentinel for filter, not "". Safe to
+        # run unconditionally — writers no longer produce "" going forward,
+        # so this is a no-op once existing rows are cleaned up.
+        conn.execute("UPDATE sessions SET filter = NULL WHERE filter = ''")
+
         cal_cols = {r[1] for r in conn.execute("PRAGMA table_info(calibration_sets)")}
         if "is_master" not in cal_cols:
             conn.execute("ALTER TABLE calibration_sets ADD COLUMN is_master INTEGER DEFAULT 0")
@@ -290,6 +377,9 @@ def upsert_session(db_path: Path, session: dict) -> None:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     session.setdefault("created_at", now)
     session["updated_at"] = now
+    # Legacy free-text column — new callers rely on processed_state (default
+    # 'unprocessed') instead, so this is only populated for backward compat.
+    session.setdefault("processed_status", None)
     with sqlite3.connect(db_path) as conn:
         conn.execute(
             """
@@ -368,7 +458,13 @@ def upsert_calibration_set(db_path: Path, cal_set: dict) -> None:
 
 
 def mark_processed(db_path: Path, session_id: str, status: str) -> bool:
-    """Update processed_status for a session. Returns True if session was found.
+    """Update the legacy free-text processed_status column. Returns True if found.
+
+    Legacy: kept for backward compat (only `cataloger.py:finish_command`'s
+    per-session path — reachable via `python -m darkroom.cataloger finish`,
+    not the live `darkroom finish` — still calls this). New code should use
+    `set_processed_state`, which writes the structured processed_state /
+    processed_path / processed_date columns instead.
 
     Args:
         db_path: Path to SQLite database file
@@ -386,17 +482,79 @@ def mark_processed(db_path: Path, session_id: str, status: str) -> bool:
     return cursor.rowcount > 0
 
 
+def set_processed_state(
+    db_path: Path,
+    session_id: str,
+    *,
+    state: str,
+    processed_date: str | None = None,
+    processed_path: str | None = None,
+    notes: str | None = None,
+) -> bool:
+    """Update the structured processed_state (+ date/path/notes) for a session.
+
+    This is the source of truth going forward (W1), replacing the overloaded
+    free-text `processed_status` column for all live writers.
+
+    Args:
+        db_path: Path to SQLite database file
+        session_id: Session ID to update
+        state: One of 'unprocessed', 'processed', 'skipped'
+        processed_date: Optional YYYY-MM-DD
+        processed_path: Optional archive-relative _Processed path
+        notes: Optional note; only overwrites existing notes when passed
+            (None leaves notes untouched)
+
+    Returns:
+        True if the session was found and updated, False otherwise
+
+    Raises:
+        ValueError: if `state` is not one of the three valid enum values
+    """
+    if state not in PROCESSED_STATES:
+        raise ValueError(
+            f"Invalid processed state: {state!r} (must be one of {sorted(PROCESSED_STATES)})"
+        )
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    if notes is not None:
+        sql = (
+            "UPDATE sessions SET processed_state = ?, processed_date = ?, "
+            "processed_path = ?, notes = ?, updated_at = ? WHERE session_id = ?"
+        )
+        params = (state, processed_date, processed_path, notes, now, session_id)
+    else:
+        sql = (
+            "UPDATE sessions SET processed_state = ?, processed_date = ?, "
+            "processed_path = ?, updated_at = ? WHERE session_id = ?"
+        )
+        params = (state, processed_date, processed_path, now, session_id)
+    with sqlite3.connect(db_path) as conn:
+        cursor = conn.execute(sql, params)
+    return cursor.rowcount > 0
+
+
 def mark_processed_command(args):
-    """Handle mark-processed command."""
+    """Handle mark command — set structured processed_state (+ date/path/notes)."""
     db_path = Path(args.db)
     if not db_path.exists():
         print(f"Error: Database not found: {db_path}", file=sys.stderr)
         sys.exit(1)
-    found = mark_processed(db_path, args.session_id, args.status)
+    try:
+        found = set_processed_state(
+            db_path,
+            args.session_id,
+            state=args.state,
+            processed_date=getattr(args, "date", None),
+            processed_path=getattr(args, "path", None),
+            notes=getattr(args, "notes", None),
+        )
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
     if not found:
         print(f"Error: Session not found: {args.session_id}", file=sys.stderr)
         sys.exit(1)
-    print(f"Updated: {args.session_id} → processed_status = {args.status!r}")
+    print(f"Updated: {args.session_id} → processed_state = {args.state!r}")
 
 
 def _find_latest_processed_date(processed_root: Path) -> str:
@@ -428,21 +586,27 @@ def _find_latest_processed_date(processed_root: Path) -> str:
 
 
 def mark_processed_by_target(db_path: Path, target: str, status: str) -> int:
-    """Update processed_status for all sessions matching target (case-insensitive).
+    """Mark all sessions matching target (case-insensitive) as processed.
+
+    Writes the structured columns (W1) rather than the legacy processed_status:
+    sets processed_state='processed' and processed_date=status (status here is
+    always a YYYY-MM-DD, per the finish_command caller).
 
     Args:
         db_path: Path to SQLite database file.
         target: Target name to match (e.g. "M 81"). Spacing is canonicalised
             ('M81' → 'M 81') and the comparison is case-insensitive.
-        status: New processed_status value (e.g. "2026-05-15").
+        status: Processed date, YYYY-MM-DD (e.g. "2026-05-15").
 
     Returns:
         Number of rows updated.
     """
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     with sqlite3.connect(db_path) as conn:
         cursor = conn.execute(
-            "UPDATE sessions SET processed_status = ? WHERE target = ? COLLATE NOCASE",
-            (status, _normalize_target(target)),
+            "UPDATE sessions SET processed_state = 'processed', processed_date = ?, "
+            "updated_at = ? WHERE target = ? COLLATE NOCASE",
+            (status, now, _normalize_target(target)),
         )
         return cursor.rowcount
 
@@ -563,7 +727,7 @@ class SessionAnalyzer:
                 if filter_ is not None:
                     break
             if filter_ is None:
-                filter_ = first.get("filter_header") or _filter_from_path(lights_path) or ""
+                filter_ = first.get("filter_header") or _filter_from_path(lights_path) or None
 
             focallen = first.get("focallen")
             sessions.append({
@@ -581,7 +745,6 @@ class SessionAnalyzer:
                 "ra_deg": first.get("ra_deg"),
                 "dec_deg": first.get("dec_deg"),
                 "lights_path": str(lights_path),
-                "processed_status": "",
                 "notes": "",
             })
         return sessions
@@ -982,8 +1145,8 @@ Examples:
   # Scan calibration frames
   %(prog)s scan-calibration /Volumes/Astrophotography/00_Calibration
 
-  # Mark a session as processed
-  %(prog)s mark-processed M81_20260219_FRA400_ASI585MC_L-Pro "2026-03-01 /path/to/output"
+  # Mark a session's structured processed_state
+  %(prog)s mark-processed M81_20260219_FRA400_ASI585MC_L-Pro processed --date 2026-03-01
 
   # Mark all sessions for a target as processed (date auto-detected from archive)
   %(prog)s finish --target "M 81" --archive /Volumes/Astrophotography
@@ -1016,9 +1179,12 @@ Examples:
     p_cal.add_argument("calibration_path", help="Path to calibration folder (e.g. 00_Calibration)")
 
     # mark-processed
-    p_mark = subparsers.add_parser("mark-processed", help="Update processed_status for a session")
+    p_mark = subparsers.add_parser("mark-processed", help="Set structured processed_state for a session")
     p_mark.add_argument("session_id", help="Session ID (e.g. M81_20260219_FRA400_ASI585MC_L-Pro)")
-    p_mark.add_argument("status", help="Status string (date, path, or note)")
+    p_mark.add_argument("state", choices=sorted(PROCESSED_STATES), help="New processed_state")
+    p_mark.add_argument("--date", metavar="YYYY-MM-DD", help="processed_date")
+    p_mark.add_argument("--path", metavar="PATH", help="processed_path (archive-relative _Processed path)")
+    p_mark.add_argument("--notes", metavar="TEXT", help="Notes (only overwrites existing notes when passed)")
 
     # finish
     p_finish = subparsers.add_parser(

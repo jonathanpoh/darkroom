@@ -585,7 +585,6 @@ def cmd_commit(args: argparse.Namespace) -> None:
             "ra_deg": entry.get("ra_deg"),
             "dec_deg": entry.get("dec_deg"),
             "lights_path": entry["lights_rel_path"],
-            "processed_status": "",
             "notes": "",
         })
         catalog_entries += 1

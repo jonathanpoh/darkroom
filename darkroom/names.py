@@ -68,6 +68,33 @@ def _normalize_camera(name):
     return _CAMERA_ALIASES.get(slug, slug)
 
 
+def make_session_id(target: str, obs_date: str, ota: str, camera: str, filter_: str | None) -> str:
+    """Build collision-resistant session primary key.
+
+    Removes spaces from target and camera, strips dashes from date, and uses
+    "UnknownFilter" when filter detection failed (signals needs-review, distinct
+    from a session deliberately shot bare).
+
+    Args:
+        target: Target name (e.g. "M 81", "NGC 7380")
+        obs_date: Observation date in YYYY-MM-DD format
+        ota: OTA abbreviation (e.g. "FRA400", "FMA180")
+        camera: Camera model (e.g. "ASI585MC", "Canon6D")
+        filter_: Filter name (e.g. "L-Pro", "L-Extreme"), or None/empty string
+
+    Returns:
+        Session ID: {TargetSlug}_{YYYYMMDD}_{OTA}_{Camera}_{Filter}
+        (e.g. "M81_20260219_FRA400_ASI585MC_L-Pro")
+    """
+    slug = re.sub(r"\s+", "", target)
+    camera_slug = _normalize_camera(camera)
+    date = obs_date.replace("-", "")
+    # "UnknownFilter" means parse failed AND no FITS FILTER header — needs manual review.
+    # A session legitimately shot bare would need to be flagged explicitly (future work).
+    f = filter_ or "UnknownFilter"
+    return f"{slug}_{date}_{ota}_{camera_slug}_{f}"
+
+
 def _round_exposure(x):
     """Round an exposure value to 4 decimals. Safe on None."""
     return None if x is None else round(float(x), 4)

@@ -17,6 +17,8 @@ from darkroom.cataloger import (
     upsert_session,
     upsert_calibration_set,
     mark_processed,
+    mark_processed_command,
+    set_processed_state,
     _find_latest_processed_date,
     mark_processed_by_target,
     finish_command,
@@ -630,9 +632,9 @@ class TestMarkProcessedByTarget:
         assert count == 2
         with sqlite3.connect(db) as conn:
             rows = conn.execute(
-                "SELECT processed_status FROM sessions WHERE target = 'M 81'"
+                "SELECT processed_state, processed_date FROM sessions WHERE target = 'M 81'"
             ).fetchall()
-        assert all(r[0] == "2026-05-15" for r in rows)
+        assert all(r == ("processed", "2026-05-15") for r in rows)
 
     def test_case_insensitive_match(self, tmp_path):
         db = tmp_path / "test.db"
@@ -653,9 +655,9 @@ class TestMarkProcessedByTarget:
         mark_processed_by_target(db, "M 81", "2026-05-15")
         with sqlite3.connect(db) as conn:
             row = conn.execute(
-                "SELECT processed_status FROM sessions WHERE target = 'NGC 7380'"
+                "SELECT processed_state FROM sessions WHERE target = 'NGC 7380'"
             ).fetchone()
-        assert row[0] == ""
+        assert row[0] == "unprocessed"
 
     def test_no_match_returns_zero(self, tmp_path):
         db = tmp_path / "test.db"
@@ -693,9 +695,9 @@ class TestFinishCommand:
         finish_command(self._args(db=str(db), date="2026-05-15"))
         with sqlite3.connect(db) as conn:
             rows = conn.execute(
-                "SELECT processed_status FROM sessions WHERE target = 'M 81'"
+                "SELECT processed_state, processed_date FROM sessions WHERE target = 'M 81'"
             ).fetchall()
-        assert all(r[0] == "2026-05-15" for r in rows)
+        assert all(r == ("processed", "2026-05-15") for r in rows)
 
     def test_archive_flag_detects_date_from_processed_dir(self, tmp_path):
         db = tmp_path / "test.db"
@@ -705,9 +707,9 @@ class TestFinishCommand:
         finish_command(self._args(db=str(db), archive=str(tmp_path)))
         with sqlite3.connect(db) as conn:
             rows = conn.execute(
-                "SELECT processed_status FROM sessions WHERE target = 'M 81'"
+                "SELECT processed_state, processed_date FROM sessions WHERE target = 'M 81'"
             ).fetchall()
-        assert all(r[0] == "2026-05-15" for r in rows)
+        assert all(r == ("processed", "2026-05-15") for r in rows)
 
     def test_session_flag_only_updates_specified_sessions(self, tmp_path):
         db = tmp_path / "test.db"
@@ -749,3 +751,348 @@ class TestFinishCommand:
         self._populate(db)
         finish_command(self._args(db=str(db), date="2026-05-15", target="Unknown Target"))
         assert "no sessions found" in capsys.readouterr().err
+
+
+# ── W1/W2/W3: structured processed status, filter NULL sentinel, id PK ──────
+
+def _create_old_schema_db(db, rows):
+    """Build a pre-W1/W2/W3 sessions table (session_id PK, free-text
+    processed_status, filter='' sentinel) and insert the given rows.
+
+    Each row is a dict with at minimum session_id/target/obs_date; any of
+    filter/processed_status/notes may be included.
+    """
+    import sqlite3
+
+    with sqlite3.connect(db) as conn:
+        conn.executescript("""
+            CREATE TABLE sessions (
+                session_id TEXT PRIMARY KEY,
+                target TEXT NOT NULL,
+                obs_date TEXT NOT NULL,
+                ota TEXT, camera TEXT, filter TEXT, gain INTEGER,
+                temperature_c REAL, exposure_sec REAL, focal_length REAL,
+                frame_count INTEGER, total_integration_sec INTEGER,
+                total_integration_hours REAL GENERATED ALWAYS AS (total_integration_sec / 3600.0) VIRTUAL,
+                ra_deg REAL, dec_deg REAL, lights_path TEXT,
+                processed_status TEXT, notes TEXT,
+                created_at TEXT, updated_at TEXT
+            );
+            CREATE TABLE calibration_sets (set_id TEXT PRIMARY KEY, frame_type TEXT NOT NULL);
+            CREATE INDEX idx_sessions_target ON sessions(target);
+            CREATE INDEX idx_sessions_obs_date ON sessions(obs_date);
+        """)
+        for row in rows:
+            row = {
+                "ota": None, "camera": None, "filter": None, "gain": None,
+                "temperature_c": None, "exposure_sec": None, "focal_length": None,
+                "frame_count": None, "total_integration_sec": None,
+                "ra_deg": None, "dec_deg": None, "lights_path": None,
+                "processed_status": None, "notes": None,
+                **row,
+            }
+            cols = ", ".join(row.keys())
+            placeholders = ", ".join("?" for _ in row)
+            conn.execute(
+                f"INSERT INTO sessions ({cols}) VALUES ({placeholders})",
+                list(row.values()),
+            )
+
+
+class TestSchemaMigration:
+    def test_id_column_becomes_integer_primary_key(self, tmp_path):
+        db = tmp_path / "old.db"
+        _create_old_schema_db(db, [
+            {"session_id": "S1", "target": "M 81", "obs_date": "2026-02-19"},
+        ])
+        init_db(db)
+        with sqlite3.connect(db) as conn:
+            info = {r[1]: r for r in conn.execute("PRAGMA table_info(sessions)")}
+        assert info["id"][2] == "INTEGER"
+        assert info["id"][5] == 1  # pk column index (1-based), not 0
+        assert info["session_id"][3] == 1  # NOT NULL
+        assert info["session_id"][5] == 0  # no longer part of the PK
+
+    def test_session_id_is_unique_not_null(self, tmp_path):
+        db = tmp_path / "old.db"
+        _create_old_schema_db(db, [
+            {"session_id": "S1", "target": "M 81", "obs_date": "2026-02-19"},
+        ])
+        init_db(db)
+        with sqlite3.connect(db) as conn:
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.execute(
+                    "INSERT INTO sessions (session_id, target, obs_date) VALUES (?, ?, ?)",
+                    ("S1", "NGC 7380", "2026-03-01"),
+                )
+
+    def test_data_preserved_across_rebuild(self, tmp_path):
+        db = tmp_path / "old.db"
+        _create_old_schema_db(db, [
+            {"session_id": "S1", "target": "M 81", "obs_date": "2026-02-19",
+             "filter": "L-Pro", "frame_count": 42},
+        ])
+        init_db(db)
+        with sqlite3.connect(db) as conn:
+            conn.row_factory = sqlite3.Row
+            row = dict(conn.execute("SELECT * FROM sessions WHERE session_id = 'S1'").fetchone())
+        assert row["target"] == "M 81"
+        assert row["obs_date"] == "2026-02-19"
+        assert row["filter"] == "L-Pro"
+        assert row["frame_count"] == 42
+
+    def test_backfill_exact_date(self, tmp_path):
+        db = tmp_path / "old.db"
+        _create_old_schema_db(db, [
+            {"session_id": "S1", "target": "M 81", "obs_date": "2026-02-19",
+             "processed_status": "2026-03-01"},
+        ])
+        init_db(db)
+        with sqlite3.connect(db) as conn:
+            row = conn.execute(
+                "SELECT processed_state, processed_path, processed_date FROM sessions WHERE session_id = 'S1'"
+            ).fetchone()
+        assert row == ("processed", None, "2026-03-01")
+
+    def test_backfill_processed_path(self, tmp_path):
+        db = tmp_path / "old.db"
+        path = "01_Deep Sky Objects/M 81/_Processed/2026-05-15"
+        _create_old_schema_db(db, [
+            {"session_id": "S1", "target": "M 81", "obs_date": "2026-02-19",
+             "processed_status": path},
+        ])
+        init_db(db)
+        with sqlite3.connect(db) as conn:
+            row = conn.execute(
+                "SELECT processed_state, processed_path, processed_date FROM sessions WHERE session_id = 'S1'"
+            ).fetchone()
+        assert row == ("processed", path, "2026-05-15")
+
+    def test_backfill_skipped_copies_status_into_empty_notes(self, tmp_path):
+        db = tmp_path / "old.db"
+        _create_old_schema_db(db, [
+            {"session_id": "S1", "target": "M 81", "obs_date": "2026-02-19",
+             "processed_status": "skipped - bad tracking", "notes": None},
+        ])
+        init_db(db)
+        with sqlite3.connect(db) as conn:
+            row = conn.execute(
+                "SELECT processed_state, processed_path, processed_date, notes FROM sessions WHERE session_id = 'S1'"
+            ).fetchone()
+        assert row == ("skipped", None, None, "skipped - bad tracking")
+
+    def test_backfill_skipped_does_not_overwrite_existing_notes(self, tmp_path):
+        db = tmp_path / "old.db"
+        _create_old_schema_db(db, [
+            {"session_id": "S1", "target": "M 81", "obs_date": "2026-02-19",
+             "processed_status": "Skip: cloud cover", "notes": "already had a note"},
+        ])
+        init_db(db)
+        with sqlite3.connect(db) as conn:
+            row = conn.execute(
+                "SELECT processed_state, notes FROM sessions WHERE session_id = 'S1'"
+            ).fetchone()
+        assert row == ("skipped", "already had a note")
+
+    def test_backfill_blank_status_stays_unprocessed(self, tmp_path):
+        db = tmp_path / "old.db"
+        _create_old_schema_db(db, [
+            {"session_id": "S1", "target": "M 81", "obs_date": "2026-02-19",
+             "processed_status": ""},
+            {"session_id": "S2", "target": "M 81", "obs_date": "2026-02-20",
+             "processed_status": None},
+        ])
+        init_db(db)
+        with sqlite3.connect(db) as conn:
+            rows = conn.execute(
+                "SELECT session_id, processed_state, processed_path, processed_date FROM sessions"
+            ).fetchall()
+        assert set(rows) == {
+            ("S1", "unprocessed", None, None),
+            ("S2", "unprocessed", None, None),
+        }
+
+    def test_backfill_other_text_best_effort_path(self, tmp_path):
+        db = tmp_path / "old.db"
+        _create_old_schema_db(db, [
+            {"session_id": "S1", "target": "M 81", "obs_date": "2026-02-19",
+             "processed_status": "some custom note"},
+        ])
+        init_db(db)
+        with sqlite3.connect(db) as conn:
+            row = conn.execute(
+                "SELECT processed_state, processed_path, processed_date FROM sessions WHERE session_id = 'S1'"
+            ).fetchone()
+        assert row == ("processed", "some custom note", None)
+
+    def test_filter_empty_string_becomes_null(self, tmp_path):
+        db = tmp_path / "old.db"
+        _create_old_schema_db(db, [
+            {"session_id": "S1", "target": "M 81", "obs_date": "2026-02-19", "filter": ""},
+        ])
+        init_db(db)
+        with sqlite3.connect(db) as conn:
+            row = conn.execute("SELECT filter FROM sessions WHERE session_id = 'S1'").fetchone()
+        assert row[0] is None
+
+    def test_indexes_present_after_migration(self, tmp_path):
+        db = tmp_path / "old.db"
+        _create_old_schema_db(db, [
+            {"session_id": "S1", "target": "M 81", "obs_date": "2026-02-19"},
+        ])
+        init_db(db)
+        with sqlite3.connect(db) as conn:
+            names = {r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='index'"
+            )}
+        assert {"idx_sessions_target", "idx_sessions_obs_date", "idx_sessions_processed_state"} <= names
+
+    def test_idempotent_rerun_no_data_loss_or_reclobber(self, tmp_path):
+        db = tmp_path / "old.db"
+        _create_old_schema_db(db, [
+            {"session_id": "S1", "target": "M 81", "obs_date": "2026-02-19",
+             "processed_status": "2026-03-01"},
+        ])
+        init_db(db)
+        # Simulate a manual update via set_processed_state after migration...
+        set_processed_state(db, "S1", state="skipped", notes="changed my mind")
+        # ...then re-running init_db (e.g. a later scan) must not re-derive
+        # processed_state from the stale processed_status column.
+        init_db(db)
+        init_db(db)
+        with sqlite3.connect(db) as conn:
+            row = conn.execute(
+                "SELECT processed_state, notes, session_id FROM sessions"
+            ).fetchall()
+        assert row == [("skipped", "changed my mind", "S1")]
+
+    def test_fresh_db_and_migrated_db_converge_on_same_columns(self, tmp_path):
+        fresh = tmp_path / "fresh.db"
+        init_db(fresh)
+        old = tmp_path / "old.db"
+        _create_old_schema_db(old, [
+            {"session_id": "S1", "target": "M 81", "obs_date": "2026-02-19"},
+        ])
+        init_db(old)
+        with sqlite3.connect(fresh) as conn:
+            fresh_cols = [r[1] for r in conn.execute("PRAGMA table_info(sessions)")]
+        with sqlite3.connect(old) as conn:
+            old_cols = [r[1] for r in conn.execute("PRAGMA table_info(sessions)")]
+        assert fresh_cols == old_cols
+
+
+class TestSetProcessedState:
+    def _insert(self, db):
+        init_db(db)
+        upsert_session(db, {
+            "session_id": "S1", "target": "M 81", "obs_date": "2026-02-19",
+            "ota": "FRA400", "camera": "ZWO ASI585MC", "filter": "L-Pro",
+            "gain": 200, "temperature_c": -10.0, "exposure_sec": 180.0,
+            "focal_length": 400.0, "frame_count": 10, "total_integration_sec": 1800,
+            "ra_deg": None, "dec_deg": None, "lights_path": "/fake", "notes": "",
+        })
+
+    def test_sets_state_only(self, tmp_path):
+        db = tmp_path / "test.db"
+        self._insert(db)
+        assert set_processed_state(db, "S1", state="processed") is True
+        with sqlite3.connect(db) as conn:
+            row = conn.execute(
+                "SELECT processed_state, processed_date, processed_path FROM sessions WHERE session_id='S1'"
+            ).fetchone()
+        assert row == ("processed", None, None)
+
+    def test_sets_state_with_date_and_path(self, tmp_path):
+        db = tmp_path / "test.db"
+        self._insert(db)
+        set_processed_state(
+            db, "S1", state="processed",
+            processed_date="2026-05-15", processed_path="a/b/_Processed/2026-05-15",
+        )
+        with sqlite3.connect(db) as conn:
+            row = conn.execute(
+                "SELECT processed_state, processed_date, processed_path FROM sessions WHERE session_id='S1'"
+            ).fetchone()
+        assert row == ("processed", "2026-05-15", "a/b/_Processed/2026-05-15")
+
+    def test_refreshes_updated_at(self, tmp_path):
+        db = tmp_path / "test.db"
+        self._insert(db)
+        with sqlite3.connect(db) as conn:
+            before = conn.execute("SELECT updated_at FROM sessions WHERE session_id='S1'").fetchone()[0]
+        import time
+        time.sleep(1.1)
+        set_processed_state(db, "S1", state="skipped")
+        with sqlite3.connect(db) as conn:
+            after = conn.execute("SELECT updated_at FROM sessions WHERE session_id='S1'").fetchone()[0]
+        assert after > before
+
+    def test_notes_untouched_when_not_passed(self, tmp_path):
+        db = tmp_path / "test.db"
+        self._insert(db)
+        with sqlite3.connect(db) as conn:
+            conn.execute("UPDATE sessions SET notes = 'existing note' WHERE session_id='S1'")
+        set_processed_state(db, "S1", state="processed")
+        with sqlite3.connect(db) as conn:
+            notes = conn.execute("SELECT notes FROM sessions WHERE session_id='S1'").fetchone()[0]
+        assert notes == "existing note"
+
+    def test_notes_overwritten_when_passed(self, tmp_path):
+        db = tmp_path / "test.db"
+        self._insert(db)
+        set_processed_state(db, "S1", state="skipped", notes="bad tracking")
+        with sqlite3.connect(db) as conn:
+            notes = conn.execute("SELECT notes FROM sessions WHERE session_id='S1'").fetchone()[0]
+        assert notes == "bad tracking"
+
+    def test_invalid_state_raises_value_error(self, tmp_path):
+        db = tmp_path / "test.db"
+        self._insert(db)
+        with pytest.raises(ValueError):
+            set_processed_state(db, "S1", state="bogus")
+
+    def test_unknown_session_id_returns_false(self, tmp_path):
+        db = tmp_path / "test.db"
+        self._insert(db)
+        assert set_processed_state(db, "NoSuchSession", state="processed") is False
+
+
+class TestMarkProcessedCommandCLI:
+    """darkroom catalog mark → mark_processed_command (structured state)."""
+
+    def _insert(self, db):
+        init_db(db)
+        upsert_session(db, {
+            "session_id": "S1", "target": "M 81", "obs_date": "2026-02-19",
+            "ota": "FRA400", "camera": "ZWO ASI585MC", "filter": "L-Pro",
+            "gain": 200, "temperature_c": -10.0, "exposure_sec": 180.0,
+            "focal_length": 400.0, "frame_count": 10, "total_integration_sec": 1800,
+            "ra_deg": None, "dec_deg": None, "lights_path": "/fake", "notes": "",
+        })
+
+    def _args(self, **kwargs):
+        defaults = {"db": None, "session_id": "S1", "state": "processed",
+                    "date": None, "path": None, "notes": None}
+        defaults.update(kwargs)
+        return types.SimpleNamespace(**defaults)
+
+    def test_sets_structured_state(self, tmp_path):
+        db = tmp_path / "test.db"
+        self._insert(db)
+        mark_processed_command(self._args(db=str(db), state="processed", date="2026-05-15"))
+        with sqlite3.connect(db) as conn:
+            row = conn.execute(
+                "SELECT processed_state, processed_date FROM sessions WHERE session_id='S1'"
+            ).fetchone()
+        assert row == ("processed", "2026-05-15")
+
+    def test_unknown_session_exits(self, tmp_path, capsys):
+        db = tmp_path / "test.db"
+        self._insert(db)
+        with pytest.raises(SystemExit):
+            mark_processed_command(self._args(db=str(db), session_id="NoSuchSession"))
+        assert "not found" in capsys.readouterr().err
+
+    def test_missing_db_exits(self, tmp_path):
+        with pytest.raises(SystemExit):
+            mark_processed_command(self._args(db=str(tmp_path / "missing.db")))

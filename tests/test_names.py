@@ -1,4 +1,4 @@
-from darkroom.names import _normalize_target, _normalize_camera
+from darkroom.names import _normalize_target, _normalize_camera, make_session_id
 
 
 class TestNormalizeTarget:
@@ -45,3 +45,29 @@ class TestNormalizeCamera:
     def test_canon_already_aliased(self):
         assert _normalize_camera("CanonEOS6D") == "Canon6D"
         assert _normalize_camera("Canon6D") == "Canon6D"
+
+
+class TestMakeSessionId:
+    """Moved here from test_cataloger.py in W4 (make_session_id lives in names.py now,
+    keeping the write-layer astropy-free); still re-exported from darkroom.cataloger
+    for back-compat, so the original tests there keep passing too."""
+
+    def test_canonical(self):
+        assert make_session_id("M 81", "2026-02-19", "FRA400", "ASI585MC", "L-Pro") == \
+            "M81_20260219_FRA400_ASI585MC_L-Pro"
+
+    def test_spaces_stripped_from_target(self):
+        assert make_session_id("NGC 7380", "2025-10-01", "FRA400", "Canon6D", "L-Extreme") == \
+            "NGC7380_20251001_FRA400_Canon6D_L-Extreme"
+
+    def test_empty_filter_becomes_unknownfilter(self):
+        assert make_session_id("M 45", "2024-09-19", "FRA400", "Canon6D", "") == \
+            "M45_20240919_FRA400_Canon6D_UnknownFilter"
+
+    def test_none_filter_becomes_unknownfilter(self):
+        assert make_session_id("M 45", "2024-09-19", "FRA400", "Canon6D", None) == \
+            "M45_20240919_FRA400_Canon6D_UnknownFilter"
+
+    def test_target_with_multiple_spaces(self):
+        assert make_session_id("IC 1805", "2025-11-01", "FMA180", "ASI585MC", "L-Extreme") == \
+            "IC1805_20251101_FMA180_ASI585MC_L-Extreme"

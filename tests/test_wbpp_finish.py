@@ -3,10 +3,13 @@ from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 
+import sqlite3
+
 from darkroom.cataloger import init_db, upsert_calibration_set, upsert_session
 from darkroom.finish import (
     _find_processing_date, _build_dest, _copy_flat,
     _list_session_dirs, _confirm_and_delete, _resolve_session_ids,
+    _mark_sessions_processed,
 )
 from darkroom.prep import _build_night
 
@@ -182,7 +185,7 @@ def test_resolve_session_ids_filter_subdir_layout(tmp_path):
         "gain": 200, "temperature_c": -20.0, "exposure_sec": 180.0,
         "focal_length": 400.0, "frame_count": 1, "total_integration_sec": 180,
         "ra_deg": None, "dec_deg": None, "lights_path": lights_rel,
-        "processed_status": "", "notes": "",
+        "notes": "",
     })
 
     lights_dir = archive / lights_rel
@@ -194,6 +197,46 @@ def test_resolve_session_ids_filter_subdir_layout(tmp_path):
     (link_dir / light.name).symlink_to(light.resolve())
 
     assert _resolve_session_ids(wbpp_target, catalog, archive) == [sid]
+
+
+# ── W1: finish marks structured processed_state ────────────────────────────
+
+def test_mark_sessions_processed_sets_structured_state(tmp_path):
+    """finish's _mark_sessions_processed must set processed_state='processed'
+    with processed_path/processed_date, not the legacy processed_status."""
+    archive = tmp_path / "archive"
+    catalog = tmp_path / "cat.db"
+    init_db(catalog)
+
+    lights_rel = "01_Deep Sky Objects/M 81/2026-02-19_FRA400_ZWOASI585MCPro/Lights/L-Pro"
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(catalog, {
+        "session_id": sid, "target": "M 81", "obs_date": "2026-02-19",
+        "ota": "FRA400", "camera": "ZWOASI585MCPro", "filter": "L-Pro",
+        "gain": 200, "temperature_c": -20.0, "exposure_sec": 180.0,
+        "focal_length": 400.0, "frame_count": 1, "total_integration_sec": 180,
+        "ra_deg": None, "dec_deg": None, "lights_path": lights_rel,
+        "notes": "",
+    })
+
+    lights_dir = archive / lights_rel
+    light = touch(lights_dir / "Light_M81_180.0s_FRA400_L-Pro_20260219-230000_-20C_0001.fit")
+
+    wbpp_target = tmp_path / "WBPP" / "M81"
+    link_dir = wbpp_target / "SESSION_1" / "Lights" / "FILTER_L-Pro"
+    link_dir.mkdir(parents=True)
+    (link_dir / light.name).symlink_to(light.resolve())
+
+    status = "01_Deep Sky Objects/M 81/_Processed/2026-05-15"
+    _mark_sessions_processed(wbpp_target, catalog, archive, status, "2026-05-15")
+
+    with sqlite3.connect(catalog) as conn:
+        row = conn.execute(
+            "SELECT processed_state, processed_path, processed_date, processed_status "
+            "FROM sessions WHERE session_id = ?",
+            (sid,),
+        ).fetchone()
+    assert row == ("processed", status, "2026-05-15", None)
 
 
 def test_resolve_session_ids_no_match_returns_empty(tmp_path):

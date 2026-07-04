@@ -9,7 +9,7 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
-from darkroom.cataloger import mark_processed
+from darkroom.cataloger import set_processed_state
 from darkroom.config import resolve_catalog, resolve_path
 
 
@@ -95,16 +95,22 @@ def _resolve_session_ids(
 
 
 def _mark_sessions_processed(
-    wbpp_target: Path, catalog: Path, archive_root: Path, status: str
+    wbpp_target: Path, catalog: Path, archive_root: Path, status: str, date_str: str
 ) -> None:
-    """Mark every session resolved from wbpp_target as processed with the given status."""
+    """Mark every session resolved from wbpp_target as processed.
+
+    Sets the structured processed_state='processed', with processed_path=status
+    (the archive-relative _Processed/<date>/ path) and processed_date=date_str.
+    """
     session_ids = _resolve_session_ids(wbpp_target, catalog, archive_root)
     if not session_ids:
         print("\nWarning: no catalog sessions matched symlinks — nothing to mark.")
         return
     print(f"\nMarking {len(session_ids)} session(s) as processed:")
     for sid in session_ids:
-        ok = mark_processed(catalog, sid, status)
+        ok = set_processed_state(
+            catalog, sid, state="processed", processed_path=status, processed_date=date_str
+        )
         mark = "✓" if ok else "✗ (not found)"
         print(f"  {mark} {sid}")
 
@@ -212,7 +218,7 @@ def cmd_finish(
 
     if not dry_run:
         status = str(dest.relative_to(output))
-        _mark_sessions_processed(wbpp_target, catalog, output, status)
+        _mark_sessions_processed(wbpp_target, catalog, output, status, date_str)
 
     _confirm_and_delete(
         [wbpp_output] if wbpp_output.exists() else [],

@@ -34,8 +34,12 @@ def _list_run(args: argparse.Namespace) -> None:
         print(f"\n{tgt}")
         for row in group:
             hrs = (row["total_integration_sec"] or 0) / 3600
-            status = row.get("processed_status") or ""
-            tag = f"  [{status}]" if status else ""
+            state = row.get("processed_state") or "unprocessed"
+            if state == "unprocessed":
+                tag = ""
+            else:
+                detail = row.get("processed_date") or row.get("processed_path") or ""
+                tag = f"  [{state}{': ' + detail if detail else ''}]"
             print(
                 f"  {row['obs_date']}  {row['session_id']}"
                 f"  {row['frame_count']} frames  {hrs:.1f}h{tag}"
@@ -90,16 +94,20 @@ def add_subparser(subparsers) -> None:
 
     m = sub.add_parser(
         "mark", parents=[catalog_flag],
-        help="Set processed_status for one session",
-        description="Set a session's processed_status. This is a free-form label: "
-                    "`darkroom finish` auto-sets it to the _Processed/<date>/ path it "
-                    "wrote. Set it by hand to record a processing date, an output path, "
-                    "or a note (e.g. 'skipped — bad tracking'). Empty string clears it.",
+        help="Set structured processed_state for one session",
+        description="Set a session's structured processed_state. `darkroom finish` "
+                    "auto-sets state='processed' with the _Processed/<date>/ path and "
+                    "date it wrote. Set it by hand to mark a session unprocessed, "
+                    "processed, or skipped, optionally attaching a date, an output "
+                    "path, or a note.",
     )
     m.add_argument("session_id", help="Session ID (see `catalog list`)")
-    m.add_argument("status",
-                   help="Free-form status: a date, an output path, or a note "
-                        "('' clears it)")
+    m.add_argument("state", choices=["unprocessed", "processed", "skipped"],
+                   help="New processed_state")
+    m.add_argument("--date", metavar="YYYY-MM-DD", help="processed_date")
+    m.add_argument("--path", metavar="PATH", help="processed_path (archive-relative _Processed path)")
+    m.add_argument("--notes", metavar="TEXT",
+                   help="Notes (only overwrites existing notes when passed)")
     m.set_defaults(func=_mark_run)
 
     ls = sub.add_parser("list", parents=[catalog_flag],
