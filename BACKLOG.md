@@ -212,7 +212,21 @@ docs · **R** = refactor · **W** = web-UI prep.
 > that pattern, never drop columns on a live DB, and back up `astro_catalog.db`
 > first.
 
-### W1. Replace overloaded `processed_status` free-text with structured status
+### W1. Replace overloaded `processed_status` free-text with structured status — ✅ DONE
+> Added `processed_state` (enum `unprocessed`/`processed`/`skipped`, `NOT NULL
+> DEFAULT 'unprocessed'`), `processed_path`, `processed_date` to `sessions`. The
+> legacy `processed_status` column is **kept, not dropped** (migration safety),
+> but no live writer touches it anymore. One-time backfill parses the old
+> free-text (bare date → processed+date; `_Processed/<date>` path → processed +
+> path + extracted date; `skip…` → skipped, text moved to `notes` iff empty;
+> other non-blank → processed + best-effort path/date; blank → unprocessed).
+> New writer `cataloger.set_processed_state()`; `finish.py` and
+> `mark_processed_by_target` now write structured columns; `catalog mark` CLI is
+> now `mark <id> <state> [--date/--path/--notes]` (argparse `choices`);
+> `picker.is_processed` reads `processed_state == 'processed'`. Backfill runs
+> exactly once (folded into the W3 rebuild gate) so it can never clobber a later
+> `set_processed_state`. Tests: `tests/test_cataloger.py::TestSchemaMigration`,
+> `::TestSetProcessedState`, `::TestMarkProcessedCommandCLI`.
 - **Today:** `processed_status` stores a date *or* a path *or* a note
   ("skipped — bad tracking"). A UI can't render it as a state, filter
   processed/unprocessed reliably, or sort by processing date.
@@ -222,13 +236,30 @@ docs · **R** = refactor · **W** = web-UI prep.
   (`_mark_sessions_processed` / `mark_processed`), `cataloger.mark_processed*`,
   `catalog_cli` `mark`.
 
-### W2. Normalize empty-value conventions (`""` vs `NULL`)
+### W2. Normalize empty-value conventions (`""` vs `NULL`) — ✅ DONE
+> `NULL` is now the sole "absent/unknown filter" sentinel; `NoFilter`/
+> `UnknownFilter` remain deliberate signal values. scan-all's `... or ""` filter
+> fallback changed to `... or None`; `init_db` migrates existing `filter = ''`
+> rows to `NULL`. `processed_status = ''`-on-insert removed from both live insert
+> paths (`cataloger` scan-all + `ingest`) — the `processed_state` default covers
+> it. `catalog.find_flats` already treated `filter IS NULL` as absent; unchanged.
+> Verified on a populated DB: `''` → `NULL`, real filters (`Ha`, `L-Pro`) intact.
 - `filter` is `""` from scan-all (`cataloger.py:613` `... or ""`) but `None` /
   `"NoFilter"` from ingest. `processed_status` is `""` on insert. A UI's
   GROUP BY / filter logic must special-case both. Pick one (recommend `NULL` for
   "absent", `"NoFilter"` only for deliberate bare-filter shots) and migrate.
 
-### W3. Stable surrogate key + identity-edit story
+### W3. Stable surrogate key + identity-edit story — ✅ DONE
+> `sessions` now has `id INTEGER PRIMARY KEY`; `session_id` demoted to
+> `TEXT NOT NULL UNIQUE` (so `upsert_session`'s `ON CONFLICT(session_id)` still
+> works). Migrated via a one-time, idempotent table rebuild (guarded on `id`
+> being absent): `CREATE sessions_new` → `INSERT…SELECT` an explicit
+> non-generated column list (the `total_integration_hours` VIRTUAL column is
+> re-derived, never copied) → `DROP`/`RENAME` → recreate indexes. Fresh-DB and
+> migrated-DB schemas verified identical. The in-place identity-edit mechanism
+> (recompute `session_id`, carry status/notes forward, no orphan) lives in
+> **W4**'s `update_session_fields`. Tests: `TestSchemaMigration` (12 cases incl.
+> idempotency + fresh/migrated convergence).
 - `session_id` is a composite natural key (`target_date_ota_camera_filter`). If
   the UI lets a user fix a mis-parsed target/filter, the PK changes →
   `upsert_session` creates a *new* row and **orphans `processed_status`/`notes`**
@@ -238,7 +269,21 @@ docs · **R** = refactor · **W** = web-UI prep.
   column, and have edits update in place. Or, if keeping the natural key, give
   the UI an explicit rename-migration path that carries status/notes forward.
 
-### W4. Catalog write/query API module (`darkroom/catalog/db.py` or similar)
+### W4. Catalog write/query API module (`darkroom/catalog/db.py` or similar) — ✅ DONE
+> New `darkroom/catalog_db.py` (named `catalog_db` to avoid clashing with the
+> existing `catalog.py` module). `open_db(path)` → Row-factory conn + WAL,
+> lazily calling `init_db` only when the file is missing. `query_sessions(conn,
+> *, target/obs_date/session_id/camera/ota/filter/date_from/date_to/
+> processed_state, limit, offset)` and `count_sessions(...)` share one
+> `_build_where` helper. `update_session_fields(conn, session_id, **fields)`
+> whitelists editable columns, validates `processed_state`, and — the W3
+> anti-orphan payoff — when an identity component changes it recomputes
+> `session_id` and folds it into a single `UPDATE … WHERE id = ?`, carrying
+> status/notes/created_at forward on the same row; a rename that collides with
+> another row's `session_id` raises before writing. `make_session_id` moved to
+> `darkroom/names.py` so the module stays **astropy-free at import** (W5
+> constraint; verified by a subprocess `sys.modules` test). Tests:
+> `tests/test_catalog_db.py` (33), `tests/test_names.py` (make_session_id).
 - No API to update a session beyond full-row `upsert_session` + `mark_processed`.
   A UI editing notes/target would embed raw SQL.
 - **Do:** Mirror `triage/db.py`: `open_db` (with WAL — see W6),
@@ -357,6 +402,61 @@ bursty imaging runs, and mismatches fail with a shrug instead of showing what
 
 ---
 
+## F — Features
+
+### F1. Derive processing state by scanning the archive for output artifacts
+- **Why:** A read-only audit of the live catalog on 2026-07-04 found **all 205
+  sessions with a blank `processed_status`** (now `processed_state =
+  'unprocessed'` after W1) — yet many targets have almost certainly been
+  stacked and/or finished. The real "this is done" signal lives in the
+  **archive as files**, not in the DB: the catalog was never told. This feature
+  reconciles the catalog to reality by walking the archive and inferring state
+  from the presence of output artifacts.
+- **Detection heuristics (in priority order):**
+  1. **Finished** → a **TIFF** (`.tif`/`.tiff`, case-insensitive) — the final
+     exported image. Usually lives in `<Target>/_Processed/` (at any depth
+     under it). If there's no `_Processed/` folder, fall back to looking in the
+     target folder / known legacy locations (the archive still has pre-canonical
+     org that `triage` exists to clean up — reuse/extend its walk if practical).
+     → maps to `processed_state = 'processed'`.
+  2. **Stacked / in progress** → a **`masterLight*.xisf`** (PixInsight/WBPP
+     integration output) present but **no** finished TIFF. Means the subs were
+     integrated but post-processing probably isn't done. → see enum note below.
+  3. Neither → leave `unprocessed`.
+- **Enum tension to resolve first:** W1's `processed_state` is
+  `unprocessed`/`processed`/`skipped` — there is **no "stacked/in-progress"
+  value**. Decide: (a) add a fourth enum value (e.g. `stacked` or
+  `in_progress`) — cleanest, but touches the W1 migration, `set_processed_state`
+  validation, `PROCESSED_STATES`, the picker (`needs_processing` — is a stacked
+  night still a candidate? probably yes, it's not finished), and any UI status
+  chips; or (b) record "stacked" as a separate boolean/flag or a note and leave
+  the enum ternary. Recommend (a) — it's a genuine pipeline state and the whole
+  point of W1 was to stop overloading one field.
+- **Where it writes:** a `catalog`-native command (e.g.
+  `darkroom catalog scan-processed --archive <path> [--dry-run]`) that sets
+  `processed_state` (+ `processed_path` = the `_Processed/<date>` or artifact
+  dir, + `processed_date` from the folder name or newest artifact mtime) via the
+  W4 `update_session_fields` / `set_processed_state` API. A `--dry-run` that
+  prints proposed transitions is essential given it's a bulk reconcile over 205
+  rows. (Could instead live in `triage` as a check+action, mirroring U2's
+  "extend triage vs catalog-native" decision — but this writes the catalog, so
+  catalog-native keeps triage's "never writes the catalog" boundary intact.)
+- **Caveats / design notes:**
+  - **Granularity mismatch:** `finish` writes `_Processed/<date>/` **per
+    target**, not per session, and marks *every* session under that WBPP target
+    processed. A target-level TIFF therefore can't by itself say *which* nights
+    it used — decide whether a found artifact marks all of the target's sessions
+    processed (matches current `finish` semantics) or needs finer attribution.
+  - Don't mistake WBPP **working** dirs (`~/WBPP/...`, transient symlink trees)
+    for archive artifacts — scan the archive root only.
+  - `master*.xisf` also covers `masterDark`/`masterFlat`/`masterBias`
+    (calibration) — match **`masterLight`** specifically, not bare `master`.
+  - Idempotent + re-runnable; safe to run repeatedly as processing progresses
+    (unprocessed → stacked → processed is monotonic, but a re-run shouldn't
+    downgrade a hand-set `skipped`).
+
+---
+
 ## Suggested order for a future session
 1. **B1 + B2** (finish + flat-darks) — silent data-pipeline failures, with tests. ✅ DONE
 2. **R6 + W5/W6/W7** schema+helper groundwork (move name helpers, WAL, indexes,
@@ -365,9 +465,13 @@ bursty imaging runs, and mismatches fail with a shrug instead of showing what
    verifying intended master/raw behaviour). ✅ DONE — B6 (doc-wide `04_`→`01_`
    rename) folded in alongside B3 at the user's request.
 4. **U1** wbpp interactive picker — biggest daily-use friction, small scope. ✅ DONE 2026-07-04
-5. **W1/W2/W3/W4** the real web-UI data-model + API prep. ← next
-6. **U2/U3** filter cleanup queue + interactive ingest review (U3 benefits from
+5. **W1/W2/W3/W4** the real web-UI data-model + API prep. ✅ DONE 2026-07-04 ←
+   next: build the read/edit UI on `catalog_db.py` (FastAPI + Jinja2, model on
+   the triage subpackage; add a `catalog ui`/`serve-ui` subcommand).
+6. **F1** archive-artifact processing-state scan — reconciles the 205
+   all-`unprocessed` rows to reality; resolve the `stacked` enum question first.
+7. **U2/U3** filter cleanup queue + interactive ingest review (U3 benefits from
    U1's picker helpers; U2 may want the W-series catalog write API first).
-7. **R1–R5, B7** cleanup as capacity allows.
+8. **R1–R5, B7** cleanup as capacity allows.
 </content>
 </invoke>
