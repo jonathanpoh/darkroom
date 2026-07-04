@@ -176,16 +176,27 @@ darkroom catalog scan-calibration "/Volumes/Astrophotography/00_Calibration"
 darkroom catalog list
 darkroom catalog list --target "M 81"
 
-# Manually set processed_status on one session (date, path, or note)
-darkroom catalog mark M81_20260219_FRA400_ZWOASI585MCPro_L-Pro 2026-05-15
+# Manually set one session's processed_state (enum: unprocessed | in_progress | processed | skipped)
+darkroom catalog mark M81_20260219_FRA400_ZWOASI585MCPro_L-Pro processed --date 2026-05-15
+darkroom catalog mark <id> skipped --notes "bad tracking"
+
+# Reconcile processed_state from what's on disk (dry run; add --apply to write)
+darkroom catalog scan-processed --archive "/Volumes/Astrophotography"
+darkroom catalog scan-processed --archive "/Volumes/Astrophotography" --apply
 ```
+
+`processed_state` is a structured enum: `unprocessed` → `in_progress` (stacked
+and/or mid-edit, no final export) → `processed`, plus `skipped` (deliberately
+set aside). `finish` sets it automatically; `mark` and `scan-processed` set it
+manually / from disk.
 
 | Subcommand | When to use |
 |---|---|
 | `scan-lights <root_path>` | (Re)catalog all light sessions under a folder. Safe to re-run. |
 | `scan-calibration <calibration_path>` | (Re)catalog calibration frames (darks/flats/flat-darks/bias). |
-| `list [--target NAME]` | Browse sessions, with integration time and processed status. |
-| `mark <session_id> <status>` | Manually update one session's `processed_status`. |
+| `list [--target NAME]` | Browse sessions, with integration time and processed state. |
+| `mark <session_id> <state> [--date/--path/--notes]` | Set one session's `processed_state` by hand (`<state>` validated). |
+| `scan-processed --archive PATH [--apply]` | Reconcile `processed_state` from archive artifacts (dry run without `--apply`; only upgrades, never touches `skipped`). |
 
 ### `darkroom catalog migrate-archive` — one-off layout migration
 

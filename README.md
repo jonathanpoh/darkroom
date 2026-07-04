@@ -55,14 +55,32 @@ See [`darkroom.toml.example`](darkroom.toml.example).
 darkroom catalog scan-lights "/Volumes/Astrophotography/01_Deep Sky Objects"
 darkroom catalog scan-calibration "/Volumes/Astrophotography/00_Calibration"
 darkroom catalog list [--target "M 81"]
-darkroom catalog mark <session_id> "2026-05-15"
+darkroom catalog mark <session_id> <state> [--date Y] [--path P] [--notes T]
+darkroom catalog scan-processed --archive <path> [--apply]
 ```
+
+Processing status is a structured enum `processed_state`, one of:
+`unprocessed`, `in_progress` (stacked and/or editing, no final export yet),
+`processed`, `skipped` (deliberately set aside). `catalog mark` sets it by hand
+(`<state>` is validated); `--date`/`--path`/`--notes` attach a processing date,
+output path, and free-text note. `darkroom finish` sets it automatically.
+
+`catalog scan-processed` reconciles the catalog to what's actually on disk:
+it walks the archive for output artifacts and proposes a `processed_state` per
+session — an export (`.tif/.jpg/.png/.psd`) → `processed`, a `.xisf`/WBPP master
+→ `in_progress`, only subs → `unprocessed`. Attribution is date-bound (an edit
+dated on/after a night covers it; newer nights stay unprocessed). It is a **dry
+run by default** (prints proposed changes); `--apply` writes them, monotonically
+(only upgrades, never downgrades or touches `skipped`). Read-only on the archive.
 
 Catalog write rules:
 - Camera names are normalized (whitespace stripped) at the upsert layer —
   `"ZWO ASI585MC Pro"` → `ZWOASI585MCPro`.
 - `exposure_sec` is rounded to 4 decimals (avoids FITS float noise).
-- `processed_status` is preserved on re-scan (upsert does not overwrite it).
+- `processed_state` (+ `processed_path`/`processed_date`/`notes`) is preserved on
+  re-scan (upsert does not overwrite it).
+- `filter` is `NULL` when absent/unknown (`NoFilter`/`UnknownFilter` are
+  deliberate values, not "empty").
 - Synology `@eaDir/` metadata folders are skipped automatically.
 - `Dark` frames with exposure < 10s are reclassified as `FlatDark` (ASIAir
   writes them into the same folder).
@@ -126,10 +144,10 @@ darkroom finish --target "M 81" --dry-run            # preview
 ```
 
 Copies stacks to `<output>/01_Deep Sky Objects/<target>/_Processed/<date>/`,
-then walks each `SESSION_N/`'s light symlinks back to the catalog to mark every
-contributing `session_id` as processed with the `_Processed/<date>` path. Then
-prompts to delete `SESSION_N/`, `calibrated/`, `debayered/`, `master/`,
-`processed/` working dirs.
+then walks each `SESSION_N/`'s light symlinks back to the catalog to set every
+contributing session's `processed_state = processed` (recording the
+`_Processed/<date>` path and date). Then prompts to delete `SESSION_N/`,
+`calibrated/`, `debayered/`, `master/`, `processed/` working dirs.
 
 ## Package layout
 
@@ -139,12 +157,16 @@ darkroom/
   config.py         shared --flag / env / toml resolution
   cataloger.py      FITS extraction, scan-all/scan-calibration logic, DB schema, upsert/mark
   catalog.py        read-only query helpers (find_darks, find_flats, …)
+  catalog_db.py     write/query API for the future web UI (open_db, query/count/update)
   catalog_cli.py    `darkroom catalog …` subparser tree
+  names.py          stdlib-only name/coord helpers (make_session_id, normalize, …)
   parse.py          filename parsing (parse_filter, parse_exposure, parse_datetime, …)
   scanner.py        scan_source — produces Session/CalibrationGroup dataclasses
   ingest.py         `darkroom ingest`
   prep.py           `darkroom wbpp`
+  picker.py         interactive session picker for `darkroom wbpp`
   finish.py         `darkroom finish`
+  procscan.py       `darkroom catalog scan-processed` — reconcile processed_state from disk
   wbpp.py           symlink helpers used by prep/finish
 ```
 
@@ -154,8 +176,9 @@ darkroom/
 uv run pytest
 ```
 
-168 tests covering scanners, parsers, DB upsert/queries, ingest manifest
-builders, WBPP symlink discovery, and finish-side date/copy/cleanup helpers.
+459 tests covering scanners, parsers, DB upsert/queries/migrations, the
+catalog write API, ingest manifest builders, WBPP symlink discovery, the
+interactive picker, processed-state reconciliation, and finish-side helpers.
 The new CLI dispatcher itself (`darkroom/cli.py`) is not yet covered by tests
 — if you change parsing, smoke-test with `uv run darkroom <subcmd> --help`.
 

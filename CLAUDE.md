@@ -22,7 +22,8 @@ pipeline); now one package with subcommands:
 |---|---|
 | `darkroom catalog scan-lights <path>` | Recursively catalog all light sessions on the NAS |
 | `darkroom catalog scan-calibration <path>` | Catalog calibration frames |
-| `darkroom catalog mark <id> <status>` | Update processed_status for one session |
+| `darkroom catalog mark <id> <state> [--date/--path/--notes]` | Set processed_state (unprocessed/in_progress/processed/skipped) for one session |
+| `darkroom catalog scan-processed --archive <path> [--apply]` | Reconcile processed_state from on-disk output artifacts (dry-run by default) |
 | `darkroom catalog list [--target X]` | Browse the catalog |
 | `darkroom catalog migrate-archive --archive <path> [--dry-run]` | Migrate archive from old filter-in-folder layout to `Lights/<filter>/` |
 | `darkroom ingest scan --asiair <path> [--manifest F]` / `ingest review F` / `ingest commit [F]` | Archive an ASIAir session (scan → review → commit) |

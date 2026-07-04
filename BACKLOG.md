@@ -404,7 +404,50 @@ bursty imaging runs, and mismatches fail with a shrug instead of showing what
 
 ## F — Features
 
-### F1. Derive processing state by scanning the archive for output artifacts
+### F1. Derive processing state by scanning the archive for output artifacts — ✅ IMPLEMENTED (pending commit)
+> Shipped 2026-07-04 as `darkroom catalog scan-processed --archive PATH
+> [--apply]`. New `darkroom/procscan.py` (strictly read-only on the archive;
+> dry-run is pure-read — no `init_db`, reads via `query_all_sessions`). Added a
+> 4th enum value `in_progress` (final decision: 4-state `unprocessed /
+> in_progress / processed / skipped`, collapsing "stacked" into "in_progress").
+> Detection by extension: export (`.tif/.tiff/.jpg/.jpeg/.png/.psd/.psb`) →
+> processed; `.xisf/.xpsm/.xosm` → in_progress; subs (`.fit/.fits/.orf/.cr2`,
+> `_thn` thumbnails, anything under `Lights/`) ignored. **Attribution =
+> date-bound**: an edit dated ≥ a night's `obs_date` covers it; newer nights
+> stay unprocessed. Edit date recovered from a `YYYY-MM-DD` path component
+> (`_Processed/<date>/`), else file mtime. `--apply` is **monotonic** (only
+> upgrades along unprocessed<in_progress<processed; never downgrades, never
+> touches `skipped`) and idempotent. Real read-only dry-run on the live archive:
+> 75 → processed, 40 → in_progress, 90 unchanged. Tests: `tests/test_procscan.py`
+> (27) + enum tests in test_cataloger/test_catalog_db/test_picker. **Requires the
+> live `astro_catalog.db` to be migrated (W1) before `--apply`** — back it up
+> first. See **F2** for the exact-attribution upgrade.
+
+### F2. Exact session↔edit attribution from PixInsight WBPP logs (backfills W8)
+- **Why:** F1's date-bound attribution is a heuristic — a single edit that fused
+  several nights marks *all* of a target's on-or-before nights processed, which
+  over-attributes (e.g. nights shot before an edit but not actually included).
+  Confirmed 2026-07-04: WBPP writes a full input manifest to
+  `<Target>/_Processed/<date>/…/logs/*.log`, listing **every light sub by its
+  original filename** with the ASIAir capture timestamp
+  (`Light_M81_M82_180.0s_Bin1_ISO1600_20250326-000039_17.0C_0002.fit`). The M 81
+  2025-04-26 edit's log names lights from exactly 4 nights (2025-03-26/27/29/30).
+  118 such logs exist in the archive.
+- **Do:** parse each log's `Begin calibration of Light frames` section → collect
+  `Light_*.fit` filenames → `parse.parse_datetime()` →
+  `cataloger.compute_imaging_night()` → match to catalog sessions by
+  `(target, night)`. This yields the **exact** set of sessions per edit — the
+  retroactive way to populate the **W8** session↔calibration/edit linkage table.
+- **Integration:** a precision pass layered over F1 — use log-derived attribution
+  where a parseable integration log exists, fall back to F1's date-bound rule
+  otherwise. Record the linkage durably (W8 table) so it's not recomputed.
+- **Caveats:** log paths are old *staging* paths, not archive paths — irrelevant,
+  the filename (target + timestamp) is enough to compute the night. Not every
+  `_Processed/` folder has logs; some folders hold many per-run logs — target the
+  integration log specifically. A single edit may also combine multiple WBPP runs
+  or hand-added frames not in any one log.
+
+### F1. Derive processing state by scanning the archive for output artifacts (original spec)
 - **Why:** A read-only audit of the live catalog on 2026-07-04 found **all 205
   sessions with a blank `processed_status`** (now `processed_state =
   'unprocessed'` after W1) — yet many targets have almost certainly been
@@ -468,8 +511,9 @@ bursty imaging runs, and mismatches fail with a shrug instead of showing what
 5. **W1/W2/W3/W4** the real web-UI data-model + API prep. ✅ DONE 2026-07-04 ←
    next: build the read/edit UI on `catalog_db.py` (FastAPI + Jinja2, model on
    the triage subpackage; add a `catalog ui`/`serve-ui` subcommand).
-6. **F1** archive-artifact processing-state scan — reconciles the 205
-   all-`unprocessed` rows to reality; resolve the `stacked` enum question first.
+6. **F1** archive-artifact processing-state scan — ✅ DONE 2026-07-04
+   (`catalog scan-processed`; 4-state enum; date-bound + dry-run). Then **F2**
+   exact attribution from WBPP logs (backfills W8) as a precision layer.
 7. **U2/U3** filter cleanup queue + interactive ingest review (U3 benefits from
    U1's picker helpers; U2 may want the W-series catalog write API first).
 8. **R1–R5, B7** cleanup as capacity allows.
