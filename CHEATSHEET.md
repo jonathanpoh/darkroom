@@ -196,7 +196,7 @@ manually / from disk.
 | `scan-calibration <calibration_path>` | (Re)catalog calibration frames (darks/flats/flat-darks/bias). |
 | `list [--target NAME]` | Browse sessions, with integration time and processed state. |
 | `mark <session_id> <state> [--date/--path/--notes]` | Set one session's `processed_state` by hand (`<state>` validated). |
-| `scan-processed --archive PATH [--apply]` | Reconcile `processed_state` from archive artifacts (dry run without `--apply`; only upgrades, never touches `skipped`). |
+| `scan-processed --archive PATH [--apply]` | Reconcile `processed_state` from archive artifacts (dry run without `--apply`; only upgrades, never touches `skipped`). Uses PixInsight WBPP logs for **exact** night→edit attribution where they exist (`[log …]`), else a date-bound heuristic (`[date-bound …]`). |
 
 ### `darkroom catalog migrate-archive` — one-off layout migration
 

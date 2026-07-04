@@ -423,7 +423,22 @@ bursty imaging runs, and mismatches fail with a shrug instead of showing what
 > live `astro_catalog.db` to be migrated (W1) before `--apply`** — back it up
 > first. See **F2** for the exact-attribution upgrade.
 
-### F2. Exact session↔edit attribution from PixInsight WBPP logs (backfills W8)
+### F2. Exact session↔edit attribution from PixInsight WBPP logs (backfills W8) — ✅ DONE
+> Shipped 2026-07-04. New `darkroom/wbpplog.py` (read-only, astropy-free):
+> `parse_log_nights(log)` → set of imaging nights from a run's `Light_*` frame
+> refs (basename timestamp → noon-rule night); `collect_runs(target_dir)` →
+> per-run `RunEvidence(run_dir, edit_date, nights, has_export)` for every folder
+> holding a `logs/` dir. `procscan.classify_target/session` now attribute a night
+> from logs first (in a has-export run → processed; else in_progress) and
+> **exclude logged runs' subtrees from the date-bound pools** so a logged edit
+> can't over-attribute an un-logged night (the F1 fix). Falls back to F1
+> date-bound for targets/nights with no logs. Dry-run tags each row `[log …]` vs
+> `[date-bound …]`. Overlapping edits are fine: a night's state is the max over
+> every run that used it (many-to-many is W8's concern, not state's). Real dry-run
+> shift F1→F2: 75→45 processed, 40→64 in_progress (30 over-attributed sessions
+> corrected). Tests: `tests/test_wbpplog.py` (15) + `tests/test_procscan.py`.
+> The persisted linkage TABLE is still W8 — F2 only computes attribution at scan
+> time; the log parser is the reusable piece W8 will populate from.
 - **Why:** F1's date-bound attribution is a heuristic — a single edit that fused
   several nights marks *all* of a target's on-or-before nights processed, which
   over-attributes (e.g. nights shot before an edit but not actually included).

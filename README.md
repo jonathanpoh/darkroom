@@ -68,10 +68,13 @@ output path, and free-text note. `darkroom finish` sets it automatically.
 `catalog scan-processed` reconciles the catalog to what's actually on disk:
 it walks the archive for output artifacts and proposes a `processed_state` per
 session — an export (`.tif/.jpg/.png/.psd`) → `processed`, a `.xisf`/WBPP master
-→ `in_progress`, only subs → `unprocessed`. Attribution is date-bound (an edit
-dated on/after a night covers it; newer nights stay unprocessed). It is a **dry
-run by default** (prints proposed changes); `--apply` writes them, monotonically
-(only upgrades, never downgrades or touches `skipped`). Read-only on the archive.
+→ `in_progress`, only subs → `unprocessed`. Where PixInsight WBPP logs exist it
+uses their frame lists for **exact** night→edit attribution; otherwise it falls
+back to a date-bound heuristic (an edit dated on/after a night covers it; newer
+nights stay unprocessed). It is a **dry run by default** (prints proposed
+changes, tagged `[log …]` vs `[date-bound …]`); `--apply` writes them,
+monotonically (only upgrades, never downgrades or touches `skipped`). Read-only
+on the archive.
 
 Catalog write rules:
 - Camera names are normalized (whitespace stripped) at the upsert layer —
@@ -167,6 +170,7 @@ darkroom/
   picker.py         interactive session picker for `darkroom wbpp`
   finish.py         `darkroom finish`
   procscan.py       `darkroom catalog scan-processed` — reconcile processed_state from disk
+  wbpplog.py        parse PixInsight WBPP logs for exact session→edit attribution
   wbpp.py           symlink helpers used by prep/finish
 ```
 
