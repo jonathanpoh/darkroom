@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
+from darkroom.catalog import find_darks, find_flat_darks, find_flats, query_all_sessions
 from darkroom.catalog_client import HttpBackend, LocalBackend
 from darkroom.webapi.app import create_app
 
@@ -155,3 +156,112 @@ def test_limit_offset_parity(backends):
         http.query_sessions(limit=2, offset=3)
     )
     assert len(http.query_sessions(limit=2, offset=3)) == 2
+
+
+# ── read-parity: darkroom.catalog matchers over LocalBackend vs HttpBackend ──
+#
+# These matchers (query_all_sessions, find_darks, find_flats, find_flat_darks)
+# hold the date-proximity/exposure-tolerance/null-filter logic that can't be
+# pushed down to a server-side equality filter (see darkroom/catalog.py). The
+# tests below prove that logic gives identical results whether the rows it
+# operates on came from a local SQLite file or over HTTP through the real
+# webapi app.
+
+def test_query_all_sessions_parity(backends):
+    local, http = backends
+    s1 = _session("M81_20260219_FRA400_ZWOASI585MCPro_L-Pro")
+    s2 = _session(
+        "M81_20260218_FRA400_ZWOASI585MCPro_L-Pro", obs_date="2026-02-18"
+    )
+    s3 = _session(
+        "NGC7000_20260220_FRA400_ZWOASI585MCPro_L-Pro",
+        target="NGC 7000", obs_date="2026-02-20",
+    )
+    for b in (local, http):
+        b.upsert_session(s1)
+        b.upsert_session(s2)
+        b.upsert_session(s3)
+
+    assert _strip(query_all_sessions(local)) == _strip(query_all_sessions(http))
+
+
+def test_find_flats_parity(backends):
+    local, http = backends
+    flat_l_pro = _cal_set(
+        "Flat_FRA400_ZWOASI585MCPro_L-Pro_2026-02-20",
+        frame_type="Flat", filter="L-Pro", exposure_sec=2.0,
+        capture_date="2026-02-20",
+        folder_path="00_Calibration/Flats/FRA400_ZWOASI585MCPro_L-Pro/2026-02-20",
+    )
+    # NULL filter (NoFilter session) — exercises the filter_=None branch.
+    flat_no_filter = _cal_set(
+        "Flat_FRA400_ZWOASI585MCPro_NoFilter_2026-02-21",
+        frame_type="Flat", filter=None, exposure_sec=2.0,
+        capture_date="2026-02-21",
+        folder_path="00_Calibration/Flats/FRA400_ZWOASI585MCPro_NoFilter/2026-02-21",
+    )
+    for b in (local, http):
+        b.upsert_calibration_set(flat_l_pro)
+        b.upsert_calibration_set(flat_no_filter)
+
+    assert _strip(
+        find_flats(local, camera="ZWOASI585MCPro", ota="FRA400", filter_="L-Pro", obs_date="2026-02-19")
+    ) == _strip(
+        find_flats(http, camera="ZWOASI585MCPro", ota="FRA400", filter_="L-Pro", obs_date="2026-02-19")
+    )
+    assert _strip(
+        find_flats(local, camera="ZWOASI585MCPro", ota="FRA400", filter_=None, obs_date="2026-02-19")
+    ) == _strip(
+        find_flats(http, camera="ZWOASI585MCPro", ota="FRA400", filter_=None, obs_date="2026-02-19")
+    )
+    # Out-of-window date on both sides: no match either way.
+    assert (
+        find_flats(local, camera="ZWOASI585MCPro", ota="FRA400", filter_="L-Pro", obs_date="2020-01-01")
+        == find_flats(http, camera="ZWOASI585MCPro", ota="FRA400", filter_="L-Pro", obs_date="2020-01-01")
+        == []
+    )
+
+
+def test_find_flat_darks_parity(backends):
+    local, http = backends
+    fd_same_day = _cal_set(
+        "FlatDark_ZWOASI585MCPro_2.0s_2026-02-20",
+        frame_type="FlatDark", ota=None, filter=None, exposure_sec=2.0,
+        capture_date="2026-02-20",
+        folder_path="00_Calibration/FlatDarks/ZWOASI585MCPro",
+    )
+    for b in (local, http):
+        b.upsert_calibration_set(fd_same_day)
+
+    assert _strip(
+        find_flat_darks(local, camera="ZWOASI585MCPro", flat_exposure_sec=2.0, flat_capture_date="2026-02-20")
+    ) == _strip(
+        find_flat_darks(http, camera="ZWOASI585MCPro", flat_exposure_sec=2.0, flat_capture_date="2026-02-20")
+    )
+    # flat_date+1 fallback (morning-after flat darks).
+    assert _strip(
+        find_flat_darks(local, camera="ZWOASI585MCPro", flat_exposure_sec=2.0, flat_capture_date="2026-02-19")
+    ) == _strip(
+        find_flat_darks(http, camera="ZWOASI585MCPro", flat_exposure_sec=2.0, flat_capture_date="2026-02-19")
+    )
+
+
+def test_find_darks_parity(backends):
+    local, http = backends
+    dark = _cal_set(
+        "Dark_ZWOASI585MCPro_gain200_180s",
+        frame_type="Dark", camera="ZWOASI585MCPro", gain=200, exposure_sec=180.0,
+    )
+    for b in (local, http):
+        b.upsert_calibration_set(dark)
+
+    assert _strip(
+        find_darks(local, camera="ZWOASI585MCPro", gain=200, exposure_sec=180.0)
+    ) == _strip(
+        find_darks(http, camera="ZWOASI585MCPro", gain=200, exposure_sec=180.0)
+    )
+    assert (
+        find_darks(local, camera="ZWOASI585MCPro", gain=999, exposure_sec=180.0)
+        == find_darks(http, camera="ZWOASI585MCPro", gain=999, exposure_sec=180.0)
+        == []
+    )

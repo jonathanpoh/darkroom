@@ -197,7 +197,7 @@ def test_resolve_session_ids_filter_subdir_layout(tmp_path):
     link_dir.mkdir(parents=True)
     (link_dir / light.name).symlink_to(light.resolve())
 
-    assert _resolve_session_ids(wbpp_target, catalog, archive) == [sid]
+    assert _resolve_session_ids(wbpp_target, LocalBackend(catalog), archive) == [sid]
 
 
 # ── W1: finish marks structured processed_state ────────────────────────────
@@ -230,7 +230,7 @@ def test_mark_sessions_processed_sets_structured_state(tmp_path):
 
     status = "01_Deep Sky Objects/M 81/_Processed/2026-05-15"
     _mark_sessions_processed(
-        wbpp_target, catalog, archive, status, "2026-05-15", LocalBackend(catalog)
+        wbpp_target, archive, status, "2026-05-15", LocalBackend(catalog)
     )
 
     with sqlite3.connect(catalog) as conn:
@@ -251,7 +251,7 @@ def test_resolve_session_ids_no_match_returns_empty(tmp_path):
     link_dir.mkdir(parents=True)
     stray = touch(archive / "elsewhere" / "x.fit")
     (link_dir / "x.fit").symlink_to(stray.resolve())
-    assert _resolve_session_ids(wbpp_target, catalog, archive) == []
+    assert _resolve_session_ids(wbpp_target, LocalBackend(catalog), archive) == []
 
 
 # ── B2: flat darks captured the morning after the flats ───────────────────────
@@ -296,7 +296,7 @@ def test_build_night_symlinks_flat_darks_dated_next_morning(tmp_path):
     }
 
     session_dir = tmp_path / "WBPP" / "M81" / "SESSION_1"
-    _build_night([session], output=archive, catalog=catalog,
+    _build_night([session], output=archive, backend=LocalBackend(catalog),
                  session_dir=session_dir, flat_window=3)
 
     fd_links = list((session_dir / "FlatDarks").glob("*"))
@@ -343,7 +343,7 @@ def test_build_night_prefers_master_dark_over_raw_subs(tmp_path):
     }
 
     session_dir = tmp_path / "WBPP" / "M81" / "SESSION_1"
-    _build_night([session], output=archive, catalog=catalog,
+    _build_night([session], output=archive, backend=LocalBackend(catalog),
                  session_dir=session_dir, flat_window=3)
 
     dark_links = list((session_dir / "Darks").glob("*"))
@@ -385,7 +385,7 @@ def test_build_night_prefers_master_bias_over_raw_subs(tmp_path):
     }
 
     session_dir = tmp_path / "WBPP" / "M81" / "SESSION_1"
-    _build_night([session], output=archive, catalog=catalog,
+    _build_night([session], output=archive, backend=LocalBackend(catalog),
                  session_dir=session_dir, flat_window=3)
 
     bias_links = list((session_dir / "Bias").glob("*"))

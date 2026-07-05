@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from darkroom.catalog_client import LocalBackend
 from darkroom.cataloger import init_db, upsert_session
 from darkroom.picker import (
     group_nights,
@@ -268,28 +269,28 @@ def _build_catalog(tmp_path: Path) -> Path:
 
 
 def test_resolve_rows_single_date_backward_compat(tmp_path):
-    catalog = _build_catalog(tmp_path)
+    backend = LocalBackend(_build_catalog(tmp_path))
     target_name, rows = _resolve_rows(
-        catalog, target="M 81", dates=["2026-06-01"], session_id=None
+        backend, target="M 81", dates=["2026-06-01"], session_id=None
     )
     assert target_name == "M 81"
     assert {r["session_id"] for r in rows} == {"m81_1", "m81_2"}
 
 
 def test_resolve_rows_multiple_dates_selects_exactly_those_nights(tmp_path):
-    catalog = _build_catalog(tmp_path)
+    backend = LocalBackend(_build_catalog(tmp_path))
     target_name, rows = _resolve_rows(
-        catalog, target="M 81", dates=["2026-06-01", "2026-06-10"], session_id=None
+        backend, target="M 81", dates=["2026-06-01", "2026-06-10"], session_id=None
     )
     assert target_name == "M 81"
     assert {r["session_id"] for r in rows} == {"m81_1", "m81_2", "m81_3"}
 
 
 def test_resolve_rows_missing_date_exits_listing_available_nights(tmp_path):
-    catalog = _build_catalog(tmp_path)
+    backend = LocalBackend(_build_catalog(tmp_path))
     with pytest.raises(SystemExit) as exc:
         _resolve_rows(
-            catalog, target="M 81", dates=["2026-06-01", "2099-01-01"], session_id=None
+            backend, target="M 81", dates=["2026-06-01", "2099-01-01"], session_id=None
         )
     message = str(exc.value)
     assert "2099-01-01" in message
@@ -298,27 +299,27 @@ def test_resolve_rows_missing_date_exits_listing_available_nights(tmp_path):
 
 
 def test_resolve_rows_unknown_target_exits_with_picker_hint(tmp_path):
-    catalog = _build_catalog(tmp_path)
+    backend = LocalBackend(_build_catalog(tmp_path))
     with pytest.raises(SystemExit) as exc:
-        _resolve_rows(catalog, target="Nonexistent", dates=None, session_id=None)
+        _resolve_rows(backend, target="Nonexistent", dates=None, session_id=None)
     message = str(exc.value)
     assert "darkroom wbpp" in message
     assert "picker" in message
 
 
 def test_resolve_rows_session_id_path(tmp_path):
-    catalog = _build_catalog(tmp_path)
+    backend = LocalBackend(_build_catalog(tmp_path))
     target_name, rows = _resolve_rows(
-        catalog, target=None, dates=None, session_id="m81_2"
+        backend, target=None, dates=None, session_id="m81_2"
     )
     assert target_name == "M 81"
     assert [r["session_id"] for r in rows] == ["m81_2"]
 
 
 def test_resolve_rows_neither_target_nor_session_exits(tmp_path):
-    catalog = _build_catalog(tmp_path)
+    backend = LocalBackend(_build_catalog(tmp_path))
     with pytest.raises(SystemExit):
-        _resolve_rows(catalog, target=None, dates=None, session_id=None)
+        _resolve_rows(backend, target=None, dates=None, session_id=None)
 
 
 # ── module import has no hard dependency on questionary ─────────────────────

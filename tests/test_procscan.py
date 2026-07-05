@@ -266,7 +266,7 @@ def test_scan_never_downgrades_processed(tmp_path):
     db = _build_catalog(tmp_path, [_session("s1", obs_date="2026-02-19")])
     set_processed_state(db, "s1", state="processed", processed_date="2026-05-01")
 
-    transitions = scan(archive, db)
+    transitions = scan(archive, LocalBackend(db))
 
     t = transitions[0]
     assert t.current_state == "processed"
@@ -280,7 +280,7 @@ def test_scan_never_changes_skipped(tmp_path):
     db = _build_catalog(tmp_path, [_session("s1", obs_date="2026-02-19")])
     set_processed_state(db, "s1", state="skipped")
 
-    transitions = scan(archive, db)
+    transitions = scan(archive, LocalBackend(db))
 
     t = transitions[0]
     assert t.current_state == "skipped"
@@ -293,7 +293,7 @@ def test_scan_upgrades_unprocessed_to_processed(tmp_path):
     touch(archive / "01_Deep Sky Objects" / "M 81" / "_Processed" / "2026-05-01" / "final.tif")
     db = _build_catalog(tmp_path, [_session("s1", obs_date="2026-02-19")])
 
-    transitions = scan(archive, db)
+    transitions = scan(archive, LocalBackend(db))
 
     t = transitions[0]
     assert t.proposed_state == "processed"
@@ -306,7 +306,7 @@ def test_scan_upgrades_unprocessed_to_in_progress(tmp_path):
     touch(archive / "01_Deep Sky Objects" / "M 81" / "master" / "masterLight_stack.xisf")
     db = _build_catalog(tmp_path, [_session("s1", obs_date="2026-02-19")])
 
-    transitions = scan(archive, db)
+    transitions = scan(archive, LocalBackend(db))
 
     t = transitions[0]
     assert t.proposed_state == "in_progress"
@@ -318,7 +318,7 @@ def test_scan_missing_target_folder_reports_unprocessed_no_change(tmp_path):
     (archive / "01_Deep Sky Objects").mkdir(parents=True)
     db = _build_catalog(tmp_path, [_session("s1", target="Ghost Target", obs_date="2026-02-19")])
 
-    transitions = scan(archive, db)
+    transitions = scan(archive, LocalBackend(db))
 
     t = transitions[0]
     assert t.proposed_state == "unprocessed"
@@ -330,11 +330,11 @@ def test_scan_idempotent_after_apply(tmp_path):
     touch(archive / "01_Deep Sky Objects" / "M 81" / "_Processed" / "2026-05-01" / "final.tif")
     db = _build_catalog(tmp_path, [_session("s1", obs_date="2026-02-19")])
 
-    first = scan(archive, db)
+    first = scan(archive, LocalBackend(db))
     applied = apply(LocalBackend(db), first)
     assert applied == 1
 
-    second = scan(archive, db)
+    second = scan(archive, LocalBackend(db))
     assert all(not t.change for t in second)
     assert second[0].current_state == "processed"
 
@@ -346,7 +346,7 @@ def test_scan_tolerates_row_missing_processed_state_key(tmp_path):
     touch(archive / "01_Deep Sky Objects" / "M 81" / "master" / "masterLight.xisf")
     db = _build_catalog(tmp_path, [_session("s1", obs_date="2026-02-19")])
 
-    transitions = scan(archive, db)
+    transitions = scan(archive, LocalBackend(db))
     assert transitions[0].current_state == "unprocessed"
 
 
@@ -374,7 +374,7 @@ def test_scan_log_evidence_prevents_date_bound_over_attribution(tmp_path):
         _session("s_c", obs_date="2025-03-15"),  # earlier, NOT in the log
     ])
 
-    transitions = scan(archive, db)
+    transitions = scan(archive, LocalBackend(db))
     by_id = {t.session_id: t for t in transitions}
 
     assert by_id["s_a"].proposed_state == "processed"
@@ -399,10 +399,10 @@ def test_apply_sets_processed_date_from_log_evidence(tmp_path):
     touch(run_dir / "M81_final.tif")
     db = _build_catalog(tmp_path, [_session("s1", obs_date="2025-03-20")])
 
-    transitions = scan(archive, db)
+    transitions = scan(archive, LocalBackend(db))
     apply(LocalBackend(db), transitions)
 
-    row = query_all_sessions(db)[0]
+    row = query_all_sessions(LocalBackend(db))[0]
     assert row["processed_state"] == "processed"
     assert row["processed_date"] == "2025-03-20"
 
@@ -418,11 +418,11 @@ def test_apply_only_applies_changed_transitions(tmp_path):
     ])
     set_processed_state(db, "s2", state="processed", processed_date="2020-01-01")
 
-    transitions = scan(archive, db)
+    transitions = scan(archive, LocalBackend(db))
     applied = apply(LocalBackend(db), transitions)
 
     assert applied == 1
-    rows = {r["session_id"]: r for r in query_all_sessions(db)}
+    rows = {r["session_id"]: r for r in query_all_sessions(LocalBackend(db))}
     assert rows["s1"]["processed_state"] == "processed"
     assert rows["s1"]["processed_date"] == "2026-05-01"
     # s2 was already 'processed' and equal-rank -> untouched, date preserved.
@@ -434,10 +434,10 @@ def test_apply_sets_processed_date(tmp_path):
     touch(archive / "01_Deep Sky Objects" / "M 81" / "master" / "masterLight.xisf")
     db = _build_catalog(tmp_path, [_session("s1", obs_date="2026-02-19")])
 
-    transitions = scan(archive, db)
+    transitions = scan(archive, LocalBackend(db))
     apply(LocalBackend(db), transitions)
 
-    row = query_all_sessions(db)[0]
+    row = query_all_sessions(LocalBackend(db))[0]
     assert row["processed_state"] == "in_progress"
     assert row["processed_date"] is not None
 
@@ -447,7 +447,7 @@ def test_apply_returns_zero_when_nothing_changed(tmp_path):
     (archive / "01_Deep Sky Objects" / "M 81").mkdir(parents=True)
     db = _build_catalog(tmp_path, [_session("s1", obs_date="2026-02-19")])
 
-    transitions = scan(archive, db)
+    transitions = scan(archive, LocalBackend(db))
     assert apply(LocalBackend(db), transitions) == 0
 
 
@@ -468,7 +468,7 @@ def test_cli_dry_run_prints_proposed_changes_without_mutating(tmp_path, capsys):
     assert "unprocessed -> processed" in out
     assert "run with --apply to write" in out
 
-    row = query_all_sessions(db)[0]
+    row = query_all_sessions(LocalBackend(db))[0]
     assert row["processed_state"] == "unprocessed"
     assert row["processed_date"] is None
 
@@ -483,7 +483,7 @@ def test_cli_apply_mutates_catalog(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "Applied 1 change" in out
 
-    row = query_all_sessions(db)[0]
+    row = query_all_sessions(LocalBackend(db))[0]
     assert row["processed_state"] == "processed"
     assert row["processed_date"] == "2026-05-01"
 
@@ -535,6 +535,6 @@ def test_scan_never_calls_init_db(tmp_path, monkeypatch):
     touch(archive / "01_Deep Sky Objects" / "M 81" / "master" / "masterLight.xisf")
     db = _build_catalog(tmp_path, [_session("s1", obs_date="2026-02-19")])
 
-    scan(archive, db)
+    scan(archive, LocalBackend(db))
 
     assert calls == []

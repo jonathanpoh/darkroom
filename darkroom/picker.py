@@ -6,9 +6,8 @@ TTY or the `questionary` dependency. `questionary` is imported lazily inside
 """
 from __future__ import annotations
 
-from pathlib import Path
-
 from darkroom.catalog import query_all_sessions
+from darkroom.catalog_client import CatalogBackend
 
 
 # ── pure helpers ─────────────────────────────────────────────────────────────
@@ -156,7 +155,7 @@ def picker_style():
     ])
 
 
-def pick_sessions(catalog: Path) -> list[dict] | None:
+def pick_sessions(backend: CatalogBackend) -> list[dict] | None:
     """Interactively pick a target then one or more nights. None if cancelled.
 
     Returns the concatenated rows of the selected nights (night order
@@ -164,7 +163,7 @@ def pick_sessions(catalog: Path) -> list[dict] | None:
     """
     import questionary  # lazy: keep this module importable without a TTY/dep
 
-    rows = query_all_sessions(catalog)
+    rows = query_all_sessions(backend)
     if not rows:
         print("No sessions found in catalog.")
         return None

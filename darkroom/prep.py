@@ -13,9 +13,9 @@ from darkroom.catalog import (
     find_flat_darks,
     find_flats,
     query_all_sessions,
-    query_sessions,
 )
-from darkroom.config import resolve_catalog, resolve_path
+from darkroom.catalog_client import CatalogBackend, resolve_backend
+from darkroom.config import resolve_path
 from darkroom.parse import fits_files
 from darkroom.picker import group_nights, pick_sessions, picker_style
 from darkroom.wbpp import (
@@ -32,11 +32,11 @@ from darkroom.wbpp import (
 
 # ── --list ────────────────────────────────────────────────────────────────────
 
-def cmd_list(catalog: Path, target: str | None) -> None:
+def cmd_list(backend: CatalogBackend, target: str | None) -> None:
     if target:
-        rows = query_sessions(catalog, target=target)
+        rows = backend.query_sessions(target=target)
     else:
-        rows = query_all_sessions(catalog)
+        rows = query_all_sessions(backend)
 
     if not rows:
         print("No sessions found.")
@@ -113,7 +113,7 @@ def _build_night(
     sessions: list[dict],
     *,
     output: Path,
-    catalog: Path,
+    backend: CatalogBackend,
     session_dir: Path,
     flat_window: int,
 ) -> None:
@@ -132,7 +132,7 @@ def _build_night(
     # Darks — camera/gain/exposure from first session (all sessions same night share params)
     s0 = sessions[0]
     dark_rows = find_darks(
-        catalog, camera=s0["camera"], gain=s0["gain"], exposure_sec=s0["exposure_sec"]
+        backend, camera=s0["camera"], gain=s0["gain"], exposure_sec=s0["exposure_sec"]
     )
     master_dark_rows = [r for r in dark_rows if r.get("is_master")]
     dark_count = 0
@@ -149,7 +149,7 @@ def _build_night(
         print(f"  Darks/                    {dark_count} symlinks")
 
     # Bias — camera/gain only (exposure irrelevant for bias)
-    bias_rows = find_bias(catalog, camera=s0["camera"], gain=s0["gain"])
+    bias_rows = find_bias(backend, camera=s0["camera"], gain=s0["gain"])
     master_bias_rows = [r for r in bias_rows if r.get("is_master")]
     bias_count = 0
     for row in master_bias_rows or bias_rows:
@@ -170,7 +170,7 @@ def _build_night(
         filter_name = sess["filter"] or "NoFilter"
         obs_date = sess["obs_date"]
         flat_rows = find_flats(
-            catalog,
+            backend,
             camera=sess["camera"],
             ota=sess["ota"],
             filter_=sess["filter"],
@@ -184,7 +184,7 @@ def _build_night(
             print(f"  Flats/FILTER_{filter_name}/      {flat_count} symlinks")
 
             fd_rows = find_flat_darks(
-                catalog,
+                backend,
                 camera=sess["camera"],
                 flat_exposure_sec=chosen_flat["exposure_sec"],
                 flat_capture_date=chosen_flat["capture_date"],
@@ -209,7 +209,7 @@ def _build_night(
 
 
 def _resolve_rows(
-    catalog: Path,
+    backend: CatalogBackend,
     *,
     target: str | None,
     dates: list[str] | None,
@@ -221,13 +221,13 @@ def _resolve_rows(
     exits loudly listing what was missing and what nights ARE available.
     """
     if session_id:
-        rows = query_sessions(catalog, session_id=session_id)
+        rows = backend.query_sessions(session_id=session_id)
         if not rows:
             sys.exit(f"Session not found: {session_id}")
         return rows[0]["target"], rows
 
     if target:
-        rows = query_sessions(catalog, target=target)
+        rows = backend.query_sessions(target=target)
         if not rows:
             sys.exit(
                 f"No sessions found for target '{target}'.\n"
@@ -263,7 +263,7 @@ def _resolve_rows(
 def build_wbpp_sessions(
     rows: list[dict],
     *,
-    catalog: Path,
+    backend: CatalogBackend,
     output: Path,
     wbpp_root: Path,
     target_name: str,
@@ -294,7 +294,7 @@ def build_wbpp_sessions(
         _build_night(
             night_sessions,
             output=output,
-            catalog=catalog,
+            backend=backend,
             session_dir=session_dir,
             flat_window=flat_window,
         )
@@ -305,7 +305,7 @@ def build_wbpp_sessions(
 
 def cmd_prep(
     *,
-    catalog: Path,
+    backend: CatalogBackend,
     output: Path,
     wbpp_root: Path,
     target: str | None,
@@ -316,11 +316,11 @@ def cmd_prep(
 ) -> None:
     """Resolve --target/--date(s)/--session, then build SESSION_N dirs."""
     target_name, rows = _resolve_rows(
-        catalog, target=target, dates=obs_dates, session_id=session_id
+        backend, target=target, dates=obs_dates, session_id=session_id
     )
     build_wbpp_sessions(
         rows,
-        catalog=catalog,
+        backend=backend,
         output=output,
         wbpp_root=wbpp_root,
         target_name=target_name,
@@ -332,12 +332,12 @@ def cmd_prep(
 # ── interactive picker ───────────────────────────────────────────────────────
 
 def _run_interactive(
-    catalog: Path, *, output: Path, wbpp_root: Path, overwrite: bool, flat_window: int
+    backend: CatalogBackend, *, output: Path, wbpp_root: Path, overwrite: bool, flat_window: int
 ) -> None:
     """Prompt for a target + nights, confirm, then build SESSION_N dirs."""
     import questionary  # lazy: only the interactive path needs the dependency
 
-    rows = pick_sessions(catalog)
+    rows = pick_sessions(backend)
     if not rows:
         sys.exit("Nothing selected.")
 
@@ -366,7 +366,7 @@ def _run_interactive(
 
     build_wbpp_sessions(
         rows,
-        catalog=catalog,
+        backend=backend,
         output=output,
         wbpp_root=wbpp_root,
         target_name=target_name,
@@ -379,10 +379,10 @@ def _run_interactive(
 
 def run(args: argparse.Namespace) -> None:
     """Entry point invoked by darkroom.cli."""
-    catalog = resolve_catalog(args.catalog)
+    backend = resolve_backend(args.catalog)
 
     if args.list:
-        cmd_list(catalog, args.target)
+        cmd_list(backend, args.target)
         return
 
     interactive = not args.target and not args.session
@@ -400,7 +400,7 @@ def run(args: argparse.Namespace) -> None:
 
     if interactive:
         _run_interactive(
-            catalog,
+            backend,
             output=output,
             wbpp_root=wbpp_root,
             overwrite=args.overwrite,
@@ -409,7 +409,7 @@ def run(args: argparse.Namespace) -> None:
         return
 
     cmd_prep(
-        catalog=catalog,
+        backend=backend,
         output=output,
         wbpp_root=wbpp_root,
         target=args.target,

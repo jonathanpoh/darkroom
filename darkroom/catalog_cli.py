@@ -6,9 +6,9 @@ import sqlite3
 import sys
 from collections import Counter
 from itertools import groupby
-from pathlib import Path
 
-from darkroom.catalog import query_all_sessions, query_sessions
+from darkroom.catalog import query_all_sessions
+from darkroom.catalog_client import resolve_backend
 from darkroom.cataloger import (
     mark_processed_command,
     migrate_archive_command,
@@ -24,11 +24,11 @@ def _resolve_db(args: argparse.Namespace) -> None:
 
 
 def _list_run(args: argparse.Namespace) -> None:
-    _resolve_db(args)
+    backend = resolve_backend(args.catalog)
     rows = (
-        query_sessions(args.db, target=args.target)
+        backend.query_sessions(target=args.target)
         if args.target
-        else query_all_sessions(args.db)
+        else query_all_sessions(backend)
     )
     if not rows:
         print("No sessions found.")
@@ -79,13 +79,12 @@ def _scan_processed_run(args: argparse.Namespace) -> None:
     """
     from darkroom import procscan
 
-    _resolve_db(args)
+    backend = resolve_backend(args.catalog)
     archive = resolve_path(args.archive, "DARKROOM_ARCHIVE", "archive_path")
     if archive is None:
         sys.exit("Error: --archive / DARKROOM_ARCHIVE / darkroom.toml archive_path required")
 
-    db_path = Path(args.db)
-    transitions = procscan.scan(archive, db_path)
+    transitions = procscan.scan(archive, backend)
     changed = [t for t in transitions if t.change]
 
     if not args.apply:
@@ -102,10 +101,8 @@ def _scan_processed_run(args: argparse.Namespace) -> None:
         print(f"\n{', '.join(parts)}; run with --apply to write")
         return
 
-    from darkroom.catalog_client import resolve_backend
-
     try:
-        applied = procscan.apply(resolve_backend(args.catalog), transitions)
+        applied = procscan.apply(backend, transitions)
     except sqlite3.OperationalError as e:
         sys.exit(
             f"Error writing to catalog: {e}\n"

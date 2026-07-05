@@ -7,9 +7,15 @@ os.walk/stat, never moves/writes/deletes anything. The only write path is
 ``apply``, which calls ``set_processed_state`` on a passed-in
 ``darkroom.catalog_client.CatalogBackend`` (W9) — so ``scan`` (the dry-run
 path) never pulls in astropy and never touches the catalog schema (no
-``init_db``). Sessions are read via
-``darkroom.catalog.query_all_sessions``, a plain ``sqlite3.connect`` with no
-schema mutation, matching the read layer's existing astropy-free contract.
+``init_db``). Sessions are read via ``darkroom.catalog.query_all_sessions``
+over a ``darkroom.catalog_client.CatalogBackend`` — local SQLite or the
+webapi server, per how the backend was resolved. In local mode, reads go
+through ``darkroom.catalog_db.open_db``, which sets WAL mode and will
+create/initialize the catalog file if it doesn't already exist (previously,
+a missing catalog file meant a plain ``sqlite3.connect`` silently produced
+an empty db and the subsequent query raised — now it's created on first
+read). ``scan`` (the dry-run path) still never mutates session rows either
+way.
 
 F2: where a target has PixInsight WBPP run logs (``darkroom.wbpplog``), the
 run's own frame list gives EXACT session->edit attribution instead of the F1
@@ -235,16 +241,18 @@ def classify_session(obs_date: str, target_ev: dict) -> tuple[str, str, str | No
 
 
 def scan(
-    archive_root: Path, catalog: Path, *, dso_dirname: str = "01_Deep Sky Objects"
+    archive_root: Path, backend, *, dso_dirname: str = "01_Deep Sky Objects"
 ) -> list[Transition]:
-    """Read every session from the catalog and propose a processed_state.
+    """Read every session from the catalog backend and propose a processed_state.
 
-    Pure read: uses darkroom.catalog.query_all_sessions (plain connect, no
-    schema mutation) and only reads the archive filesystem. Each target's
-    directory is classified once and cached across its sessions. A session
-    whose target folder is missing on disk gets proposed='unprocessed' with
-    change=False (reported, not acted on — we don't downgrade a session just
-    because its folder briefly vanished, e.g. an unmounted share).
+    ``backend`` is a darkroom.catalog_client.CatalogBackend (LocalBackend or
+    HttpBackend); sessions are fetched via darkroom.catalog.query_all_sessions
+    over it. Only reads the archive filesystem otherwise — never mutates
+    session rows. Each target's directory is classified once and cached
+    across its sessions. A session whose target folder is missing on disk
+    gets proposed='unprocessed' with change=False (reported, not acted on —
+    we don't downgrade a session just because its folder briefly vanished,
+    e.g. an unmounted share).
 
     change is True only for a monotonic upgrade (unprocessed -> in_progress
     -> processed) and never for a 'skipped' row, which is never touched.
@@ -254,7 +262,7 @@ def scan(
     """
     archive_root = Path(archive_root)
     dso_root = archive_root / dso_dirname
-    rows = query_all_sessions(catalog)
+    rows = query_all_sessions(backend)
 
     cache: dict[str, dict | None] = {}
     transitions: list[Transition] = []

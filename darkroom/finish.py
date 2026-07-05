@@ -3,14 +3,13 @@ from __future__ import annotations
 
 import argparse
 import re
-import sqlite3
 import sys
 import shutil
 from datetime import datetime
 from pathlib import Path
 
 from darkroom.catalog_client import CatalogBackend, resolve_backend
-from darkroom.config import resolve_catalog, resolve_path
+from darkroom.config import resolve_path
 
 
 def _target_slug(target: str) -> str:
@@ -72,22 +71,21 @@ def _collect_light_dirs(wbpp_target: Path) -> set[Path]:
 
 
 def _resolve_session_ids(
-    wbpp_target: Path, catalog: Path, archive_root: Path
+    wbpp_target: Path, backend: CatalogBackend, archive_root: Path
 ) -> list[str]:
     """Look up catalog session_ids for the lights symlinked under wbpp_target.
 
     Matches each Lights symlink's resolved archive directory against the
     catalog's stored ``lights_path`` (resolved under ``archive_root``).
+    Fetches every session via ``backend.query_sessions()`` and filters
+    client-side for a non-null ``lights_path`` — the catalog is ~200 rows,
+    and there's no server-side "lights_path is not null" filter.
     """
     light_dirs = _collect_light_dirs(wbpp_target)
     if not light_dirs:
         return []
+    rows = [r for r in backend.query_sessions() if r.get("lights_path") is not None]
     ids: list[str] = []
-    with sqlite3.connect(catalog) as conn:
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            "SELECT session_id, lights_path FROM sessions WHERE lights_path IS NOT NULL"
-        ).fetchall()
     for row in rows:
         if (archive_root / row["lights_path"]).resolve() in light_dirs:
             ids.append(row["session_id"])
@@ -96,7 +94,6 @@ def _resolve_session_ids(
 
 def _mark_sessions_processed(
     wbpp_target: Path,
-    catalog: Path,
     archive_root: Path,
     status: str,
     date_str: str,
@@ -106,10 +103,9 @@ def _mark_sessions_processed(
 
     Sets the structured processed_state='processed', with processed_path=status
     (the archive-relative _Processed/<date>/ path) and processed_date=date_str.
-    ``catalog`` is still used for the read (_resolve_session_ids' direct
-    sqlite lookup, unchanged for now); the write goes through ``backend``.
+    Both the read (_resolve_session_ids) and the write go through ``backend``.
     """
-    session_ids = _resolve_session_ids(wbpp_target, catalog, archive_root)
+    session_ids = _resolve_session_ids(wbpp_target, backend, archive_root)
     if not session_ids:
         print("\nWarning: no catalog sessions matched symlinks — nothing to mark.")
         return
@@ -189,7 +185,6 @@ def cmd_finish(
     output: Path,
     wbpp_root: Path,
     target: str,
-    catalog: Path,
     backend: CatalogBackend,
     date_override: str | None,
     dry_run: bool,
@@ -226,7 +221,7 @@ def cmd_finish(
 
     if not dry_run:
         status = str(dest.relative_to(output))
-        _mark_sessions_processed(wbpp_target, catalog, output, status, date_str, backend)
+        _mark_sessions_processed(wbpp_target, output, status, date_str, backend)
 
     _confirm_and_delete(
         [wbpp_output] if wbpp_output.exists() else [],
@@ -248,15 +243,12 @@ def run(args: argparse.Namespace) -> None:
     if output is None:
         sys.exit("Error: --archive / DARKROOM_ARCHIVE / darkroom.toml archive_path required")
 
-    catalog = resolve_catalog(args.catalog)
-
     wbpp_root = resolve_path(args.wbpp, "DARKROOM_WBPP", "wbpp_path") or Path("./WBPP")
 
     cmd_finish(
         output=output,
         wbpp_root=wbpp_root,
         target=args.target,
-        catalog=catalog,
         backend=resolve_backend(args.catalog),
         date_override=args.date,
         dry_run=args.dry_run,

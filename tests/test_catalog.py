@@ -5,11 +5,11 @@ import pytest
 from pathlib import Path
 from darkroom.catalog import (
     query_all_sessions,
-    query_sessions,
     find_darks,
     find_flats,
     find_flat_darks,
 )
+from darkroom.catalog_client import LocalBackend
 
 
 def make_db(tmp_path: Path) -> Path:
@@ -92,7 +92,7 @@ def make_db(tmp_path: Path) -> Path:
 
 def test_query_all_sessions(tmp_path):
     db = make_db(tmp_path)
-    rows = query_all_sessions(db)
+    rows = query_all_sessions(LocalBackend(db))
     assert len(rows) == 2
     assert rows[0]["session_id"] == "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
     assert rows[0]["target"] == "M 81"
@@ -101,48 +101,48 @@ def test_query_all_sessions(tmp_path):
 
 def test_query_sessions_by_target(tmp_path):
     db = make_db(tmp_path)
-    rows = query_sessions(db, target="M 81")
+    rows = LocalBackend(db).query_sessions(target="M 81")
     assert len(rows) == 2
 
 
 def test_query_sessions_by_target_and_date(tmp_path):
     db = make_db(tmp_path)
-    rows = query_sessions(db, target="M 81", obs_date="2026-02-19")
+    rows = LocalBackend(db).query_sessions(target="M 81", obs_date="2026-02-19")
     assert len(rows) == 1
     assert rows[0]["filter"] == "L-Pro"
 
 
 def test_query_sessions_by_session_id(tmp_path):
     db = make_db(tmp_path)
-    rows = query_sessions(db, session_id="M81_20260219_FRA400_ZWOASI585MCPro_L-Pro")
+    rows = LocalBackend(db).query_sessions(session_id="M81_20260219_FRA400_ZWOASI585MCPro_L-Pro")
     assert len(rows) == 1
     assert rows[0]["ota"] == "FRA400"
 
 
 def test_query_sessions_no_match(tmp_path):
     db = make_db(tmp_path)
-    rows = query_sessions(db, target="NGC 1234")
+    rows = LocalBackend(db).query_sessions(target="NGC 1234")
     assert rows == []
 
 
 def test_query_sessions_target_missing_space(tmp_path):
     # 'M81' (no space) should still match the stored 'M 81'
     db = make_db(tmp_path)
-    rows = query_sessions(db, target="M81")
+    rows = LocalBackend(db).query_sessions(target="M81")
     assert len(rows) == 2
 
 
 def test_query_sessions_target_wrong_case(tmp_path):
     # 'm 81' (lowercase prefix) should match 'M 81'
     db = make_db(tmp_path)
-    rows = query_sessions(db, target="m 81")
+    rows = LocalBackend(db).query_sessions(target="m 81")
     assert len(rows) == 2
 
 
 def test_query_sessions_target_messy(tmp_path):
     # both wrong: no space and lowercase
     db = make_db(tmp_path)
-    rows = query_sessions(db, target="m81")
+    rows = LocalBackend(db).query_sessions(target="m81")
     assert len(rows) == 2
 
 
@@ -156,28 +156,29 @@ def test_query_sessions_sharpless_normalised(tmp_path):
     conn.commit()
     conn.close()
     # any of these user spellings should resolve to the stored 'Sh2-103'
+    backend = LocalBackend(db)
     for spelling in ("SH2-103", "Sh 2-103", "sh2-103", "Sh2-103"):
-        rows = query_sessions(db, target=spelling)
+        rows = backend.query_sessions(target=spelling)
         assert len(rows) == 1, f"{spelling!r} failed to match"
 
 
 def test_find_darks(tmp_path):
     db = make_db(tmp_path)
-    rows = find_darks(db, camera="ZWO ASI585MC Pro", gain=200, exposure_sec=180.0)
+    rows = find_darks(LocalBackend(db), camera="ZWO ASI585MC Pro", gain=200, exposure_sec=180.0)
     assert len(rows) == 1
     assert rows[0]["folder_path"] == "00_Calibration/Darks/ZWOASI585MCPro"
 
 
 def test_find_darks_no_match(tmp_path):
     db = make_db(tmp_path)
-    rows = find_darks(db, camera="ZWO ASI585MC Pro", gain=200, exposure_sec=60.0)
+    rows = find_darks(LocalBackend(db), camera="ZWO ASI585MC Pro", gain=200, exposure_sec=60.0)
     assert rows == []
 
 
 def test_find_flats_one_match(tmp_path):
     # narrow window: only the adjacent 02-19 flat is within ±1 of 02-18
     db = make_db(tmp_path)
-    rows = find_flats(db, camera="ZWO ASI585MC Pro", ota="FRA400",
+    rows = find_flats(LocalBackend(db), camera="ZWO ASI585MC Pro", ota="FRA400",
                       filter_="L-Pro", obs_date="2026-02-18", window_days=1)
     assert len(rows) == 1
     assert rows[0]["capture_date"] == "2026-02-19"
@@ -185,7 +186,7 @@ def test_find_flats_one_match(tmp_path):
 
 def test_find_flats_two_matches(tmp_path):
     db = make_db(tmp_path)
-    rows = find_flats(db, camera="ZWO ASI585MC Pro", ota="FRA400",
+    rows = find_flats(LocalBackend(db), camera="ZWO ASI585MC Pro", ota="FRA400",
                       filter_="L-Pro", obs_date="2026-02-19")
     assert len(rows) == 2
     assert rows[0]["capture_date"] == "2026-02-19"
@@ -196,7 +197,7 @@ def test_find_flats_default_window_three_days(tmp_path):
     # flats are on 02-19 and 02-20; a session on 02-22 is 2-3 days away.
     # The default ±3 window catches them; the old ±1 window would not.
     db = make_db(tmp_path)
-    rows = find_flats(db, camera="ZWO ASI585MC Pro", ota="FRA400",
+    rows = find_flats(LocalBackend(db), camera="ZWO ASI585MC Pro", ota="FRA400",
                       filter_="L-Pro", obs_date="2026-02-22")
     assert len(rows) == 2
     # closest first
@@ -205,21 +206,21 @@ def test_find_flats_default_window_three_days(tmp_path):
 
 def test_find_flats_narrow_window(tmp_path):
     db = make_db(tmp_path)
-    rows = find_flats(db, camera="ZWO ASI585MC Pro", ota="FRA400",
+    rows = find_flats(LocalBackend(db), camera="ZWO ASI585MC Pro", ota="FRA400",
                       filter_="L-Pro", obs_date="2026-02-22", window_days=1)
     assert rows == []
 
 
 def test_find_flats_filter_mismatch(tmp_path):
     db = make_db(tmp_path)
-    rows = find_flats(db, camera="ZWO ASI585MC Pro", ota="FRA400",
+    rows = find_flats(LocalBackend(db), camera="ZWO ASI585MC Pro", ota="FRA400",
                       filter_="L-Extreme", obs_date="2026-02-19")
     assert rows == []
 
 
 def test_find_flat_darks(tmp_path):
     db = make_db(tmp_path)
-    rows = find_flat_darks(db, camera="ZWO ASI585MC Pro",
+    rows = find_flat_darks(LocalBackend(db), camera="ZWO ASI585MC Pro",
                            flat_exposure_sec=1.35, flat_capture_date="2026-02-20")
     assert len(rows) == 1
     assert rows[0]["frame_type"] == "FlatDark"
@@ -227,7 +228,7 @@ def test_find_flat_darks(tmp_path):
 
 def test_find_flat_darks_exposure_tolerance(tmp_path):
     db = make_db(tmp_path)
-    rows = find_flat_darks(db, camera="ZWO ASI585MC Pro",
+    rows = find_flat_darks(LocalBackend(db), camera="ZWO ASI585MC Pro",
                            flat_exposure_sec=1.40, flat_capture_date="2026-02-20")
     assert len(rows) == 1
 
@@ -235,7 +236,7 @@ def test_find_flat_darks_exposure_tolerance(tmp_path):
 def test_find_flat_darks_date_plus_one(tmp_path):
     db = make_db(tmp_path)
     # FlatDark is on 2026-02-20; passing flat_capture_date=2026-02-19 (flat_date+1 fallback)
-    rows = find_flat_darks(db, camera="ZWO ASI585MC Pro",
+    rows = find_flat_darks(LocalBackend(db), camera="ZWO ASI585MC Pro",
                            flat_exposure_sec=1.35, flat_capture_date="2026-02-19")
     assert len(rows) == 1
     assert rows[0]["capture_date"] == "2026-02-20"
@@ -243,7 +244,7 @@ def test_find_flat_darks_date_plus_one(tmp_path):
 
 def test_find_flat_darks_no_match(tmp_path):
     db = make_db(tmp_path)
-    rows = find_flat_darks(db, camera="ZWO ASI585MC Pro",
+    rows = find_flat_darks(LocalBackend(db), camera="ZWO ASI585MC Pro",
                            flat_exposure_sec=1.35, flat_capture_date="2026-02-15")
     assert rows == []
 
