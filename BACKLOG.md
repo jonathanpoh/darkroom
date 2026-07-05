@@ -344,6 +344,22 @@ docs · **R** = refactor · **W** = web-UI prep.
 
 ### W9. Always-on web API + client/server split + deployment
 
+> **Phase 1 shipped 2026-07-05** (`b576e64` scaffold, `d743198` write-path
+> rewiring): `darkroom/webapi/` (FastAPI, all 7 /api routes, bearer auth,
+> `uvicorn --factory darkroom.webapi.app:create_app_from_env`),
+> `darkroom/catalog_client.py` (`CatalogBackend` / `LocalBackend` /
+> `HttpBackend` / `resolve_backend`), `catalog_url`/`DARKROOM_CATALOG_URL` +
+> `api_token`/`DARKROOM_API_TOKEN` config keys, and
+> `catalog_db.query_calibration_sets`. All four write paths (ingest commit,
+> finish, scan-processed --apply, catalog mark) now go through
+> `resolve_backend`; URL unset → LocalBackend, so local/offline behaviour is
+> unchanged. 6 end-to-end LocalBackend↔HttpBackend parity tests
+> (tests/test_client_server.py); suite 524 passed.
+> **Remaining:** route the *read* call sites through the backend (catalog
+> list, wbpp picker/prep, `finish._resolve_session_ids`, catalog.py matchers
+> fed from `query_calibration_sets`), then phase 2 (Jinja2 edit UI), phase 3
+> (LXC deploy + DB migration + nightly backup), phase 4 (remove datasette).
+
 Captured 2026-07-05. **The build item** that W1–W8 were prep for: an
 always-on FastAPI app on a homelab LXC that both serves the edit UI *and* owns
 the catalog DB, with the Mac CLI reaching it over HTTP.
