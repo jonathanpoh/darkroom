@@ -373,8 +373,29 @@ docs · **R** = refactor · **W** = web-UI prep.
 > restart darkroom-api`. Mac CLI flipped to remote via `catalog_url` +
 > `api_token` in `~/.config/darkroom/darkroom.toml`; verified end-to-end.
 > The server DB copy is authoritative; the Mac-local file is dormant.
-> **Remaining:** phase 2 (Jinja2 edit UI on the webapi), nightly `VACUUM
-> INTO` backup to NAS, phase 4 (remove datasette).
+> **Phase 2 (Jinja2 edit UI) built 2026-07-06** (in working tree, pending
+> commit/deploy): `darkroom/webapi/ui.py` + `darkroom/templates/catalog/`
+> mounted on the same app — cookie login reusing the API bearer token,
+> sessions grouped by target (camera+OTA per row), one-click
+> `processed_state` buttons, per-session edit form over
+> `update_session_fields` (changed-fields-only, so identity renames only
+> fire when actually edited). 12 UI tests; `/api` stays bearer-only.
+> Alongside it, `tests/conftest.py` autouse hermeticity guard (HOME → tmp,
+> `DARKROOM_*` env stripped): CLI tests had been resolving the real
+> `catalog_url` from `~/.config/darkroom/darkroom.toml` since the phase-3
+> remote flip and making live calls at the production API — only Little
+> Snitch's block stopped `scan-processed --apply` tests writing to the
+> prod catalog. Suite: 540 passed, 0 failed.
+> **Remaining:** nightly `VACUUM INTO` backup to NAS — **plus, same task:**
+> a dev-snapshot helper (`scripts/dev-snapshot.sh` or similar) that pulls
+> the latest backup (or `VACUUM INTO` over SSH from the LXC before the
+> backup exists) to a local file and prints/runs the
+> `DARKROOM_CATALOG=<snap> uvicorn --factory ...` invocation, for manually
+> smoke-testing UI/migration changes against real catalog data. Decided
+> 2026-07-06: full snapshot, not a subset (~200 rows, few hundred KB;
+> `VACUUM INTO` is consistent under the running server); pytest stays on
+> per-test tmp fixtures — no shared staging DB for automated tests.
+> Then phase 4 (remove datasette).
 
 Captured 2026-07-05. **The build item** that W1–W8 were prep for: an
 always-on FastAPI app on a homelab LXC that both serves the edit UI *and* owns
@@ -664,11 +685,10 @@ bursty imaging runs, and mismatches fail with a shrug instead of showing what
    (`catalog scan-processed`; 4-state enum; date-bound + dry-run). **F2** exact
    attribution from WBPP logs — ✅ DONE. Live catalog migrated to W1/W2/W3 schema
    + `scan-processed --apply` reconcile run — ✅ DONE 2026-07-05.
-7. **W9** ← **NEXT: the build.** Always-on FastAPI app on the LXC that owns the
-   catalog DB + serves the edit UI; Mac CLI reaches it over HTTP
-   (`LocalBackend`/`HttpBackend` selected by `catalog_url`). SQLite stays; Python/
-   FastAPI (not the JS prior-art stack); nightly NAS backup; datasette removed as
-   the closing step. See the W9 item for the full sketch.
+7. **W9** ← **IN PROGRESS.** Phases 1+3 deployed 2026-07-05; phase 2 (edit UI)
+   built 2026-07-06 pending commit/deploy. Remaining: nightly NAS backup +
+   dev-snapshot helper (one task), then phase 4 (remove datasette). See the
+   W9 item for the full sketch.
 8. **U2/U3** filter cleanup queue + interactive ingest review (U2 is a natural
    second UI view on the W9 app; U3 benefits from U1's picker helpers).
 9. **R1–R5, B7** cleanup as capacity allows. Litestream (continuous DB
