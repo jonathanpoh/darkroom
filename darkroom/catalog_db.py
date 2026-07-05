@@ -156,6 +156,41 @@ def count_sessions(
     return row[0]
 
 
+def query_calibration_sets(
+    conn: sqlite3.Connection,
+    *,
+    frame_type: str | None = None,
+    camera: str | None = None,
+    ota: str | None = None,
+    filter: str | None = None,
+    gain: int | None = None,
+    exposure_sec: float | None = None,
+) -> list[dict]:
+    """Return calibration sets matching the given equality filters.
+
+    Omitted (None) filters are not applied — passing filter=None means "no
+    filter constraint", not "filter IS NULL" (date-proximity and null-filter
+    matching stay in darkroom.catalog's find_* helpers, which consume rows
+    like these client-side). Ordered masters-first, then capture_date.
+    """
+    clauses: list[str] = []
+    params: list = []
+    for col, val in (
+        ("frame_type", frame_type), ("camera", camera), ("ota", ota),
+        ("filter", filter), ("gain", gain), ("exposure_sec", exposure_sec),
+    ):
+        if val is not None:
+            clauses.append(f"{col} = ?")
+            params.append(val)
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    rows = conn.execute(
+        f"SELECT * FROM calibration_sets {where} "
+        "ORDER BY is_master DESC, capture_date, set_id",
+        params,
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def update_session_fields(conn: sqlite3.Connection, session_id: str, **fields) -> bool:
     """Update whitelisted fields on an existing session, in place.
 

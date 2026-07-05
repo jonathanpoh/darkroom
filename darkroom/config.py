@@ -50,3 +50,32 @@ def resolve_catalog(flag_val: str | None) -> Path:
     path = resolve_path(flag_val, "DARKROOM_CATALOG", "catalog_path") or _DEFAULT_CATALOG
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def resolve_str(
+    flag_val: str | None, env_var: str, toml_key: str
+) -> str | None:
+    """Resolve a raw string value: CLI flag → env var → darkroom.toml key."""
+    if flag_val:
+        return flag_val
+    env = os.environ.get(env_var)
+    if env:
+        return env
+    cfg = find_toml()
+    if toml_key in cfg:
+        return cfg[toml_key]
+    return None
+
+
+def resolve_catalog_url(flag_val: str | None = None) -> str | None:
+    """Resolve the catalog API base URL (W9): flag → DARKROOM_CATALOG_URL → toml.
+
+    Unset (None) at every level means "no server configured" — callers should
+    fall back to the local SQLite file backend in that case.
+    """
+    return resolve_str(flag_val, "DARKROOM_CATALOG_URL", "catalog_url")
+
+
+def resolve_api_token(flag_val: str | None = None) -> str | None:
+    """Resolve the catalog API bearer token (W9): flag → DARKROOM_API_TOKEN → toml."""
+    return resolve_str(flag_val, "DARKROOM_API_TOKEN", "api_token")
