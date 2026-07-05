@@ -355,10 +355,16 @@ docs · **R** = refactor · **W** = web-UI prep.
 > `resolve_backend`; URL unset → LocalBackend, so local/offline behaviour is
 > unchanged. 6 end-to-end LocalBackend↔HttpBackend parity tests
 > (tests/test_client_server.py); suite 524 passed.
-> **Remaining:** route the *read* call sites through the backend (catalog
-> list, wbpp picker/prep, `finish._resolve_session_ids`, catalog.py matchers
-> fed from `query_calibration_sets`), then phase 2 (Jinja2 edit UI), phase 3
-> (LXC deploy + DB migration + nightly backup), phase 4 (remove datasette).
+> **Read paths shipped 2026-07-05** (`6c64813`): catalog.py is now the pure
+> matching layer over a `CatalogBackend` (`query_sessions` deleted; matchers
+> fed from `query_calibration_sets`, date/exposure/NULL-filter logic stays
+> client-side); backend threaded through catalog list, wbpp picker/prep,
+> scan-processed, and `finish._resolve_session_ids`. Matcher parity tests
+> local vs HTTP; live smoke: `uvicorn --factory` + CLI `list`/`mark` over
+> real HTTP round-trips. 528 tests. **The CLI is now fully backend-agnostic —
+> flipping `DARKROOM_CATALOG_URL` switches the whole surface to remote.**
+> **Remaining:** phase 2 (Jinja2 edit UI on the webapi), phase 3 (LXC deploy
+> + DB migration + nightly backup), phase 4 (remove datasette).
 
 Captured 2026-07-05. **The build item** that W1–W8 were prep for: an
 always-on FastAPI app on a homelab LXC that both serves the edit UI *and* owns
