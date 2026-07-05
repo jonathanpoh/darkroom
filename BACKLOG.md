@@ -342,6 +342,110 @@ docs · **R** = refactor · **W** = web-UI prep.
   showing "calibration used for this stack" must recompute. Acceptable; decide
   whether the UI needs a persisted `finish`-time linkage table.
 
+### W9. Always-on web API + client/server split + deployment
+
+Captured 2026-07-05. **The build item** that W1–W8 were prep for: an
+always-on FastAPI app on a homelab LXC that both serves the edit UI *and* owns
+the catalog DB, with the Mac CLI reaching it over HTTP.
+
+**Why a client/server split (not just "run the UI"):** two hosts must write one
+catalog and they can't share a SQLite file safely. (1) The always-on web app
+must live on the cluster — the Mac isn't always up. (2) The CLI pipeline is
+hardware-bound to the Mac (reads the ASIAir SD card, writes WBPP symlinks, reads
+the NAS archive — mounting those on the LXC over SMB makes every file-bound op a
+slow network op). Both need to write. **Do not** put the SQLite file on a
+NAS/SMB/NFS share and open it from both — SQLite locking is unreliable over
+network FS and WAL (W6) doesn't work there. Resolution: the always-on LXC owns
+the file (single writer process); the Mac CLI goes remote.
+
+**Architecture decided (2026-07-05):** stay on SQLite — not Postgres/Supabase.
+At ~200 rows growing slowly, single-user, Postgres buys nothing on performance
+and costs a dialect port (WAL PRAGMA, the `total_integration_hours` VIRTUAL
+generated column, the `ALTER TABLE` migration dance, `?`→`%s`); Supabase is
+worse — a cloud/SaaS + latency dependency dragged into a fully-local homelab
+tool. The prior-art SQLite-server projects (`~/Projects/net-worth`,
+`~/Projects/investment-portfolio-tracker`) are TS/Vite + Express +
+better-sqlite3 — **same architecture, wrong stack for this repo**: darkroom's
+schema/migrations/`session_id` derivation/validation all live in Python
+(`cataloger.init_db`, `catalog_db.py`), so a Node server would fork the write
+logic across two languages and defeat W4. Build the API in **Python/FastAPI**,
+modelled on the triage subpackage (in-repo FastAPI+Jinja2 reference). W4 already
+funnels every write through a few functions, so the API is a transport wrapper —
+logic does not move.
+
+**Client side — `darkroom/catalog_client.py` (new):** a `CatalogBackend`
+protocol with two impls selected by config:
+- `LocalBackend` — opens the SQLite file directly, delegating to
+  `catalog_db`/`cataloger` in-process (today's behaviour; runs `init_db` as
+  needed). Used by tests and any laptop-only run.
+- `HttpBackend` — httpx to the LXC with a bearer token; **no** `init_db` (server
+  owns schema).
+- `resolve_backend(cfg)` → `HttpBackend` iff `catalog_url` is set, else
+  `LocalBackend`. New config keys `catalog_url` / `DARKROOM_CATALOG_URL` and
+  `DARKROOM_API_TOKEN` slot into the CLI→env→toml chain in `config.py`. **URL
+  set → remote; unset → local file** — this is what preserves "still works
+  locally / offline without the server" (tests never set the URL).
+
+**Call sites to route through `resolve_backend` (stop importing cataloger/
+catalog_db fns directly):**
+| File | Today | Becomes |
+|---|---|---|
+| `ingest.py:534,572,593` | `init_db` + `upsert_session`/`upsert_calibration_set` | `backend.upsert_session(...)` etc.; `init_db` skipped in http mode |
+| `finish.py:111` | `set_processed_state` | `backend.set_processed_state(...)` |
+| `procscan.py:311` | `set_processed_state` | `backend.set_processed_state(...)` |
+| `catalog mark` → `mark_processed_command` | direct | `backend.set_processed_state(...)` |
+| reads: `catalog list`, `wbpp` picker, `finish._resolve_session_ids`, `catalog.py` matchers | open file | `backend.query_sessions` / `find_calibration` |
+
+**Server side — `darkroom/webapi/` (new; not `serve.py`, that's datasette):**
+```
+POST   /api/sessions                       → cataloger.upsert_session
+POST   /api/calibration-sets               → cataloger.upsert_calibration_set
+PATCH  /api/sessions/{session_id}          → catalog_db.update_session_fields   (UI edits + CLI)
+POST   /api/sessions/{session_id}/state    → cataloger.set_processed_state
+GET    /api/sessions            [+filters] → catalog_db.query_sessions
+GET    /api/sessions/count      [+filters] → catalog_db.count_sessions
+GET    /api/calibration-sets    [+keys]    → calibration rows (wbpp matching stays client-side)
+GET    /  ...                              → Jinja2 edit UI (the web UI itself)
+```
+- Owns the file: `open_db(cfg.catalog_path)` at startup runs `init_db`/migration
+  once; one uvicorn process = single writer, WAL handles concurrent reads.
+- Auth: single-user homelab → one shared bearer token (`DARKROOM_API_TOKEN`) in a
+  FastAPI dependency. No user accounts.
+- Validation is inherited: `update_session_fields` already whitelists editable
+  fields and validates `processed_state` — the PATCH route gets it for free.
+
+**Scope decision (settled):** CLI *reads* also go through the API — the Mac keeps
+no local copy, and the always-on dependency already exists for writes. Keep
+`catalog.py`'s `find_darks/find_flats/find_flat_darks` *matching logic* (date
+proximity) client-side; feed it candidate rows from `GET /api/calibration-sets`.
+Logic stays put; only data access moves.
+
+**Deployment (LXC):** `uvicorn darkroom.webapi.app:app` under systemd; catalog on
+a **local disk, not a network mount**. Backup = **nightly `VACUUM INTO` copy of
+the DB to the NAS** (cron) — good enough for a low-churn, reconstructible catalog
+(worst case: `scan-processed` re-derives state, `ingest` re-registers). Litestream
+(continuous replication → S3-compatible target, seconds-level RPO) is deferred to
+a later task — overkill for day one; the nightly NAS copy is the v1 backup.
+
+**Phasing (never half-broken):**
+1. Build `webapi` server + `LocalBackend`/`HttpBackend` + `resolve_backend`,
+   **default to local** — full parity, all tests still pass against local mode.
+2. Build the Jinja2 edit UI on the read/write routes (surface processed sessions
+   **grouped by target with camera + OTA visible** so cross-rig/cross-OTA
+   clusters — legit multi-camera integrations — are obvious and per-session
+   `processed_state` is one click to correct; see the scan-processed date-bound
+   attribution caveat).
+3. Deploy to LXC, flip `DARKROOM_CATALOG_URL` on the Mac, migrate the file over,
+   nightly NAS backup cron on.
+4. **Remove datasette** (closing step, same commit as the read view goes live):
+   drop `serve.py`, the `datasette>=0.65` dep in `pyproject.toml:9`, the `serve`
+   subcommand in `cli.py`, and doc mentions (`CLAUDE.md`, `README.md:94`,
+   `CHEATSHEET.md:215`, `cataloger.py:9/1054/1164`). Keep it as the fallback
+   browser until the new UI's read view actually works, then it's superseded.
+
+Depends on: W1–W7 (done). Absorbs W8's decision (persisted linkage vs recompute —
+default recompute). Related: U2 (filter cleanup queue) is a natural second UI view.
+
 ---
 
 ## U — CLI UX / interactive modes
@@ -523,14 +627,19 @@ bursty imaging runs, and mismatches fail with a shrug instead of showing what
    verifying intended master/raw behaviour). ✅ DONE — B6 (doc-wide `04_`→`01_`
    rename) folded in alongside B3 at the user's request.
 4. **U1** wbpp interactive picker — biggest daily-use friction, small scope. ✅ DONE 2026-07-04
-5. **W1/W2/W3/W4** the real web-UI data-model + API prep. ✅ DONE 2026-07-04 ←
-   next: build the read/edit UI on `catalog_db.py` (FastAPI + Jinja2, model on
-   the triage subpackage; add a `catalog ui`/`serve-ui` subcommand).
+5. **W1/W2/W3/W4** the real web-UI data-model + API prep. ✅ DONE 2026-07-04.
 6. **F1** archive-artifact processing-state scan — ✅ DONE 2026-07-04
-   (`catalog scan-processed`; 4-state enum; date-bound + dry-run). Then **F2**
-   exact attribution from WBPP logs (backfills W8) as a precision layer.
-7. **U2/U3** filter cleanup queue + interactive ingest review (U3 benefits from
-   U1's picker helpers; U2 may want the W-series catalog write API first).
-8. **R1–R5, B7** cleanup as capacity allows.
+   (`catalog scan-processed`; 4-state enum; date-bound + dry-run). **F2** exact
+   attribution from WBPP logs — ✅ DONE. Live catalog migrated to W1/W2/W3 schema
+   + `scan-processed --apply` reconcile run — ✅ DONE 2026-07-05.
+7. **W9** ← **NEXT: the build.** Always-on FastAPI app on the LXC that owns the
+   catalog DB + serves the edit UI; Mac CLI reaches it over HTTP
+   (`LocalBackend`/`HttpBackend` selected by `catalog_url`). SQLite stays; Python/
+   FastAPI (not the JS prior-art stack); nightly NAS backup; datasette removed as
+   the closing step. See the W9 item for the full sketch.
+8. **U2/U3** filter cleanup queue + interactive ingest review (U2 is a natural
+   second UI view on the W9 app; U3 benefits from U1's picker helpers).
+9. **R1–R5, B7** cleanup as capacity allows. Litestream (continuous DB
+   replication) also lands here as an optional upgrade over the nightly backup.
 </content>
 </invoke>
