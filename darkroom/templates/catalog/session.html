@@ -1,0 +1,42 @@
+<!-- darkroom/templates/catalog/session.html -->
+{% extends "base.html" %}
+{% block title %}darkroom catalog — {{ session.session_id }}{% endblock %}
+{% block content %}
+<p><a href="/">&larr; back to sessions</a></p>
+<h2>{{ session.session_id }}</h2>
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+
+<form method="post" action="/sessions/{{ session.session_id }}">
+  <div class="field-row"><label>Target</label><input type="text" name="target" value="{{ session.target or '' }}"></div>
+  <div class="field-row"><label>Obs date</label><input type="text" name="obs_date" value="{{ session.obs_date or '' }}"></div>
+  <div class="field-row"><label>OTA</label><input type="text" name="ota" value="{{ session.ota or '' }}"></div>
+  <div class="field-row"><label>Camera</label><input type="text" name="camera" value="{{ session.camera or '' }}"></div>
+  <div class="field-row"><label>Filter</label><input type="text" name="filter" value="{{ session.filter or '' }}"></div>
+  <div class="field-row"><label>Gain</label><input type="text" name="gain" value="{{ session.gain if session.gain is not none else '' }}"></div>
+  <div class="field-row"><label>Temperature (C)</label><input type="text" name="temperature_c" value="{{ session.temperature_c if session.temperature_c is not none else '' }}"></div>
+  <div class="field-row"><label>Exposure (s)</label><input type="text" name="exposure_sec" value="{{ session.exposure_sec if session.exposure_sec is not none else '' }}"></div>
+  <div class="field-row"><label>Focal length</label><input type="text" name="focal_length" value="{{ session.focal_length if session.focal_length is not none else '' }}"></div>
+  <div class="field-row"><label>RA (deg)</label><input type="text" name="ra_deg" value="{{ session.ra_deg if session.ra_deg is not none else '' }}"></div>
+  <div class="field-row"><label>Dec (deg)</label><input type="text" name="dec_deg" value="{{ session.dec_deg if session.dec_deg is not none else '' }}"></div>
+  <div class="field-row"><label>Notes</label><textarea name="notes" rows="3">{{ session.notes or '' }}</textarea></div>
+  <div class="field-row">
+    <label>Processed state</label>
+    <select name="processed_state">
+      {% for s in processed_states %}
+      <option value="{{ s }}" {% if session.processed_state == s %}selected{% endif %}>{{ s }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="field-row"><label>Processed path</label><input type="text" name="processed_path" value="{{ session.processed_path or '' }}"></div>
+  <div class="field-row"><label>Processed date</label><input type="text" name="processed_date" value="{{ session.processed_date or '' }}"></div>
+
+  <button type="submit">Save</button>
+</form>
+
+<h3 style="margin-top:2rem; color:#888; font-size:0.95rem;">Read-only</h3>
+<div class="field-row"><label>Frame count</label><span class="readonly">{{ session.frame_count }}</span></div>
+<div class="field-row"><label>Integration</label><span class="readonly">{{ "%.1f"|format((session.total_integration_sec or 0) / 3600.0) }}h</span></div>
+<div class="field-row"><label>Lights path</label><span class="readonly">{{ session.lights_path or '—' }}</span></div>
+<div class="field-row"><label>Created</label><span class="readonly">{{ session.created_at or '—' }}</span></div>
+<div class="field-row"><label>Updated</label><span class="readonly">{{ session.updated_at or '—' }}</span></div>
+{% endblock %}

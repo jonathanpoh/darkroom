@@ -22,6 +22,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
 from darkroom import catalog_db, config
+from darkroom.webapi.ui import build_ui_router
 
 
 class SessionIn(BaseModel):
@@ -216,6 +217,8 @@ def create_app(db_path: Path, api_token: str) -> FastAPI:
             gain=gain,
             exposure_sec=exposure_sec,
         )
+
+    app.include_router(build_ui_router(db_path, api_token))
 
     return app
 

@@ -1,0 +1,15 @@
+<!-- darkroom/templates/catalog/login.html -->
+{% extends "base.html" %}
+{% block title %}darkroom catalog — log in{% endblock %}
+{% block content %}
+<h2>Log in</h2>
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+<form method="post" action="/login">
+  <input type="hidden" name="next" value="{{ next }}">
+  <div class="field-row">
+    <label for="token">API token</label>
+    <input type="password" id="token" name="token" autofocus required>
+  </div>
+  <button type="submit">Log in</button>
+</form>
+{% endblock %}
