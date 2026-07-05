@@ -9,7 +9,7 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
-from darkroom.cataloger import set_processed_state
+from darkroom.catalog_client import CatalogBackend, resolve_backend
 from darkroom.config import resolve_catalog, resolve_path
 
 
@@ -95,12 +95,19 @@ def _resolve_session_ids(
 
 
 def _mark_sessions_processed(
-    wbpp_target: Path, catalog: Path, archive_root: Path, status: str, date_str: str
+    wbpp_target: Path,
+    catalog: Path,
+    archive_root: Path,
+    status: str,
+    date_str: str,
+    backend: CatalogBackend,
 ) -> None:
     """Mark every session resolved from wbpp_target as processed.
 
     Sets the structured processed_state='processed', with processed_path=status
     (the archive-relative _Processed/<date>/ path) and processed_date=date_str.
+    ``catalog`` is still used for the read (_resolve_session_ids' direct
+    sqlite lookup, unchanged for now); the write goes through ``backend``.
     """
     session_ids = _resolve_session_ids(wbpp_target, catalog, archive_root)
     if not session_ids:
@@ -108,8 +115,8 @@ def _mark_sessions_processed(
         return
     print(f"\nMarking {len(session_ids)} session(s) as processed:")
     for sid in session_ids:
-        ok = set_processed_state(
-            catalog, sid, state="processed", processed_path=status, processed_date=date_str
+        ok = backend.set_processed_state(
+            sid, state="processed", processed_path=status, processed_date=date_str
         )
         mark = "✓" if ok else "✗ (not found)"
         print(f"  {mark} {sid}")
@@ -183,6 +190,7 @@ def cmd_finish(
     wbpp_root: Path,
     target: str,
     catalog: Path,
+    backend: CatalogBackend,
     date_override: str | None,
     dry_run: bool,
 ) -> None:
@@ -218,7 +226,7 @@ def cmd_finish(
 
     if not dry_run:
         status = str(dest.relative_to(output))
-        _mark_sessions_processed(wbpp_target, catalog, output, status, date_str)
+        _mark_sessions_processed(wbpp_target, catalog, output, status, date_str, backend)
 
     _confirm_and_delete(
         [wbpp_output] if wbpp_output.exists() else [],
@@ -249,6 +257,7 @@ def run(args: argparse.Namespace) -> None:
         wbpp_root=wbpp_root,
         target=args.target,
         catalog=catalog,
+        backend=resolve_backend(args.catalog),
         date_override=args.date,
         dry_run=args.dry_run,
     )

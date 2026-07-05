@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import sqlite3
 
+from darkroom.catalog_client import LocalBackend
 from darkroom.cataloger import init_db, upsert_calibration_set, upsert_session
 from darkroom.finish import (
     _find_processing_date, _build_dest, _copy_flat,
@@ -228,7 +229,9 @@ def test_mark_sessions_processed_sets_structured_state(tmp_path):
     (link_dir / light.name).symlink_to(light.resolve())
 
     status = "01_Deep Sky Objects/M 81/_Processed/2026-05-15"
-    _mark_sessions_processed(wbpp_target, catalog, archive, status, "2026-05-15")
+    _mark_sessions_processed(
+        wbpp_target, catalog, archive, status, "2026-05-15", LocalBackend(catalog)
+    )
 
     with sqlite3.connect(catalog) as conn:
         row = conn.execute(

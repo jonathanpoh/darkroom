@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from darkroom.catalog import query_all_sessions
+from darkroom.catalog_client import LocalBackend
 from darkroom.catalog_cli import _scan_processed_run
 from darkroom.cataloger import init_db, set_processed_state, upsert_session
 from darkroom.procscan import Transition, apply, classify_session, classify_target, scan
@@ -330,7 +331,7 @@ def test_scan_idempotent_after_apply(tmp_path):
     db = _build_catalog(tmp_path, [_session("s1", obs_date="2026-02-19")])
 
     first = scan(archive, db)
-    applied = apply(db, first)
+    applied = apply(LocalBackend(db), first)
     assert applied == 1
 
     second = scan(archive, db)
@@ -399,7 +400,7 @@ def test_apply_sets_processed_date_from_log_evidence(tmp_path):
     db = _build_catalog(tmp_path, [_session("s1", obs_date="2025-03-20")])
 
     transitions = scan(archive, db)
-    apply(db, transitions)
+    apply(LocalBackend(db), transitions)
 
     row = query_all_sessions(db)[0]
     assert row["processed_state"] == "processed"
@@ -418,7 +419,7 @@ def test_apply_only_applies_changed_transitions(tmp_path):
     set_processed_state(db, "s2", state="processed", processed_date="2020-01-01")
 
     transitions = scan(archive, db)
-    applied = apply(db, transitions)
+    applied = apply(LocalBackend(db), transitions)
 
     assert applied == 1
     rows = {r["session_id"]: r for r in query_all_sessions(db)}
@@ -434,7 +435,7 @@ def test_apply_sets_processed_date(tmp_path):
     db = _build_catalog(tmp_path, [_session("s1", obs_date="2026-02-19")])
 
     transitions = scan(archive, db)
-    apply(db, transitions)
+    apply(LocalBackend(db), transitions)
 
     row = query_all_sessions(db)[0]
     assert row["processed_state"] == "in_progress"
@@ -447,7 +448,7 @@ def test_apply_returns_zero_when_nothing_changed(tmp_path):
     db = _build_catalog(tmp_path, [_session("s1", obs_date="2026-02-19")])
 
     transitions = scan(archive, db)
-    assert apply(db, transitions) == 0
+    assert apply(LocalBackend(db), transitions) == 0
 
 
 # ── CLI: dry-run vs --apply ──────────────────────────────────────────────────

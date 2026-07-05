@@ -74,7 +74,8 @@ def _scan_processed_run(args: argparse.Namespace) -> None:
 
     Dry run (default) is pure-read: it never calls init_db and never opens
     the catalog for writing, so it's safe to point at a live catalog just to
-    preview. --apply writes via darkroom.procscan.apply (set_processed_state).
+    preview. --apply writes via darkroom.procscan.apply, through the
+    catalog backend (local file or webapi, per catalog_url — W9).
     """
     from darkroom import procscan
 
@@ -101,8 +102,10 @@ def _scan_processed_run(args: argparse.Namespace) -> None:
         print(f"\n{', '.join(parts)}; run with --apply to write")
         return
 
+    from darkroom.catalog_client import resolve_backend
+
     try:
-        applied = procscan.apply(db_path, transitions)
+        applied = procscan.apply(resolve_backend(args.catalog), transitions)
     except sqlite3.OperationalError as e:
         sys.exit(
             f"Error writing to catalog: {e}\n"

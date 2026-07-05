@@ -536,14 +536,19 @@ def set_processed_state(
 
 
 def mark_processed_command(args):
-    """Handle mark command — set structured processed_state (+ date/path/notes)."""
-    db_path = Path(args.db)
-    if not db_path.exists():
-        print(f"Error: Database not found: {db_path}", file=sys.stderr)
+    """Handle mark command — set structured processed_state (+ date/path/notes).
+
+    Writes through the catalog backend (W9): local SQLite by default, or the
+    webapi server when catalog_url / DARKROOM_CATALOG_URL is configured.
+    """
+    from darkroom.catalog_client import LocalBackend, resolve_backend
+
+    backend = resolve_backend(getattr(args, "catalog", None) or args.db)
+    if isinstance(backend, LocalBackend) and not backend.db_path.exists():
+        print(f"Error: Database not found: {backend.db_path}", file=sys.stderr)
         sys.exit(1)
     try:
-        found = set_processed_state(
-            db_path,
+        found = backend.set_processed_state(
             args.session_id,
             state=args.state,
             processed_date=getattr(args, "date", None),

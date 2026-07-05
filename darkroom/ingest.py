@@ -12,12 +12,8 @@ from pathlib import Path
 
 import yaml
 
-from darkroom.cataloger import (
-    init_db,
-    make_session_id,
-    upsert_calibration_set,
-    upsert_session,
-)
+from darkroom.cataloger import make_session_id
+from darkroom.catalog_client import resolve_backend
 from darkroom.config import resolve_catalog, resolve_path
 from darkroom.names import _normalize_camera
 from darkroom.scanner import CalibrationGroup, Session, ScanResult, scan_source
@@ -531,7 +527,12 @@ def cmd_commit(args: argparse.Namespace) -> None:
         print("Run: darkroom ingest review <manifest>", file=sys.stderr)
         sys.exit(1)
 
-    init_db(catalog)
+    # resolve_backend(str(catalog)) intentionally lets a configured
+    # DARKROOM_CATALOG_URL override the manifest/flag-resolved local path
+    # (W9: the Mac ingest box goes remote); the local path above is only the
+    # offline fallback. LocalBackend ensures the schema itself — no separate
+    # init_db call needed.
+    backend = resolve_backend(str(catalog))
     files_copied = 0
     files_skipped = 0
 
@@ -569,7 +570,7 @@ def cmd_commit(args: argparse.Namespace) -> None:
     for entry in manifest.get("sessions", []):
         if entry.get("status") == "existing":
             continue
-        upsert_session(catalog, {
+        backend.upsert_session({
             "session_id": entry["session_id"],
             "target": entry["target"],
             "obs_date": entry["obs_date"],
@@ -590,7 +591,7 @@ def cmd_commit(args: argparse.Namespace) -> None:
         catalog_entries += 1
 
     for entry in manifest.get("calibration", []):
-        upsert_calibration_set(catalog, {
+        backend.upsert_calibration_set({
             "set_id": entry["set_id"],
             "frame_type": entry["frame_type"],
             "camera": entry["camera"],

@@ -4,9 +4,10 @@ with exact WBPP-log-derived attribution).
 
 Strictly read-only on the archive: every function here only reads files via
 os.walk/stat, never moves/writes/deletes anything. The only write path is
-``apply``, which calls ``darkroom.cataloger.set_processed_state`` — imported
-lazily so that ``scan`` (the dry-run path) never pulls in astropy and never
-touches the catalog schema (no ``init_db``). Sessions are read via
+``apply``, which calls ``set_processed_state`` on a passed-in
+``darkroom.catalog_client.CatalogBackend`` (W9) — so ``scan`` (the dry-run
+path) never pulls in astropy and never touches the catalog schema (no
+``init_db``). Sessions are read via
 ``darkroom.catalog.query_all_sessions``, a plain ``sqlite3.connect`` with no
 schema mutation, matching the read layer's existing astropy-free contract.
 
@@ -292,15 +293,15 @@ def scan(
     return transitions
 
 
-def apply(catalog: Path, transitions: list[Transition]) -> int:
-    """Write every change=True transition's proposed_state to the catalog.
+def apply(backend, transitions: list[Transition]) -> int:
+    """Write every change=True transition's proposed_state via the backend.
 
-    Returns the number of transitions applied. processed_date is only passed
-    through when the transition carries one (undated in-progress/processed
-    evidence leaves the existing processed_date untouched).
+    ``backend`` is a darkroom.catalog_client.CatalogBackend (LocalBackend or
+    HttpBackend). Returns the number of transitions applied. processed_date
+    is only passed through when the transition carries one (undated
+    in-progress/processed evidence leaves the existing processed_date
+    untouched).
     """
-    from darkroom.cataloger import set_processed_state  # lazy: keep scan() astropy-free
-
     count = 0
     for t in transitions:
         if not t.change:
@@ -308,6 +309,6 @@ def apply(catalog: Path, transitions: list[Transition]) -> int:
         kwargs = {"state": t.proposed_state}
         if t.evidence_date is not None:
             kwargs["processed_date"] = t.evidence_date
-        set_processed_state(catalog, t.session_id, **kwargs)
+        backend.set_processed_state(t.session_id, **kwargs)
         count += 1
     return count
