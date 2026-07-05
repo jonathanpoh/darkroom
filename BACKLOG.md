@@ -363,8 +363,18 @@ docs · **R** = refactor · **W** = web-UI prep.
 > local vs HTTP; live smoke: `uvicorn --factory` + CLI `list`/`mark` over
 > real HTTP round-trips. 528 tests. **The CLI is now fully backend-agnostic —
 > flipping `DARKROOM_CATALOG_URL` switches the whole surface to remote.**
-> **Remaining:** phase 2 (Jinja2 edit UI on the webapi), phase 3 (LXC deploy
-> + DB migration + nightly backup), phase 4 (remove datasette).
+> **Phase 3 (LXC deploy) shipped 2026-07-05** (`ddc3d40` unit file): webapi
+> live on the `darkroom` LXC (Debian 13, 192.168.2.217:8000). FHS layout:
+> git clone at `/opt/darkroom` (`uv sync --no-dev` venv), DB at
+> `/var/lib/darkroom/astro_catalog.db`, bearer token in root-only
+> `/etc/darkroom/env` (`DARKROOM_API_TOKEN=`), systemd unit
+> `deploy/darkroom-api.service` (tracked in-repo, `systemctl link`ed,
+> enabled). Redeploy: `git pull && uv sync --no-dev && sudo systemctl
+> restart darkroom-api`. Mac CLI flipped to remote via `catalog_url` +
+> `api_token` in `~/.config/darkroom/darkroom.toml`; verified end-to-end.
+> The server DB copy is authoritative; the Mac-local file is dormant.
+> **Remaining:** phase 2 (Jinja2 edit UI on the webapi), nightly `VACUUM
+> INTO` backup to NAS, phase 4 (remove datasette).
 
 Captured 2026-07-05. **The build item** that W1–W8 were prep for: an
 always-on FastAPI app on a homelab LXC that both serves the edit UI *and* owns
