@@ -1,0 +1,11 @@
+[Unit]
+Description=darkroom catalog nightly backup (VACUUM INTO + rsync to NAS)
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=claude
+Group=claude
+EnvironmentFile=/etc/darkroom/env
+Environment=DARKROOM_CATALOG=/var/lib/darkroom/astro_catalog.db
+ExecStart=/opt/darkroom/deploy/darkroom-backup.sh
