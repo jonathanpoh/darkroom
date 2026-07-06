@@ -13,3 +13,4 @@ staging/
 
 # Local config (use darkroom.toml.example as template)
 darkroom.toml
+.env
