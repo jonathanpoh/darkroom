@@ -51,7 +51,10 @@ find "$BACKUP_DIR" -name 'astro_catalog-*.db' -mtime "+$KEEP_DAYS" -delete
 if [ -n "$DEST" ]; then
     REMOTE_USER_HOST="${DEST%%:*}"
     REMOTE_PATH="${DEST#*:}"
-    scp -P "$SSH_PORT" -i "$SSH_KEY" -o BatchMode=yes "$SNAP" "$DEST/"
+    # -O (legacy scp protocol): DSM chroots the SFTP subsystem to /volume1,
+    # so SFTP-mode scp and the ssh find-prune below would disagree about
+    # paths; legacy mode runs over the shell and sees the same namespace.
+    scp -O -P "$SSH_PORT" -i "$SSH_KEY" -o BatchMode=yes "$SNAP" "$DEST/"
     ssh -p "$SSH_PORT" -i "$SSH_KEY" -o BatchMode=yes "$REMOTE_USER_HOST" \
         "find '$REMOTE_PATH' -name 'astro_catalog-*.db' -mtime +$KEEP_DAYS -delete"
     echo "pushed $SNAP -> $DEST/ (pruned >$KEEP_DAYS days remotely)"
