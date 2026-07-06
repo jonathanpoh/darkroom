@@ -386,16 +386,21 @@ docs · **R** = refactor · **W** = web-UI prep.
 > remote flip and making live calls at the production API — only Little
 > Snitch's block stopped `scan-processed --apply` tests writing to the
 > prod catalog. Suite: 540 passed, 0 failed.
-> **Remaining:** nightly `VACUUM INTO` backup to NAS — **plus, same task:**
-> a dev-snapshot helper (`scripts/dev-snapshot.sh` or similar) that pulls
-> the latest backup (or `VACUUM INTO` over SSH from the LXC before the
-> backup exists) to a local file and prints/runs the
-> `DARKROOM_CATALOG=<snap> uvicorn --factory ...` invocation, for manually
-> smoke-testing UI/migration changes against real catalog data. Decided
-> 2026-07-06: full snapshot, not a subset (~200 rows, few hundred KB;
-> `VACUUM INTO` is consistent under the running server); pytest stays on
-> per-test tmp fixtures — no shared staging DB for automated tests.
-> Then phase 4 (remove datasette).
+> **Nightly backup shipped 2026-07-06** (01ba55a + scp fixes):
+> `deploy/darkroom-backup.{sh,service,timer}` — 04:30 Lisbon timer,
+> `VACUUM INTO` dated snapshot under `/var/lib/darkroom/backups/` (14-day
+> prune), pushed to the NAS at
+> `darkroom-backup@192.168.2.17:/volume1/backups/darkroom` (ssh port
+> 3673, key `~/.ssh/id_ed25519_nas_backup` on the LXC; same-retention
+> remote prune via `find -mtime`). Verified end-to-end. Gotchas baked
+> into the script comments: Synology's patched rsync needs DSM's rsync
+> service running (error 43), so we use scp instead — and `-O` (legacy
+> protocol), because DSM chroots the SFTP subsystem to `/volume1`, which
+> would make scp-SFTP and the ssh find-prune disagree about paths.
+> **Remaining:** dev-snapshot helper (pull latest NAS backup → local file
+> → run uvicorn against it; deferred to the front-end work, build when
+> first needed — decided 2026-07-06: full snapshot not subset, pytest
+> stays on per-test tmp fixtures), then phase 4 (remove datasette).
 
 Captured 2026-07-05. **The build item** that W1–W8 were prep for: an
 always-on FastAPI app on a homelab LXC that both serves the edit UI *and* owns
