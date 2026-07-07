@@ -207,10 +207,12 @@ def cmd_finish(
 
     print(f"Destination: {dest}")
 
+    if not any(f.is_file() for f in master_dir.iterdir()):
+        sys.exit(f"Error: no files in {master_dir} — aborting (nothing to archive)")
     print("\nCopying master/")
-    master_count = _copy_flat(master_dir, dest / "master", dry_run=dry_run)
-    if not dry_run and master_count == 0:
-        sys.exit("Error: master/ contains no .xisf files — aborting (nothing copied)")
+    # _copy_flat returns only the count of NEW copies — zero is fine on a
+    # re-run (everything already archived), so don't treat it as an error.
+    _copy_flat(master_dir, dest / "master", dry_run=dry_run)
 
     processed_files = (
         [f for f in processed_dir.iterdir() if f.is_file()] if processed_dir.exists() else []

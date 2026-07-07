@@ -454,3 +454,19 @@ def test_cmd_finish_copies_log_folders(tmp_path, capsys):
     assert (dest / "logs" / "20260705173607.log").exists()
     assert (dest / "asiair_logs" / "PHD2_GuideLog_2026-06-16_233946.txt").exists()
     assert not (dest / "registered").exists()
+
+
+def test_cmd_finish_rerun_is_idempotent(tmp_path, capsys):
+    """A second run must not abort just because master/ was already archived
+    (regression: the empty-master guard counted new copies, not source files),
+    and must pick up log folders added between runs."""
+    archive, catalog, wbpp_root, _ = _dry_run_finish_setup(tmp_path, with_symlink=True)
+    out_dir = wbpp_root / "M81" / "Output"
+    with patch("builtins.input", return_value=""):
+        cmd_finish(output=archive, wbpp_root=wbpp_root, target="M 81",
+                   backend=LocalBackend(catalog), date_override="2026-07-01", dry_run=False)
+        touch(out_dir / "logs" / "20260705173607.log")
+        cmd_finish(output=archive, wbpp_root=wbpp_root, target="M 81",
+                   backend=LocalBackend(catalog), date_override="2026-07-01", dry_run=False)
+    dest = archive / "01_Deep Sky Objects" / "M 81" / "_Processed" / "2026-07-01"
+    assert (dest / "logs" / "20260705173607.log").exists()
