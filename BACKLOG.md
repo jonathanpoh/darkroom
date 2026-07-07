@@ -401,6 +401,29 @@ docs · **R** = refactor · **W** = web-UI prep.
 > → run uvicorn against it; deferred to the front-end work, build when
 > first needed — decided 2026-07-06: full snapshot not subset, pytest
 > stays on per-test tmp fixtures), then phase 4 (remove datasette).
+> **Front-end design signed off 2026-07-07** ("safelight" direction, 4
+> mock iterations on live data; the v4 mock is the build spec). IA:
+> targets overview (home) → target detail (nights grouped by rig,
+> expanded by default) → session edit; U2 queue later. Tokens: cool
+> blue-grey dark ground `#14171c` / ink `#e2e6ed`, safelight red
+> `#e8502a` reserved for interaction/identity; D-DIN (repo
+> `datto-d-din/`) for designations/wordmark, Fira Mono for data;
+> CVD-validated filter colors (L-Pro `#c98500`, L-Extreme `#0da189`,
+> L-Synergy `#8a6cc9`, Baader `#3987e5`, gray for none). Signature:
+> grease-pencil state marks (red circle processed / half-circle in
+> progress / strike skipped / dotted open), click-to-set. Depth gauge
+> (sqrt scale, ticks at 2/10/20h, zones needs-data/workable/solid/deep)
+> on target rows and rig headers. Sortable columns; catalog + filter
+> dropdowns (filter = any-session partial match); common names under
+> designations (hardcoded map v1 — decide `common_name` storage +
+> SIMBAD backfill later). Single dark theme by design.
+> **Auth-flow review (queued 2026-07-07):** current browser auth is the
+> raw API bearer token pasted into a login form and stored in a 90-day
+> HttpOnly cookie (`ui.py:login_submit`). Fine for LAN single-user, but
+> review before any exposure beyond the LAN (Tailscale is OK): consider
+> a separate UI secret (revocable independently of the API token),
+> cookie rotation/expiry on token change, and rate-limiting the login
+> form. No user accounts — it stays single-user.
 
 Captured 2026-07-05. **The build item** that W1–W8 were prep for: an
 always-on FastAPI app on a homelab LXC that both serves the edit UI *and* owns
@@ -547,6 +570,12 @@ bursty imaging runs, and mismatches fail with a shrug instead of showing what
   the catalog" boundary; either extend triage deliberately or make it a
   `catalog`-native command. Related to the deferred triage finalize/promote
   workflow.
+- **Added 2026-07-07 (design conversation): duplicate/suspect target names
+  too.** The live catalog has mosaic panels cataloged as distinct targets
+  (`IC 4604_1-1` … `IC 4604_2-2`), duplicated designations (`M 82 M 82`,
+  `M 81 M 82` vs `M 81`), and variants (`NGC 281W` vs `NGC 281`). The same
+  review-queue UI should offer merge/rename for targets alongside filter
+  fixes — same both-sides constraint (folder name + catalog row).
 
 ### U3. `darkroom ingest` interactive confirmation mode
 - Extend the existing `ingest review` verb (today: a bare missing-filter prompt
@@ -623,6 +652,29 @@ bursty imaging runs, and mismatches fail with a shrug instead of showing what
   `_Processed/` folder has logs; some folders hold many per-run logs — target the
   integration log specifically. A single edit may also combine multiple WBPP runs
   or hand-added frames not in any one log.
+
+### F3. Web UI: show whether a session has matching calibration frames
+Queued 2026-07-07 (front-end feedback round). Per session (night row in the
+target detail view), indicate whether matching darks/flats/flat-darks exist in
+the catalog — the matching logic already exists client-side of the API in
+`darkroom/catalog.py` (`find_darks`/`find_flats`/`find_flat_darks`, fed from
+`GET /api/calibration-sets`); the webapi aggregate would run the same matchers
+server-side and emit e.g. `cal: {darks: true, flats: false, flat_darks: true}`
+per night. UI: small indicator on the night row (missing calibration = the
+attention state). Design the exposure-tolerance/flat-window parameters to
+match `darkroom wbpp`'s defaults so the indicator predicts what WBPP prep
+will actually find.
+
+### F4. Scan and match ASIAir guiding logs → per-session guiding conditions
+Queued 2026-07-07. ASIAir writes PHD2-style guide logs; scan them (ingest-time
+or a backfill pass over the SD-card copies/archive), match log time-ranges to
+sessions by imaging night, and store per-session guiding stats (RMS RA/Dec,
+worst excursions, guide-star loss events). Surface in the web UI on the night
+row / session edit page — "guiding conditions" alongside exposure data, to
+explain why a night's subs are soft before processing. Open questions: where
+logs live long-term (they are not currently archived by `ingest` — may need an
+ingest extension to copy them), schema (new `guiding` columns vs a side
+table), and whether to compute stats at scan time or store raw logs.
 
 ### F1. Derive processing state by scanning the archive for output artifacts (original spec)
 - **Why:** A read-only audit of the live catalog on 2026-07-04 found **all 205
