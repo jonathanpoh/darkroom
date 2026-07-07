@@ -387,7 +387,8 @@ docs · **R** = refactor · **W** = web-UI prep.
 > Snitch's block stopped `scan-processed --apply` tests writing to the
 > prod catalog. Suite: 540 passed, 0 failed.
 > **Nightly backup shipped 2026-07-06** (01ba55a + scp fixes):
-> `deploy/darkroom-backup.{sh,service,timer}` — 04:30 Lisbon timer,
+> `deploy/darkroom-backup.{sh,service,timer}` — 01:30 Lisbon timer
+> (moved from 04:30 on 2026-07-07: the NAS powers down 02:00–08:00),
 > `VACUUM INTO` dated snapshot under `/var/lib/darkroom/backups/` (14-day
 > prune), pushed to the NAS at
 > `darkroom-backup@192.168.2.17:/volume1/backups/darkroom` (ssh port
