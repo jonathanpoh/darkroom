@@ -19,10 +19,13 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from darkroom import catalog_db, config
 from darkroom.webapi.ui import build_ui_router
+
+_STATIC_DIR = Path(__file__).parent / "static"
 
 
 class SessionIn(BaseModel):
@@ -219,6 +222,9 @@ def create_app(db_path: Path, api_token: str) -> FastAPI:
         )
 
     app.include_router(build_ui_router(db_path, api_token))
+    # No auth on static assets (CSS/JS/fonts) — nothing sensitive lives here,
+    # and the login page itself needs the CSS before a token is ever entered.
+    app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
     return app
 

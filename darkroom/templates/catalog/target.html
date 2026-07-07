@@ -1,0 +1,13 @@
+<!-- darkroom/templates/catalog/target.html -->
+{% extends "base.html" %}
+{% block title %}darkroom — {{ target }}{% endblock %}
+{% block content %}
+<main id="app"></main>
+{% endblock %}
+{% block scripts %}
+<script>
+  const DATA = {{ data|tojson }};
+  const DETAIL_TARGET = {{ target|tojson }};
+</script>
+<script src="/static/app.js"></script>
+{% endblock %}

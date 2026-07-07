@@ -4,51 +4,19 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}darkroom catalog{% endblock %}</title>
-  <style>
-    * { box-sizing: border-box; }
-    body { font-family: monospace; margin: 0; background: #111; color: #ddd; }
-    nav { background: #1a1a1a; padding: 0.5rem 1rem; display: flex; gap: 1.5rem; align-items: center; border-bottom: 1px solid #333; }
-    nav a { color: #7af; text-decoration: none; }
-    nav a:hover { color: #fff; }
-    main { padding: 1rem 2rem; max-width: 1400px; }
-    table { width: 100%; border-collapse: collapse; margin-bottom: 1.5rem; }
-    th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid #222; font-size: 0.85rem; }
-    th { background: #1a1a1a; color: #888; }
-    tr:hover { background: #1a1a1a; }
-    a { color: #7af; }
-    input, textarea, select { background: #222; border: 1px solid #444; color: #ddd; padding: 0.3rem 0.5rem; border-radius: 3px; font-family: monospace; }
-    button, .btn { background: #226; border: 1px solid #448; color: #ddd; padding: 0.3rem 0.7rem; border-radius: 3px; cursor: pointer; font-family: monospace; font-size: 0.8rem; }
-    button:hover, .btn:hover { background: #338; }
-    button:disabled { opacity: 0.6; cursor: default; }
-    .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 3px; font-size: 0.75rem; }
-    .badge-unprocessed { background: #444; color: #ccc; }
-    .badge-in_progress { background: #664400; color: #fc9; }
-    .badge-processed { background: #225522; color: #9d9; }
-    .badge-skipped { background: #333; color: #999; }
-    .group-header { display: flex; align-items: baseline; gap: 1rem; margin: 1.5rem 0 0.5rem; }
-    .group-header h2 { margin: 0; font-size: 1.1rem; color: #fff; }
-    .group-meta { color: #888; font-size: 0.85rem; }
-    .filter-bar { display: flex; gap: 1rem; align-items: center; margin-bottom: 1rem; }
-    .error { background: #431; border: 1px solid #843; color: #fca; padding: 0.5rem 0.8rem; border-radius: 3px; margin-bottom: 1rem; }
-    .state-form { display: inline; }
-    .state-buttons { display: flex; gap: 0.25rem; }
-    form.inline-form { display: inline; }
-    .field-row { margin-bottom: 0.7rem; display: flex; gap: 0.75rem; align-items: center; }
-    .field-row label { width: 160px; color: #aaa; }
-    .field-row input, .field-row select, .field-row textarea { flex: 1; max-width: 400px; }
-    .readonly { color: #888; }
-  </style>
+  <title>{% block title %}darkroom{% endblock %}</title>
+  <link rel="stylesheet" href="/static/safelight.css">
+  {% block extra_head %}{% endblock %}
 </head>
 <body>
-<nav>
-  <strong style="color:#fff">darkroom catalog</strong>
-  <a href="/">Sessions</a>
-  <span style="flex:1"></span>
-  <a href="/logout">Log out</a>
-</nav>
-<main>
-{% block content %}{% endblock %}
-</main>
+<div class="wrap">
+  <header>
+    <h1 class="wordmark"><a href="/">DARKR<span class="lamp">O</span><span class="lamp">O</span>M</a></h1>
+    {% block header_right %}<a class="logout-link" href="/logout">log out</a>{% endblock %}
+  </header>
+  {% block content %}{% endblock %}
+</div>
+<div id="tip"></div>
+{% block scripts %}{% endblock %}
 </body>
 </html>

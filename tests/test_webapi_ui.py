@@ -1,6 +1,9 @@
 """Tests for the W9 phase-2 Jinja2 catalog edit UI (darkroom.webapi.ui)."""
 from __future__ import annotations
 
+import json
+import re
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -9,6 +12,13 @@ from darkroom.cataloger import upsert_session
 from darkroom.webapi.app import create_app
 
 TOKEN = "testtoken"
+
+
+def _embedded_data(html: str) -> list[dict]:
+    """Pull the `const DATA = [...]` JSON blob out of a rendered safelight page."""
+    m = re.search(r"const DATA = (.*?);\n", html, re.DOTALL)
+    assert m, "page did not embed a `const DATA = ...;` script"
+    return json.loads(m.group(1))
 
 
 def _session(
@@ -125,15 +135,114 @@ def test_index_groups_by_target_shows_camera_and_ota(tmp_path):
     resp = client.get("/")
     assert resp.status_code == 200
     text = resp.text
-    assert "M 81" in text
-    assert "NGC 7000" in text
-    assert "ZWOASI585MCPro" in text
-    assert "FRA400" in text
-    # M 81 group should list its two sessions, most recent obs_date first.
-    m81_pos = text.index("M 81")
-    d20_pos = text.index("2026-02-20")
-    d19_pos = text.index("2026-02-19")
-    assert m81_pos < d20_pos < d19_pos
+    assert "ZWOASI585MCPro" in text  # static shell references app.js, which renders these client-side
+    assert '<script src="/static/app.js"></script>' in text
+
+    data = _embedded_data(text)
+    by_target = {t["target"]: t for t in data}
+    assert set(by_target) == {"M 81", "NGC 7000"}
+
+    m81 = by_target["M 81"]
+    assert m81["n"] == 2
+    assert m81["last"] == "2026-02-20"
+    assert {n["date"] for n in m81["nights"]} == {"2026-02-19", "2026-02-20"}
+    assert all(n["ota"] == "FRA400" and n["camera"] == "ZWOASI585MCPro" for n in m81["nights"])
+
+    ngc = by_target["NGC 7000"]
+    assert ngc["n"] == 1
+    assert ngc["hours"] == {"L-Extreme": pytest.approx(5.0)}
+
+
+def test_index_embeds_aggregate_with_cname_hours_and_states(tmp_path):
+    client, db_path = make_client(tmp_path)
+    upsert_session(db_path, _session("M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"))
+    upsert_session(
+        db_path,
+        _session(
+            "M81_20260220_FRA400_ZWOASI585MCPro_L-Extreme",
+            obs_date="2026-02-20",
+            filter="L-Extreme",
+        ),
+    )
+    login(client)
+
+    resp = client.get("/")
+    assert resp.status_code == 200
+    data = _embedded_data(resp.text)
+    m81 = next(t for t in data if t["target"] == "M 81")
+
+    assert m81["cname"] == "Bode's Galaxy"
+    assert set(m81["hours"]) == {"L-Pro", "L-Extreme"}
+    assert m81["hours"]["L-Pro"] == pytest.approx(5.0)
+    assert m81["hours"]["L-Extreme"] == pytest.approx(5.0)
+    assert m81["total_h"] == pytest.approx(10.0)
+    assert m81["states"] == {"unprocessed": 2}
+
+
+# ---------------------------------------------------------------------------
+# target detail view
+# ---------------------------------------------------------------------------
+
+
+def test_target_detail_scoped_to_one_target(tmp_path):
+    client, db_path = make_client(tmp_path)
+    upsert_session(db_path, _session("M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"))
+    upsert_session(
+        db_path,
+        _session(
+            "NGC7000_20260221_FRA400_ZWOASI585MCPro_L-Extreme",
+            target="NGC 7000",
+            obs_date="2026-02-21",
+            filter="L-Extreme",
+        ),
+    )
+    login(client)
+
+    resp = client.get("/targets/M%2081")
+    assert resp.status_code == 200
+    assert '<script src="/static/app.js"></script>' in resp.text
+    assert "DETAIL_TARGET" in resp.text
+
+    data = _embedded_data(resp.text)
+    assert len(data) == 1
+    assert data[0]["target"] == "M 81"
+    assert "NGC 7000" not in resp.text  # scoped strictly to the requested target
+
+
+def test_target_detail_unknown_target_404(tmp_path):
+    client, _ = make_client(tmp_path)
+    login(client)
+    resp = client.get("/targets/M%2099999")
+    assert resp.status_code == 404
+
+
+def test_target_detail_unauthenticated_redirects(tmp_path):
+    client, db_path = make_client(tmp_path)
+    upsert_session(db_path, _session("M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"))
+    resp = client.get("/targets/M%2081", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"].startswith("/login")
+
+
+# ---------------------------------------------------------------------------
+# static assets
+# ---------------------------------------------------------------------------
+
+
+def test_static_css_and_font_served_without_auth(tmp_path):
+    client, _ = make_client(tmp_path)
+    resp = client.get("/static/safelight.css")
+    assert resp.status_code == 200
+    resp = client.get("/static/fonts/D-DIN.woff2")
+    assert resp.status_code == 200
+
+
+def test_login_page_renders_without_auth(tmp_path):
+    client, _ = make_client(tmp_path)
+    resp = client.get("/login")
+    assert resp.status_code == 200
+    assert "DARKR" in resp.text
+    assert 'name="token"' in resp.text
 
 
 # ---------------------------------------------------------------------------

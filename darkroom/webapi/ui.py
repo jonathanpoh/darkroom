@@ -22,6 +22,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from darkroom import catalog_db
+from darkroom.webapi.common_names import common_name
 
 _TEMPLATES_DIR = Path(__file__).parent.parent / "templates" / "catalog"
 _COOKIE_NAME = "darkroom_token"
@@ -48,6 +49,56 @@ def _safe_next(next_: str | None) -> str:
     if next_ and next_.startswith("/") and not next_.startswith("//"):
         return next_
     return "/"
+
+
+def _build_aggregate(rows: list[dict]) -> list[dict]:
+    """Group session rows by target into the shape the safelight JS expects.
+
+    Mirrors the mock's `catalog_agg` structure: one entry per target with
+    integration hours broken down by filter, processed-state counts, the most
+    recent obs_date, and a `nights` list (one per session) that the client-side
+    renderer groups by rig (OTA + camera) and sorts/filters interactively.
+    """
+    groups: dict[str, list[dict]] = {}
+    for row in rows:
+        groups.setdefault(row["target"], []).append(row)
+
+    aggregate: list[dict] = []
+    for tgt, sessions in groups.items():
+        nights = []
+        hours: dict[str, float] = {}
+        states: dict[str, int] = {}
+        for s in sessions:
+            h = (s["total_integration_sec"] or 0) / 3600.0
+            filt = s["filter"] or "None"
+            hours[filt] = hours.get(filt, 0.0) + h
+            state = s["processed_state"] or "unprocessed"
+            states[state] = states.get(state, 0) + 1
+            nights.append({
+                "date": s["obs_date"],
+                "ota": s["ota"],
+                "camera": s["camera"],
+                "filter": s["filter"],
+                "exp": s["exposure_sec"],
+                "gain": s["gain"],
+                "frames": s["frame_count"],
+                "h": h,
+                "state": state,
+                "sid": s["session_id"],
+            })
+        total_h = sum(hours.values())
+        last = max((s["obs_date"] for s in sessions if s["obs_date"]), default=None)
+        aggregate.append({
+            "target": tgt,
+            "cname": common_name(tgt),
+            "n": len(sessions),
+            "hours": hours,
+            "total_h": total_h,
+            "states": states,
+            "last": last,
+            "nights": nights,
+        })
+    return aggregate
 
 
 def build_ui_router(db_path: Path, api_token: str) -> APIRouter:
@@ -86,7 +137,12 @@ def build_ui_router(db_path: Path, api_token: str) -> APIRouter:
                 status_code=400,
             )
         resp = RedirectResponse(_safe_next(next), status_code=303)
-        resp.set_cookie(_COOKIE_NAME, token, httponly=True, samesite="lax")
+        # 90 days: single-user LAN tool, re-pasting the token every browser
+        # session is friction without a threat model to justify it.
+        resp.set_cookie(
+            _COOKIE_NAME, token, httponly=True, samesite="lax",
+            max_age=90 * 24 * 3600,
+        )
         return resp
 
     @router.get("/logout")
@@ -99,9 +155,6 @@ def build_ui_router(db_path: Path, api_token: str) -> APIRouter:
     def index(
         request: Request,
         darkroom_token: str | None = Cookie(default=None),
-        processed_state: str | None = None,
-        target: str | None = None,
-        camera: str | None = None,
     ):
         redirect = _require_auth(request, darkroom_token)
         if redirect:
@@ -109,45 +162,42 @@ def build_ui_router(db_path: Path, api_token: str) -> APIRouter:
 
         conn = _get_conn()
         try:
-            rows = catalog_db.query_sessions(
-                conn,
-                processed_state=processed_state or None,
-                target=target or None,
-                camera=camera or None,
-            )
-            all_cameras = sorted(
-                {r["camera"] for r in catalog_db.query_sessions(conn) if r["camera"]}
-            )
+            rows = catalog_db.query_sessions(conn)
         finally:
             conn.close()
 
-        groups: dict[str, list[dict]] = {}
-        for row in rows:
-            groups.setdefault(row["target"], []).append(row)
-        target_groups = []
-        for tgt in sorted(groups):
-            sessions = sorted(groups[tgt], key=lambda r: r["obs_date"], reverse=True)
-            total_hours = sum(s["total_integration_sec"] or 0 for s in sessions) / 3600.0
-            target_groups.append({
-                "target": tgt,
-                "sessions": sessions,
-                "count": len(sessions),
-                "total_hours": total_hours,
-            })
-
-        query_string = str(request.url.query)
         return templates.TemplateResponse(
             request,
             "index.html",
-            {
-                "target_groups": target_groups,
-                "processed_states": _PROCESSED_STATES,
-                "cameras": all_cameras,
-                "filter_processed_state": processed_state or "",
-                "filter_target": target or "",
-                "filter_camera": camera or "",
-                "query_string": query_string,
-            },
+            {"data": _build_aggregate(rows)},
+        )
+
+    @router.get("/targets/{target}", response_class=HTMLResponse)
+    def target_detail(
+        request: Request,
+        target: str,
+        darkroom_token: str | None = Cookie(default=None),
+    ):
+        redirect = _require_auth(request, darkroom_token)
+        if redirect:
+            return redirect
+
+        conn = _get_conn()
+        try:
+            rows = catalog_db.query_sessions(conn, target=target)
+        finally:
+            conn.close()
+        if not rows:
+            raise HTTPException(status_code=404, detail="target not found")
+
+        aggregate = _build_aggregate(rows)
+        # query_sessions normalises `target` case/spacing-insensitively, so
+        # aggregate[0]["target"] is the canonical form even if the URL segment
+        # wasn't (e.g. "m81" -> "M 81") — scope strictly to that one entry.
+        return templates.TemplateResponse(
+            request,
+            "target.html",
+            {"data": aggregate, "target": aggregate[0]["target"]},
         )
 
     @router.post("/sessions/{session_id}/state")

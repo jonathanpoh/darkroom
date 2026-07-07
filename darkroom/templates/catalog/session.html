@@ -1,12 +1,14 @@
 <!-- darkroom/templates/catalog/session.html -->
 {% extends "base.html" %}
-{% block title %}darkroom catalog — {{ session.session_id }}{% endblock %}
+{% block title %}darkroom — {{ session.session_id }}{% endblock %}
 {% block content %}
-<p><a href="/">&larr; back to sessions</a></p>
-<h2>{{ session.session_id }}</h2>
+<a class="backlink" href="/targets/{{ session.target | urlencode }}">&larr; back to {{ session.target }}</a>
+<div class="dethead">
+  <span><span class="tname display">{{ session.session_id }}</span></span>
+</div>
 {% if error %}<div class="error">{{ error }}</div>{% endif %}
 
-<form method="post" action="/sessions/{{ session.session_id }}">
+<form class="editform" method="post" action="/sessions/{{ session.session_id }}">
   <div class="field-row"><label>Target</label><input type="text" name="target" value="{{ session.target or '' }}"></div>
   <div class="field-row"><label>Obs date</label><input type="text" name="obs_date" value="{{ session.obs_date or '' }}"></div>
   <div class="field-row"><label>OTA</label><input type="text" name="ota" value="{{ session.ota or '' }}"></div>
@@ -33,10 +35,12 @@
   <button type="submit">Save</button>
 </form>
 
-<h3 style="margin-top:2rem; color:#888; font-size:0.95rem;">Read-only</h3>
-<div class="field-row"><label>Frame count</label><span class="readonly">{{ session.frame_count }}</span></div>
-<div class="field-row"><label>Integration</label><span class="readonly">{{ "%.1f"|format((session.total_integration_sec or 0) / 3600.0) }}h</span></div>
-<div class="field-row"><label>Lights path</label><span class="readonly">{{ session.lights_path or '—' }}</span></div>
-<div class="field-row"><label>Created</label><span class="readonly">{{ session.created_at or '—' }}</span></div>
-<div class="field-row"><label>Updated</label><span class="readonly">{{ session.updated_at or '—' }}</span></div>
+<div class="readonly-block">
+  <h3>Read-only</h3>
+  <div class="field-row"><label>Frame count</label><span>{{ session.frame_count }}</span></div>
+  <div class="field-row"><label>Integration</label><span>{{ "%.1f"|format((session.total_integration_sec or 0) / 3600.0) }}h</span></div>
+  <div class="field-row"><label>Lights path</label><span>{{ session.lights_path or '—' }}</span></div>
+  <div class="field-row"><label>Created</label><span>{{ session.created_at or '—' }}</span></div>
+  <div class="field-row"><label>Updated</label><span>{{ session.updated_at or '—' }}</span></div>
+</div>
 {% endblock %}

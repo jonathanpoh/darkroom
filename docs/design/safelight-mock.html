@@ -1,0 +1,476 @@
+<title>darkroom — safelight mock</title>
+<style>
+__FONTCSS__
+  :root {
+    --ground: #14171c;
+    --panel: #1b1f26;
+    --panel-hi: #232834;
+    --hairline: #2a303a;
+    --ink: #e2e6ed;
+    --ink-2: #99a2b0;
+    --ink-3: #636c7a;
+    --safelight: #e8502a;
+    --safelight-hi: #ff6a3c;
+    --f-baader: #3987e5;
+    --f-extreme: #0da189;
+    --f-lpro: #c98500;
+    --f-synergy: #8a6cc9;
+    --f-none: #666e7b;
+  }
+  html { background: var(--ground); }
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: "Fira Mono", ui-monospace, Menlo, monospace;
+    font-size: 13px;
+    line-height: 1.5;
+    margin: 0;
+    min-height: 100vh;
+  }
+  .display {
+    font-family: "D-DIN", "Avenir Next", sans-serif;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 0 28px 80px; }
+
+  /* ── top bar ─────────────────────────────── */
+  header {
+    display: flex; align-items: baseline; gap: 20px;
+    padding: 26px 0 18px;
+    border-bottom: 1px solid var(--hairline);
+  }
+  .wordmark {
+    font-family: "D-DIN", "Avenir Next", sans-serif;
+    font-size: 22px; font-weight: 700;
+    letter-spacing: 0.24em;
+    color: var(--ink);
+    margin: 0;
+  }
+  .wordmark .lamp { color: var(--safelight); text-shadow: 0 0 14px rgba(232,80,42,.5); }
+  .statline { margin-left: auto; color: var(--ink-3); font-size: 12px; }
+  .statline b { color: var(--ink-2); font-weight: 500; font-variant-numeric: tabular-nums; }
+
+  /* ── controls ────────────────────────────── */
+  .controls { display: flex; align-items: center; gap: 10px; padding: 14px 0 6px; flex-wrap: wrap; }
+  .controls input[type="search"], .controls select {
+    background: var(--panel); border: 1px solid var(--hairline);
+    color: var(--ink); font: inherit; font-size: 12.5px;
+    padding: 5px 10px; border-radius: 3px;
+  }
+  .controls input[type="search"] { width: 180px; }
+  .controls select { cursor: pointer; appearance: none; padding-right: 26px;
+    background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="8" height="5"><path d="M0 0 L4 5 L8 0" fill="%23636c7a"/></svg>');
+    background-repeat: no-repeat; background-position: right 9px center; }
+  .controls select.active { border-color: var(--safelight); color: var(--ink); }
+  .controls input[type="search"]::placeholder { color: var(--ink-3); }
+  .legend { margin-left: auto; display: flex; gap: 14px; color: var(--ink-3); font-size: 11px; }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+
+  /* ── tables ──────────────────────────────── */
+  .cols {
+    display: grid;
+    grid-template-columns: 215px 1fr 86px 62px 62px 118px 88px;
+    gap: 15px; align-items: center;
+  }
+  .colhead {
+    color: var(--ink-3); font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase;
+    padding: 14px 10px 8px; border-bottom: 1px solid var(--hairline);
+  }
+  .colhead.sortable { cursor: pointer; user-select: none; background: none; border-top: none; border-left: none; border-right: none; font-family: inherit; text-align: inherit; }
+  .colhead.sortable:hover { color: var(--ink-2); }
+  .colhead.sorted { color: var(--ink); }
+  .colhead .dir { color: var(--safelight); }
+  .colhead.num, .num { text-align: right; }
+  .colhead:focus-visible, .row:focus-visible, .controls input:focus-visible, .controls select:focus-visible,
+  .backlink:focus-visible, .rigsum:focus-visible { outline: 2px solid var(--safelight); outline-offset: 1px; }
+
+  .row { padding: 10px; border-bottom: 1px solid var(--hairline); cursor: pointer; text-decoration: none; color: inherit; }
+  .row:hover { background: var(--panel); }
+  .row:hover .tname { color: var(--safelight-hi); }
+  .tname { font-size: 15px; font-weight: 700; color: var(--ink); transition: color .12s; display: block; line-height: 1.25; }
+  .cname { display: block; font-size: 11px; color: var(--ink-3); letter-spacing: 0; text-transform: none;
+           font-family: "Fira Mono", ui-monospace, monospace; margin-top: 1px; }
+  .strip { display: flex; height: 12px; align-items: stretch; gap: 2px; min-width: 0; }
+  .seg { border-radius: 2px; min-width: 3px; }
+  .hnum { color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  .hnum b { color: var(--ink); font-weight: 500; }
+  .opennum { color: var(--ink-3); font-variant-numeric: tabular-nums; }
+  .opennum.some { color: var(--ink-2); }
+  .marks { display: flex; gap: 9px; font-variant-numeric: tabular-nums; color: var(--ink-2); font-size: 12px; }
+  .marks span { display: inline-flex; align-items: center; gap: 4px; }
+  .marks svg { display: block; }
+  .lastn { color: var(--ink-3); font-variant-numeric: tabular-nums; font-size: 12px; }
+  .lastn.recent { color: var(--ink-2); }
+
+  /* ── detail ──────────────────────────────── */
+  .backlink { color: var(--ink-3); text-decoration: none; font-size: 12px; display: inline-block;
+              margin: 18px 0 4px; background: none; border: none; font: inherit; cursor: pointer; padding: 0; }
+  .backlink:hover { color: var(--safelight-hi); }
+  .dethead { display: flex; align-items: baseline; gap: 22px; padding: 6px 0 16px;
+             border-bottom: 1px solid var(--hairline); flex-wrap: wrap; }
+  .dethead h2 { font-size: 32px; font-weight: 700; margin: 0; line-height: 1.1; }
+  .dethead .cname { font-size: 13px; margin-top: 4px; }
+  .dethead .sub { color: var(--ink-2); font-size: 12px; }
+  .dethead .strip { width: 220px; align-self: center; }
+
+  details.rig { border-bottom: 1px solid var(--hairline); }
+  .rigsum {
+    display: grid; grid-template-columns: 26px 270px 170px 1fr 90px 104px; gap: 16px; align-items: center;
+    padding: 12px 10px; cursor: pointer; list-style: none;
+  }
+  .rigsum::-webkit-details-marker { display: none; }
+  .rigsum:hover { background: var(--panel); }
+  .rigsum .tri { color: var(--ink-3); font-size: 10px; transition: transform .12s; display: inline-block;
+                 line-height: 1; align-self: center; }
+  details[open] .rigsum .tri { transform: rotate(90deg); color: var(--safelight); }
+  details[open] .rigsum .strip { visibility: hidden; }
+  .rigsum .rigname { font-size: 13.5px; font-weight: 700; }
+  .rigsum .n { color: var(--ink-3); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .rigbody { padding: 0 0 8px 26px; }
+  .rigbody .night:last-child { border-bottom: none; }
+
+  /* doneness gauge */
+  .gauge { display: inline-flex; align-items: center; gap: 8px; }
+  .gtrack { position: relative; width: 84px; height: 7px; background: var(--panel-hi);
+            border-radius: 2px; overflow: hidden; flex: none; }
+  .gfill { position: absolute; inset: 0 auto 0 0; border-radius: 2px; }
+  .gtick { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--ground); }
+  .gword { font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); }
+  .gword.deep { color: var(--safelight); }
+
+  .nightcols { grid-template-columns: 36px 100px 1fr 150px 110px 60px; }
+  .night { align-items: center; cursor: default; }
+  .night:hover { background: none; }
+  .night .fchip { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+  .night .fchip i { width: 9px; height: 9px; border-radius: 2px; flex: none; }
+  .night .exp { color: var(--ink-3); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .night .h { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink); }
+  .night .date { font-variant-numeric: tabular-nums; }
+  .nightcols .colhead { padding-top: 8px; }
+
+  .markbtn { background: none; border: none; padding: 0; cursor: pointer; width: 36px; height: 30px; position: relative; }
+  .markbtn svg { position: absolute; inset: 0; margin: auto; overflow: visible; }
+  .markbtn .pencil { stroke: var(--safelight); stroke-width: 2.4; fill: none; stroke-linecap: round; opacity: .92; }
+  .markbtn .ghost { stroke: var(--ink-3); stroke-width: 1; fill: none; stroke-dasharray: 2 3; opacity: .5; }
+  .markbtn:hover .ghost { stroke: var(--safelight); opacity: .8; }
+  .markbtn:focus-visible { outline: 2px solid var(--safelight); outline-offset: 2px; border-radius: 4px; }
+  .statelabel { font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); }
+  .statelabel.processed { color: var(--safelight); }
+  .statelabel.in_progress { color: var(--ink-2); }
+
+  /* ── cleanup tease + footer ──────────────── */
+  .cleanup {
+    margin-top: 26px; padding: 13px 16px;
+    border: 1px solid var(--hairline); border-left: 3px solid var(--f-lpro);
+    border-radius: 3px; background: var(--panel);
+    color: var(--ink-2); font-size: 12px;
+    display: flex; gap: 10px; align-items: baseline;
+  }
+  .cleanup b { color: var(--ink); font-weight: 500; }
+  .cleanup .go { margin-left: auto; color: var(--ink-3); }
+  .mocknote { margin-top: 44px; color: var(--ink-3); font-size: 11px; border-top: 1px solid var(--hairline); padding-top: 14px; }
+  .mocknote .lamp { color: var(--safelight); }
+
+  /* ── tooltip ─────────────────────────────── */
+  #tip {
+    position: fixed; pointer-events: none; z-index: 10;
+    background: #0d0f13; border: 1px solid var(--hairline); border-radius: 3px;
+    padding: 6px 9px; font-size: 11.5px; color: var(--ink-2);
+    display: none; max-width: 280px;
+  }
+  #tip b { color: var(--ink); font-weight: 500; }
+
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1 class="wordmark">DARKR<span class="lamp">O</span><span class="lamp">O</span>M</h1>
+    <div class="statline" id="statline"></div>
+  </header>
+  <main id="app"></main>
+</div>
+<div id="tip"></div>
+
+<script>
+const DATA = __DATA__;
+
+const COMMON_NAMES = {
+  "C 49": "Rosette Nebula", "IC 1318": "Butterfly Nebula", "IC 1396": "Elephant's Trunk region",
+  "IC 1396A": "Elephant's Trunk Nebula", "IC 1805": "Heart Nebula", "IC 1848": "Soul Nebula",
+  "IC 405": "Flaming Star Nebula", "IC 434": "Horsehead Nebula", "IC 4604": "Rho Ophiuchi Cloud",
+  "IC 5070": "Pelican Nebula", "LDN 1688": "Rho Ophiuchi dark cloud", "M 101": "Pinwheel Galaxy",
+  "M 13": "Great Hercules Cluster", "M 17": "Omega Nebula", "M 31": "Andromeda Galaxy",
+  "M 33": "Triangulum Galaxy", "M 38": "Starfish Cluster", "M 42": "Orion Nebula",
+  "M 44": "Beehive Cluster", "M 45": "Pleiades", "M 51": "Whirlpool Galaxy",
+  "M 63": "Sunflower Galaxy", "M 78": "reflection nebula in Orion", "M 8": "Lagoon Nebula",
+  "M 81": "Bode's Galaxy", "M 81 M 82": "Bode's & Cigar", "M 82 M 82": "Cigar Galaxy",
+  "M 94": "Croc's Eye Galaxy", "NGC 1499": "California Nebula", "NGC 281": "Pacman Nebula",
+  "NGC 281W": "Pacman Nebula (W)", "NGC 6888": "Crescent Nebula", "NGC 6960": "Western Veil",
+  "NGC 6992": "Eastern Veil", "NGC 7000": "North America Nebula", "NGC 7380": "Wizard Nebula",
+  "NGC 896": "Fish Head Nebula", "Sh2-103": "Cygnus Loop", "Sh2-220": "California Nebula",
+  "Sh2-273": "Cone Nebula region",
+};
+
+const FILTER_COLOR = {
+  "BaaderNeodymium": "var(--f-baader)",
+  "L-Extreme": "var(--f-extreme)",
+  "L-Pro": "var(--f-lpro)",
+  "L-Synergy": "var(--f-synergy)",
+};
+const fcolor = f => FILTER_COLOR[f] || "var(--f-none)";
+const fname = f => (f === "None" ? "no filter recorded" : f);
+
+const CATALOGS = [
+  ["M", "Messier", t => /^M \d/.test(t)],
+  ["NGC", "NGC", t => /^NGC/.test(t)],
+  ["IC", "IC", t => /^IC/.test(t)],
+  ["Sh2", "Sharpless", t => /^Sh2/.test(t)],
+  ["C", "Caldwell", t => /^C \d/.test(t)],
+  ["LDN", "LDN", t => /^LDN/.test(t)],
+  ["other", "other", t => !/^(M \d|NGC|IC|Sh2|C \d|LDN)/.test(t)],
+];
+const catalogOf = t => (CATALOGS.find(([, , fn]) => fn(t)) || ["other"])[0];
+
+const STATES = ["unprocessed", "in_progress", "processed", "skipped"];
+const STATE_LABEL = { unprocessed: "open", in_progress: "in progress", processed: "processed", skipped: "skipped" };
+
+/* grease-pencil marks: the one hand element. deterministic tilt per session id. */
+function tilt(sid) { let h = 0; for (const c of sid) h = (h * 31 + c.charCodeAt(0)) & 1023; return (h % 9) - 4; }
+function markSVG(state, sid) {
+  const rot = `transform="rotate(${tilt(sid)} 18 14)"`;
+  const circle = `<path class="pencil" ${rot} d="M 6,15 C 4,7 13,2.5 20,3 C 28,3.5 32,8 30.5,15 C 29,22 20,25.5 12,24 C 6.5,23 5.5,19 7,15.5"/>`;
+  const half   = `<path class="pencil" ${rot} d="M 6,17 C 4.5,9 12,3.5 19,3.5 C 25,3.5 29.5,6.5 31,11"/>`;
+  const strike = `<path class="pencil" ${rot} d="M 5,21 C 13,17 23,10 31,5.5"/>`;
+  const ghost  = `<ellipse class="ghost" cx="18" cy="14" rx="13" ry="10.5"/>`;
+  const inner = state === "processed" ? circle : state === "in_progress" ? half : state === "skipped" ? strike : ghost;
+  return `<svg width="36" height="28" viewBox="0 0 36 28" aria-hidden="true">${inner}</svg>`;
+}
+function miniMark(state) {
+  const p = { processed: `<circle cx="7" cy="7" r="5.2" fill="none" stroke="var(--safelight)" stroke-width="1.8"/>`,
+              in_progress: `<path d="M 2,9 A 5.2 5.2 0 0 1 12,6" fill="none" stroke="var(--ink-2)" stroke-width="1.8" stroke-linecap="round"/>`,
+              unprocessed: `<circle cx="7" cy="7" r="5" fill="none" stroke="var(--ink-3)" stroke-width="1" stroke-dasharray="2 2.4"/>`,
+              skipped: `<path d="M 2,11 L 12,3" stroke="var(--ink-3)" stroke-width="1.8" stroke-linecap="round"/>` };
+  return `<svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">${p[state]}</svg>`;
+}
+
+function hoursOf(nights) {
+  const h = {};
+  for (const n of nights) { const f = n.filter || "None"; h[f] = (h[f] || 0) + n.h; }
+  return h;
+}
+function stripHTML(hours, totalMax) {
+  const total = Object.values(hours).reduce((a, b) => a + b, 0);
+  const pct = totalMax ? (total / totalMax) * 100 : 100;
+  const segs = Object.entries(hours).sort((a, b) => a[0].localeCompare(b[0])).map(([f, h]) =>
+    `<div class="seg" data-tip="<b>${fname(f)}</b> · ${h.toFixed(1)}h" style="flex:${h} ${h} 0; background:${fcolor(f)}"></div>`
+  ).join("");
+  return `<div class="strip" style="width:${Math.max(pct, 4)}%">${segs}</div>`;
+}
+
+/* doneness gauge: how much integration is banked (per rig, or per target in
+   the overview). <2h needs more data · 5–10h workable · 20h+ good.
+   sqrt scale, 30h = full. */
+const GAUGE_MAX = 30;
+function gaugeHTML(h, withWord = true) {
+  const zone = h < 2 ? ["needs data", "var(--ink-3)", ""] :
+               h < 10 ? ["workable", "var(--ink-2)", ""] :
+               h < 20 ? ["solid", "var(--ink)", ""] :
+                        ["deep", "var(--safelight)", "deep"];
+  const w = Math.min(Math.sqrt(h / GAUGE_MAX), 1) * 100;
+  const tick = v => `<i class="gtick" style="left:${Math.sqrt(v / GAUGE_MAX) * 100}%"></i>`;
+  return `<span class="gauge" data-tip="<b>${h.toFixed(1)}h</b> — ${zone[0]}">
+    <span class="gtrack"><span class="gfill" style="width:${w}%; background:${zone[1]}"></span>${tick(2)}${tick(10)}${tick(20)}</span>
+    ${withWord ? `<span class="gword ${zone[2]}">${zone[0]}</span>` : ""}</span>`;
+}
+
+const nameCell = (t) =>
+  `<span><span class="tname display">${t}</span>${COMMON_NAMES[t] ? `<span class="cname">${COMMON_NAMES[t]}</span>` : ""}</span>`;
+
+const backlogH = t => t.nights.filter(n => n.state === "unprocessed" || n.state === "in_progress")
+                              .reduce((a, n) => a + n.h, 0);
+
+/* ── overview ──────────────────────────────── */
+const OV_SORTS = {
+  target: (a, b) => a.target.localeCompare(b.target),
+  total:  (a, b) => a.total_h - b.total_h,
+  open:   (a, b) => backlogH(a) - backlogH(b),
+  n:      (a, b) => a.n - b.n,
+  latest: (a, b) => (a.last || "").localeCompare(b.last || ""),
+};
+let ovSort = { key: "latest", desc: true }, query = "", catSel = "", filtSel = "";
+
+function sortHead(key, label, current, extra="") {
+  const on = current.key === key;
+  const arrow = on ? `<span class="dir">${current.desc ? "▼" : "▲"}</span>` : "";
+  return `<button class="colhead sortable ${on ? "sorted" : ""} ${extra}" data-key="${key}">${label} ${arrow}</button>`;
+}
+
+function renderOverview() {
+  const maxH = Math.max(...DATA.map(t => t.total_h));
+  const allFilters = [...new Set(DATA.flatMap(t => t.nights.map(n => n.filter || "None")))].sort();
+  const visible = DATA
+    .filter(t => t.target.toLowerCase().includes(query) ||
+                 (COMMON_NAMES[t.target] || "").toLowerCase().includes(query))
+    .filter(t => !catSel || catalogOf(t.target) === catSel)
+    .filter(t => !filtSel || t.nights.some(n => (n.filter || "None") === filtSel));
+  const rows = visible
+    .sort((a, b) => (ovSort.desc ? -1 : 1) * OV_SORTS[ovSort.key](a, b))
+    .map(t => {
+      const counts = STATES.filter(s => t.states[s])
+        .map(s => `<span title="${t.states[s]} ${STATE_LABEL[s]}">${miniMark(s)}${t.states[s]}</span>`).join("");
+      const open = backlogH(t);
+      return `<a class="row cols" href="#" data-target="${t.target}">
+        ${nameCell(t.target)}
+        ${stripHTML(t.hours, maxH)}
+        ${gaugeHTML(t.total_h, false)}
+        <span class="hnum num"><b>${t.total_h.toFixed(1)}</b>h</span>
+        <span class="opennum num ${open > 0 ? "some" : ""}">${open > 0 ? open.toFixed(1) + "h" : "—"}</span>
+        <span class="marks">${counts}</span>
+        <span class="lastn ${t.last >= "2026-06-01" ? "recent" : ""}">${t.last}</span>
+      </a>`;
+    }).join("");
+  const badFilters = DATA.reduce((a, t) => a + t.nights.filter(n => !n.filter || n.filter === "None" || /_\d-\d/.test(n.filter)).length, 0);
+  const badTargets = DATA.filter(t => /_\d-\d|M 82 M 82/.test(t.target)).length;
+  document.getElementById("app").innerHTML = `
+    <div class="controls">
+      <input type="search" placeholder="find a target…" value="${query}" id="q">
+      <select id="catsel" class="${catSel ? "active" : ""}" aria-label="Filter by catalog">
+        <option value="">all catalogs</option>
+        ${CATALOGS.map(([k, label]) => `<option value="${k}" ${catSel === k ? "selected" : ""}>${label}</option>`).join("")}
+      </select>
+      <select id="filtsel" class="${filtSel ? "active" : ""}" aria-label="Filter by optical filter">
+        <option value="">any filter</option>
+        ${allFilters.map(f => `<option value="${f}" ${filtSel === f ? "selected" : ""}>${fname(f)}</option>`).join("")}
+      </select>
+      <div class="legend">
+        <span><i style="background:var(--f-lpro)"></i>L-Pro</span>
+        <span><i style="background:var(--f-extreme)"></i>L-Extreme</span>
+        <span><i style="background:var(--f-synergy)"></i>L-Synergy</span>
+        <span><i style="background:var(--f-baader)"></i>Baader</span>
+        <span><i style="background:var(--f-none)"></i>none / other</span>
+      </div>
+    </div>
+    <div class="cols">
+      ${sortHead("target", "Target", ovSort)}
+      <span class="colhead">Integration by filter</span>
+      <span class="colhead">Depth</span>
+      ${sortHead("total", "Total", ovSort, "num")}
+      ${sortHead("open", "Open", ovSort, "num")}
+      ${sortHead("n", "Sessions", ovSort)}
+      ${sortHead("latest", "Latest", ovSort)}
+    </div>
+    ${rows || `<p style="color:var(--ink-3); padding:20px 10px">No targets match. Clear a filter above.</p>`}
+    <div class="cleanup"><b>${badFilters} sessions</b> have a missing or suspect filter · <b>${badTargets} targets</b> look like mosaic panels or duplicated names
+      <span class="go">→ cleanup queue (U2, not in this mock)</span></div>
+    <p class="mocknote">design mock v4 · <span class="lamp">safelight</span> direction · live data from astro_catalog.db ·
+      Open = hours in sessions still open or in progress ·
+      Depth: &lt;2h needs data · 5–10h workable · 20h+ deep ·
+      marks are clickable in the target view, nothing is saved</p>`;
+  document.getElementById("q").addEventListener("input", e => { query = e.target.value.toLowerCase(); renderOverview(); const q = document.getElementById("q"); q.focus(); q.setSelectionRange(q.value.length, q.value.length); });
+  document.getElementById("catsel").addEventListener("change", e => { catSel = e.target.value; renderOverview(); });
+  document.getElementById("filtsel").addEventListener("change", e => { filtSel = e.target.value; renderOverview(); });
+  document.querySelectorAll(".colhead.sortable").forEach(h => h.addEventListener("click", () => {
+    const k = h.dataset.key;
+    ovSort = { key: k, desc: ovSort.key === k ? !ovSort.desc : true };
+    renderOverview();
+  }));
+  document.querySelectorAll("[data-target]").forEach(r => r.addEventListener("click", e => { e.preventDefault(); detail = { name: r.dataset.target, closed: new Set(), sorts: {} }; renderDetail(); window.scrollTo(0, 0); }));
+}
+
+/* ── detail: nights grouped by rig, expanded by default ── */
+let detail = null;
+const NIGHT_SORTS = {
+  date:  (a, b) => (a.date || "").localeCompare(b.date || ""),
+  state: (a, b) => STATES.indexOf(a.state) - STATES.indexOf(b.state),
+  h:     (a, b) => a.h - b.h,
+};
+
+function renderDetail() {
+  const t = DATA.find(x => x.target === detail.name);
+  const rigs = {};
+  t.nights.forEach(n => { const r = `${n.ota || "?"} · ${n.camera || "?"}`; (rigs[r] = rigs[r] || []).push(n); });
+
+  const groups = Object.entries(rigs).sort((a, b) => b[1].length - a[1].length).map(([rig, nights]) => {
+    const gsort = detail.sorts[rig] || { key: "date", desc: true };
+    const sorted = [...nights].sort((a, b) => (gsort.desc ? -1 : 1) * NIGHT_SORTS[gsort.key](a, b));
+    const gh = nights.reduce((a, n) => a + n.h, 0);
+    const rows = sorted.map(n => `
+      <div class="row cols nightcols night">
+        <button class="markbtn" data-sid="${n.sid}" title="${STATE_LABEL[n.state]} — click to cycle (mock)">${markSVG(n.state, n.sid)}</button>
+        <span class="date">${n.date}</span>
+        <span class="fchip"><i style="background:${fcolor(n.filter || "None")}"></i>${fname(n.filter || "None")}</span>
+        <span class="exp">${n.frames || "?"} × ${n.exp ? n.exp.toFixed(0) + "s" : "?"}${n.gain ? " · gain" + n.gain : ""}</span>
+        <span class="statelabel ${n.state}">${STATE_LABEL[n.state]}</span>
+        <span class="h">${n.h.toFixed(1)}h</span>
+      </div>`).join("");
+    const gs = (key, label, extra="") => {
+      const on = gsort.key === key;
+      return `<button class="colhead sortable ${on ? "sorted" : ""} ${extra}" data-rig="${rig}" data-key="${key}">${label} ${on ? `<span class="dir">${gsort.desc ? "▼" : "▲"}</span>` : ""}</button>`;
+    };
+    return `<details class="rig" data-rig="${rig}" ${detail.closed.has(rig) ? "" : "open"}>
+      <summary class="rigsum">
+        <span class="tri">▶</span>
+        <span class="rigname display">${rig}</span>
+        ${gaugeHTML(gh)}
+        ${stripHTML(hoursOf(nights), null)}
+        <span class="hnum num"><b>${gh.toFixed(1)}</b>h</span>
+        <span class="n">${nights.length} sessions</span>
+      </summary>
+      <div class="rigbody">
+        <div class="cols nightcols">
+          <span class="colhead"></span>${gs("date", "Night")}<span class="colhead">Filter</span>
+          <span class="colhead">Exposure</span>${gs("state", "State")}${gs("h", "Hours", "num")}
+        </div>
+        ${rows}
+      </div>
+    </details>`;
+  }).join("");
+
+  document.getElementById("app").innerHTML = `
+    <button class="backlink">← all targets</button>
+    <div class="dethead">
+      ${nameCell(t.target)}
+      <span class="sub">${t.n} sessions · <b style="color:var(--ink)">${t.total_h.toFixed(1)}h</b> · last acquired ${t.last}</span>
+      ${stripHTML(t.hours, null)}
+    </div>
+    ${groups}
+    <p class="mocknote">grease-pencil marks: <span class="lamp">○</span> processed · half-circle in progress · strike skipped · dotted = open.
+      click a mark to cycle state (mock only — the real app will PATCH the catalog).
+      gauge = integration banked per rig: &lt;2h needs data · 5–10h workable · 20h+ deep.</p>`;
+  document.querySelector(".dethead .tname").style.fontSize = "32px";
+  document.querySelector(".backlink").addEventListener("click", () => { detail = null; renderOverview(); window.scrollTo(0, 0); });
+  document.querySelectorAll("details.rig").forEach(d => d.addEventListener("toggle", () => {
+    if (d.open) detail.closed.delete(d.dataset.rig); else detail.closed.add(d.dataset.rig);
+  }));
+  document.querySelectorAll(".rigbody .colhead.sortable").forEach(h => h.addEventListener("click", () => {
+    const rig = h.dataset.rig, k = h.dataset.key, cur = detail.sorts[rig] || { key: "date", desc: true };
+    detail.sorts[rig] = { key: k, desc: cur.key === k ? !cur.desc : true };
+    renderDetail();
+  }));
+  document.querySelectorAll(".markbtn").forEach(b => b.addEventListener("click", e => {
+    e.preventDefault();
+    const n = t.nights.find(x => x.sid === b.dataset.sid);
+    n.state = STATES[(STATES.indexOf(n.state) + 1) % STATES.length];
+    t.states = {}; t.nights.forEach(x => t.states[x.state] = (t.states[x.state] || 0) + 1);
+    renderDetail();
+  }));
+}
+
+/* shared tooltip for strip segments + gauges */
+const tip = document.getElementById("tip");
+document.addEventListener("mousemove", e => {
+  const seg = e.target.closest("[data-tip]");
+  if (seg) { tip.innerHTML = seg.dataset.tip; tip.style.display = "block";
+    tip.style.left = Math.min(e.clientX + 14, innerWidth - 260) + "px"; tip.style.top = (e.clientY + 16) + "px";
+  } else tip.style.display = "none";
+});
+
+const totalH = DATA.reduce((a, t) => a + t.total_h, 0);
+const totalN = DATA.reduce((a, t) => a + t.n, 0);
+document.getElementById("statline").innerHTML =
+  `<b>${DATA.length}</b> targets · <b>${totalN}</b> sessions · <b>${totalH.toFixed(0)}h</b> integration`;
+renderOverview();
+</script>
