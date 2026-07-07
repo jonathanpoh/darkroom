@@ -210,14 +210,11 @@ darkroom catalog migrate-archive --archive "/Volumes/Astrophotography"
 
 ---
 
-## Browsing — `darkroom serve`
+## Browsing — web UI
 
-Launches datasette on the catalog for ad-hoc SQL/exploration in the browser.
-
-```bash
-darkroom serve
-darkroom serve --catalog /path/to/astro_catalog.db
-```
+The catalog is browsed via the `darkroom.webapi` web UI (deployed on the LXC;
+run locally with `uvicorn --factory darkroom.webapi.app:create_app_from_env`).
+For ad-hoc SQL, open the DB directly: `sqlite3 ~/.config/darkroom/astro_catalog.db`.
 
 ---
 

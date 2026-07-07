@@ -88,11 +88,8 @@ Catalog write rules:
 - `Dark` frames with exposure < 10s are reclassified as `FlatDark` (ASIAir
   writes them into the same folder).
 
-Browse the DB with Datasette:
-
-```bash
-uv run datasette serve astro_catalog.db
-```
+Browse the catalog in the web UI served by `darkroom.webapi`
+(`uvicorn --factory darkroom.webapi.app:create_app_from_env`).
 
 ### `darkroom ingest`
 

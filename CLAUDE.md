@@ -29,7 +29,6 @@ pipeline); now one package with subcommands:
 | `darkroom ingest scan --asiair <path> [--manifest F]` / `ingest review F` / `ingest commit [F]` | Archive an ASIAir session (scan → review → commit) |
 | `darkroom wbpp --target X [--date Y \| --session ID] [--flat-window DAYS]` | Build SESSION_N symlink dirs for PixInsight |
 | `darkroom finish --target X [--date Y]` | Copy WBPP stacks back to archive and mark sessions processed |
-| `darkroom serve` | Browse the catalog in datasette |
 | `darkroom triage scan --archive <path>` | Scan archive for issues, populate triage.db |
 | `darkroom triage serve --archive <path>` | Review/fix flagged items in a web UI (port 8002) |
 
@@ -235,7 +234,6 @@ cd /Users/jpoh/Projects/darkroom
 uv sync --extra dev
 uv run darkroom --help
 uv run darkroom catalog list
-darkroom serve                           # browse catalog in datasette (installed globally)
 uv run pytest                            # run the suite
 ```
 
@@ -254,7 +252,6 @@ darkroom/
   ingest.py         ← `darkroom ingest`
   prep.py           ← `darkroom wbpp`
   finish.py         ← `darkroom finish` (THE live finish — edit here)
-  serve.py          ← `darkroom serve`
   wbpp.py           ← symlink helpers used by prep/finish
   triage/           ← `darkroom triage` — archive-cleanup web UI
     scanner.py      ← walk archive, flag issues (checks.py: OBJECT, RA/DEC)

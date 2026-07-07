@@ -2,11 +2,11 @@
 """
 FITS Astrophotography Session Catalog Tool
 
-Scans FITS files and catalogs sessions into SQLite for browsing via Datasette.
+Scans FITS files and catalogs sessions into SQLite (browsed via the
+darkroom.webapi web UI).
 Two commands for ingestion:
   scan-all         — recursively catalog all light sessions
   scan-calibration — catalog calibration frames (darks, flats, bias)
-Use: datasette serve astro_catalog.db
 """
 
 import argparse
@@ -1056,7 +1056,6 @@ def scan_all_command(args):
 
     print(f"\nDone: {added} sessions cataloged, {skipped} skipped")
     print(f"Database: {db_path}")
-    print(f"Browse: datasette serve {db_path}")
 
 
 def migrate_archive_command(args) -> None:
@@ -1164,9 +1163,6 @@ Examples:
 
   # Fallback when _Processed/ is already cleaned up
   %(prog)s finish --target "M 81" --date 2026-05-15
-
-  # Browse the catalog (run separately)
-  datasette serve astro_catalog.db
         """,
     )
     parser.add_argument(

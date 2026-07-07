@@ -478,7 +478,7 @@ catalog_db fns directly):**
 | `catalog mark` → `mark_processed_command` | direct | `backend.set_processed_state(...)` |
 | reads: `catalog list`, `wbpp` picker, `finish._resolve_session_ids`, `catalog.py` matchers | open file | `backend.query_sessions` / `find_calibration` |
 
-**Server side — `darkroom/webapi/` (new; not `serve.py`, that's datasette):**
+**Server side — `darkroom/webapi/`:**
 ```
 POST   /api/sessions                       → cataloger.upsert_session
 POST   /api/calibration-sets               → cataloger.upsert_calibration_set
@@ -519,11 +519,13 @@ a later task — overkill for day one; the nightly NAS copy is the v1 backup.
    attribution caveat).
 3. Deploy to LXC, flip `DARKROOM_CATALOG_URL` on the Mac, migrate the file over,
    nightly NAS backup cron on.
-4. **Remove datasette** (closing step, same commit as the read view goes live):
-   drop `serve.py`, the `datasette>=0.65` dep in `pyproject.toml:9`, the `serve`
-   subcommand in `cli.py`, and doc mentions (`CLAUDE.md`, `README.md:94`,
-   `CHEATSHEET.md:215`, `cataloger.py:9/1054/1164`). Keep it as the fallback
-   browser until the new UI's read view actually works, then it's superseded.
+4. **Remove datasette** — ✅ DONE 2026-07-07: dropped `serve.py`, the
+   `datasette>=0.65` dep in `pyproject.toml`, the `serve` subcommand in
+   `cli.py`, and doc mentions (`CLAUDE.md`, `README.md`, `CHEATSHEET.md`,
+   `cataloger.py`). Removing datasette also dropped `python-multipart` as a
+   transitive dep — re-added it explicitly since `webapi`/`triage` form
+   handling needs it directly. `uv sync` + full test suite (550 passed)
+   confirm clean removal.
 
 Depends on: W1–W7 (done). Absorbs W8's decision (persisted linkage vs recompute —
 default recompute). Related: U2 (filter cleanup queue) is a natural second UI view.
