@@ -212,15 +212,31 @@ def cmd_finish(
     if not dry_run and master_count == 0:
         sys.exit("Error: master/ contains no .xisf files — aborting (nothing copied)")
 
-    processed_files = [f for f in processed_dir.iterdir() if f.is_file()]
+    processed_files = (
+        [f for f in processed_dir.iterdir() if f.is_file()] if processed_dir.exists() else []
+    )
     if not processed_files:
         print("\nWarning: processed/ is empty — skipping")
     else:
         print("\nCopying processed/")
         _copy_flat(processed_dir, dest / "processed", dry_run=dry_run)
 
-    if not dry_run:
-        status = str(dest.relative_to(output))
+    status = str(dest.relative_to(output))
+    if dry_run:
+        # Resolution is read-only, and it's the step most sensitive to a wrong
+        # --archive root — surface it in the dry run instead of skipping it.
+        session_ids = _resolve_session_ids(wbpp_target, backend, output)
+        if session_ids:
+            print(f"\n[dry-run] would mark {len(session_ids)} session(s) as processed:")
+            for sid in session_ids:
+                print(f"  {sid}")
+        else:
+            print(
+                "\n[dry-run] WARNING: no catalog sessions matched the SESSION_N "
+                "symlinks — a real run would copy files but mark nothing. "
+                "Check --archive points at the archive the symlinks resolve into."
+            )
+    else:
         _mark_sessions_processed(wbpp_target, output, status, date_str, backend)
 
     _confirm_and_delete(

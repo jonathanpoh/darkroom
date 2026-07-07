@@ -10,7 +10,7 @@ from darkroom.cataloger import init_db, upsert_calibration_set, upsert_session
 from darkroom.finish import (
     _find_processing_date, _build_dest, _copy_flat,
     _list_session_dirs, _confirm_and_delete, _resolve_session_ids,
-    _mark_sessions_processed,
+    _mark_sessions_processed, cmd_finish,
 )
 from darkroom.prep import _build_night
 
@@ -391,3 +391,50 @@ def test_build_night_prefers_master_bias_over_raw_subs(tmp_path):
     bias_links = list((session_dir / "Bias").glob("*"))
     assert len(bias_links) == 1
     assert bias_links[0].resolve().name == "masterBias_gain200.xisf"
+
+
+# ── dry-run previews session resolution ─────────────────────────────────────
+
+def _dry_run_finish_setup(tmp_path, *, with_symlink):
+    """Archive + catalog + WBPP target with Output/master ready for cmd_finish."""
+    archive = tmp_path / "archive"
+    catalog = tmp_path / "cat.db"
+    init_db(catalog)
+    lights_rel = "01_Deep Sky Objects/M 81/2026-02-19_FRA400_ZWOASI585MCPro/Lights/L-Pro"
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(catalog, {
+        "session_id": sid, "target": "M 81", "obs_date": "2026-02-19",
+        "ota": "FRA400", "camera": "ZWOASI585MCPro", "filter": "L-Pro",
+        "gain": 200, "temperature_c": -20.0, "exposure_sec": 180.0,
+        "focal_length": 400.0, "frame_count": 1, "total_integration_sec": 180,
+        "ra_deg": None, "dec_deg": None, "lights_path": lights_rel, "notes": "",
+    })
+    light = touch(archive / lights_rel / "Light_M81_0001.fit")
+    wbpp_target = tmp_path / "WBPP" / "M81"
+    touch(wbpp_target / "Output" / "master" / "masterLight.xisf")
+    if with_symlink:
+        link_dir = wbpp_target / "SESSION_1" / "Lights" / "FILTER_L-Pro"
+        link_dir.mkdir(parents=True)
+        (link_dir / light.name).symlink_to(light.resolve())
+    return archive, catalog, tmp_path / "WBPP", sid
+
+
+def test_cmd_finish_dry_run_previews_sessions_to_mark(tmp_path, capsys):
+    """--dry-run must show which sessions a real run would mark, and not mark them."""
+    archive, catalog, wbpp_root, sid = _dry_run_finish_setup(tmp_path, with_symlink=True)
+    cmd_finish(output=archive, wbpp_root=wbpp_root, target="M 81",
+               backend=LocalBackend(catalog), date_override="2026-07-01", dry_run=True)
+    out = capsys.readouterr().out
+    assert "would mark 1 session(s)" in out
+    assert sid in out
+    row = LocalBackend(catalog).query_sessions(session_id=sid)[0]
+    assert row["processed_state"] == "unprocessed"
+
+
+def test_cmd_finish_dry_run_warns_when_no_sessions_match(tmp_path, capsys):
+    """--dry-run must warn loudly when the SESSION_N symlinks resolve nowhere."""
+    archive, catalog, wbpp_root, _ = _dry_run_finish_setup(tmp_path, with_symlink=False)
+    cmd_finish(output=archive, wbpp_root=wbpp_root, target="M 81",
+               backend=LocalBackend(catalog), date_override="2026-07-01", dry_run=True)
+    out = capsys.readouterr().out
+    assert "WARNING: no catalog sessions matched" in out
