@@ -221,6 +221,15 @@ def cmd_finish(
         print("\nCopying processed/")
         _copy_flat(processed_dir, dest / "processed", dry_run=dry_run)
 
+    # Log folders ride along when present: WBPP's logs/ records exactly which
+    # frames went into the stack (the F2 attribution source), and asiair_logs/
+    # (hand-collected) holds the Autorun/PHD2 guide logs (the F4 source).
+    for log_name in ("logs", "asiair_logs"):
+        log_dir = wbpp_output / log_name
+        if log_dir.exists() and any(f.is_file() for f in log_dir.iterdir()):
+            print(f"\nCopying {log_name}/")
+            _copy_flat(log_dir, dest / log_name, dry_run=dry_run)
+
     status = str(dest.relative_to(output))
     if dry_run:
         # Resolution is read-only, and it's the step most sensitive to a wrong

@@ -438,3 +438,19 @@ def test_cmd_finish_dry_run_warns_when_no_sessions_match(tmp_path, capsys):
                backend=LocalBackend(catalog), date_override="2026-07-01", dry_run=True)
     out = capsys.readouterr().out
     assert "WARNING: no catalog sessions matched" in out
+
+
+def test_cmd_finish_copies_log_folders(tmp_path, capsys):
+    """Output/logs and Output/asiair_logs are archived alongside master/processed."""
+    archive, catalog, wbpp_root, _ = _dry_run_finish_setup(tmp_path, with_symlink=True)
+    out_dir = wbpp_root / "M81" / "Output"
+    touch(out_dir / "logs" / "20260705173607.log")
+    touch(out_dir / "asiair_logs" / "PHD2_GuideLog_2026-06-16_233946.txt")
+    touch(out_dir / "registered" / "not_copied.xisf")
+    with patch("builtins.input", return_value=""):
+        cmd_finish(output=archive, wbpp_root=wbpp_root, target="M 81",
+                   backend=LocalBackend(catalog), date_override="2026-07-01", dry_run=False)
+    dest = archive / "01_Deep Sky Objects" / "M 81" / "_Processed" / "2026-07-01"
+    assert (dest / "logs" / "20260705173607.log").exists()
+    assert (dest / "asiair_logs" / "PHD2_GuideLog_2026-06-16_233946.txt").exists()
+    assert not (dest / "registered").exists()
