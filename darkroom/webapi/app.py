@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from darkroom import catalog_db, config
-from darkroom.webapi.ui import build_ui_router
+from darkroom.webapi.ui import COOKIE_NAME, SESSION_MAX_AGE_SECONDS, build_ui_router
 
 _STATIC_DIR = Path(__file__).parent / "static"
 
@@ -225,6 +225,19 @@ def create_app(db_path: Path, api_token: str) -> FastAPI:
     # No auth on static assets (CSS/JS/fonts) — nothing sensitive lives here,
     # and the login page itself needs the CSS before a token is ever entered.
     app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+
+    @app.middleware("http")
+    async def _refresh_session_cookie(request, call_next):
+        # Sliding session: any authenticated hit resets the 90-day clock, so a
+        # machine used at least once per window never sees the login page.
+        response = await call_next(request)
+        cookie_token = request.cookies.get(COOKIE_NAME)
+        if cookie_token is not None and secrets.compare_digest(cookie_token, api_token):
+            response.set_cookie(
+                COOKIE_NAME, cookie_token, httponly=True, samesite="lax",
+                max_age=SESSION_MAX_AGE_SECONDS,
+            )
+        return response
 
     return app
 

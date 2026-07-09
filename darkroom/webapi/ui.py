@@ -25,7 +25,12 @@ from darkroom import catalog_db
 from darkroom.webapi.common_names import common_name
 
 _TEMPLATES_DIR = Path(__file__).parent.parent / "templates" / "catalog"
-_COOKIE_NAME = "darkroom_token"
+COOKIE_NAME = "darkroom_token"
+# 90 days: single-user LAN/tailnet tool, re-pasting the token every browser
+# session is friction without a threat model to justify it. Sliding window
+# (see app.py's cookie-refresh middleware) means this resets on every visit,
+# so it only bites a machine that's gone untouched for the full 90 days.
+SESSION_MAX_AGE_SECONDS = 90 * 24 * 3600
 
 _EDIT_FIELDS = (
     "target", "obs_date", "ota", "camera", "filter",
@@ -121,8 +126,21 @@ def build_ui_router(db_path: Path, api_token: str) -> APIRouter:
             )
         return None
 
+    def _login_redirect(token: str, next_: str) -> RedirectResponse:
+        resp = RedirectResponse(_safe_next(next_), status_code=303)
+        resp.set_cookie(
+            COOKIE_NAME, token, httponly=True, samesite="lax",
+            max_age=SESSION_MAX_AGE_SECONDS,
+        )
+        return resp
+
     @router.get("/login", response_class=HTMLResponse)
-    def login_form(request: Request, next: str = "/"):
+    def login_form(request: Request, next: str = "/", token: str | None = None):
+        # Bookmarkable login: a URL like /login?token=... logs in on load, so
+        # onboarding a new machine is one bookmark click instead of copy-pasting
+        # into the form. Falls through to the form if the token is missing/bad.
+        if token is not None and _authed(token):
+            return _login_redirect(token, next)
         return templates.TemplateResponse(
             request, "login.html", {"error": None, "next": _safe_next(next)}
         )
@@ -136,19 +154,12 @@ def build_ui_router(db_path: Path, api_token: str) -> APIRouter:
                 {"error": "Invalid token", "next": _safe_next(next)},
                 status_code=400,
             )
-        resp = RedirectResponse(_safe_next(next), status_code=303)
-        # 90 days: single-user LAN tool, re-pasting the token every browser
-        # session is friction without a threat model to justify it.
-        resp.set_cookie(
-            _COOKIE_NAME, token, httponly=True, samesite="lax",
-            max_age=90 * 24 * 3600,
-        )
-        return resp
+        return _login_redirect(token, next)
 
     @router.get("/logout")
     def logout():
         resp = RedirectResponse("/login", status_code=303)
-        resp.delete_cookie(_COOKIE_NAME)
+        resp.delete_cookie(COOKIE_NAME)
         return resp
 
     @router.get("/", response_class=HTMLResponse)
