@@ -141,6 +141,37 @@ docs · **R** = refactor · **W** = web-UI prep.
 - Hand-rolled `"`-wrapping breaks if a path contains a quote. Use the stdlib
   `csv` module. Low priority (localhost single-user tool).
 
+### B8. Integration time always displayed in hours, rounds short subs to 0.0h
+- **Where:** `darkroom/catalog_cli.py:39,48` (`catalog list`, `f"{hrs:.1f}h"`),
+  `darkroom/templates/catalog/session.html:41` (same `/3600.0` + `h` format).
+- Both hardcode seconds→hours with 1 decimal. Fine for typical DSO subs
+  (60–300s), but solar/lucky-imaging subs are sub-second (e.g. Sun session
+  `Sun_20260708_..._AstronomikL2`: 100µs–900µs exposures) — total integration
+  time renders as `0.0h` regardless of frame count, which is useless.
+- Fix: scale the unit to the magnitude (s / m / h) instead of hardcoding hours,
+  in both places. Noticed 2026-07-09 while fixing that Sun session's filter;
+  see also B9 (Sun may not belong under `01_Deep Sky Objects`/this catalog at
+  all, which would make this moot for solar specifically but the underlying
+  formatting bug is real for any short-sub target).
+
+### B9. Should solar imaging live under `01_Deep Sky Objects` / this catalog?
+- The archive already has separate top-level categories for non-DSO capture —
+  `02_Milky Way`, `03_Moon`, `04_Meteors`, `05_Star Trails`, `06_Comets` — none
+  of which are cataloged by `darkroom` (catalog is scoped to DSO per
+  `CLAUDE.md`). Solar imaging (lucky-imaging-style stacking, sub-second subs,
+  totally different WBPP/processing flow than DSO) fits that same pattern
+  better than living inside `01_Deep Sky Objects`.
+- Raised 2026-07-09 after cataloging a Sun session there by habit. Jonathan is
+  leaning toward carving out a `07_Sun` (or similar) top-level folder and
+  leaving it out of `astro_catalog.db` entirely, matching Moon/Milky
+  Way/Comets precedent — not decided, no action taken yet.
+- If decided: needs an archive move (folder rename/relocate) + a catalog
+  cleanup (delete or otherwise disposition the now-miscategorized Sun rows,
+  e.g. today's `Sun_20260708_FRA400-07x_ZWOASI585MCPro_AstronomikL2`) rather
+  than a code change — `darkroom ingest`/`catalog` already only ever look
+  under `01_Deep Sky Objects` for DSO, so nothing needs to explicitly reject
+  Sun, it would just stop getting scanned/ingested there.
+
 ---
 
 ## R — Refactors
@@ -529,6 +560,38 @@ a later task — overkill for day one; the nightly NAS copy is the v1 backup.
 
 Depends on: W1–W7 (done). Absorbs W8's decision (persisted linkage vs recompute —
 default recompute). Related: U2 (filter cleanup queue) is a natural second UI view.
+
+---
+
+### W10. Edit UI/API can't fix `lights_path`, and there's no way to delete a session
+
+The `/sessions/{session_id}` edit form and `PATCH /api/sessions/{id}` both
+correctly recompute `session_id` when an identity field (target/obs_date/
+ota/camera/filter) changes (W3's anti-orphan guarantee) — but `lights_path`
+is deliberately excluded from `_EDITABLE_FIELDS`/`_EDIT_FIELDS`, so it's left
+pointing at the old (pre-correction) folder name. `finish`/`wbpp` resolve
+sessions by matching `lights_path` under the archive root, so a stale value
+silently breaks that matching until someone notices frames aren't picked up.
+
+Hit 2026-07-09: corrected a Sun session's filter (`L-Synergy` → `AstronomikL2`,
+matching an on-disk rename Jonathan had already done) and had to fall back to
+raw `curl`/`POST /api/sessions` upsert to also fix `lights_path`, since
+neither the edit UI nor the PATCH endpoint exposes it.
+
+Fix: recompute `lights_path` server-side whenever an identity field changes
+(mirror the session_id recompute in `update_session_fields`) rather than
+exposing it as a raw editable text field — the path is derived from
+target/date/ota/camera/filter, so it shouldn't need separate manual input.
+
+Also no delete: there's no `DELETE /api/sessions/{id}` (or UI equivalent), so
+removing a miscategorized/duplicate row means SSHing into the LXC and hand-
+running SQL against `/var/lib/darkroom/astro_catalog.db` — done manually
+2026-07-09 to remove the Sun session once Jonathan moved solar imaging out to
+`07_Sun` (see B9). Add a delete path (API route + confirm-guarded UI button)
+alongside the `lights_path` fix, scoped the same way (auth-gated, single row
+by session_id/id).
+
+Depends on: W9 (done).
 
 ---
 
