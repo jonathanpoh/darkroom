@@ -172,6 +172,17 @@ docs · **R** = refactor · **W** = web-UI prep.
   under `01_Deep Sky Objects` for DSO, so nothing needs to explicitly reject
   Sun, it would just stop getting scanned/ingested there.
 
+### B10. Repo hygiene — untracked leftovers in the repo root
+Captured 2026-07-12 (whole-app review). Mostly resolved 2026-07-13:
+`ingest.yaml` (stale manifest) and `tmp/` (loose IC 1848 frames) deleted;
+`check_missing_object.py` kept deliberately as a standalone tool (already
+tracked, with `tests/test_check_missing_object.py`). Remaining:
+- `datto-d-din/` — the D-DIN font files the safelight UI uses. Decide: commit
+  them (they're the design's designation/wordmark face) or gitignore if the
+  needed weights are already embedded under `darkroom/webapi/static/`.
+- Gitignore manifest filenames and `tmp/` so future working artifacts don't
+  land in the tree again.
+
 ---
 
 ## R — Refactors
@@ -456,6 +467,11 @@ docs · **R** = refactor · **W** = web-UI prep.
 > a separate UI secret (revocable independently of the API token),
 > cookie rotation/expiry on token change, and rate-limiting the login
 > form. No user accounts — it stays single-user.
+> **Scope addition 2026-07-12:** the bookmarkable login (`/login?token=...`,
+> `4e27f06`) puts the raw API bearer token in browser history and uvicorn
+> access logs on the LXC. Fold into the same review: either a short-lived
+> random login code instead of the raw token in the URL, or accept the
+> tradeoff deliberately and document it.
 
 Captured 2026-07-05. **The build item** that W1–W8 were prep for: an
 always-on FastAPI app on a homelab LXC that both serves the edit UI *and* owns
