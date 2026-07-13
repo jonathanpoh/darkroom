@@ -245,6 +245,64 @@ def test_patch_session_nonexistent_404(tmp_path):
     assert resp.json() == {"detail": "session not found"}
 
 
+def test_patch_identity_field_recomputes_lights_path(tmp_path):
+    client = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    client.post("/api/sessions", json=_session(sid), headers=AUTH)
+
+    resp = client.patch(
+        f"/api/sessions/{sid}", json={"filter": "L-Extreme"}, headers=AUTH
+    )
+    assert resp.status_code == 200
+
+    new_sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Extreme"
+    resp = client.get("/api/sessions", params={"session_id": new_sid}, headers=AUTH)
+    rows = resp.json()
+    assert len(rows) == 1
+    assert rows[0]["lights_path"] == (
+        "01_Deep Sky Objects/M 81/2026-02-19_FRA400_ZWOASI585MCPro/Lights/L-Extreme"
+    )
+
+
+# ---------------------------------------------------------------------------
+# DELETE /api/sessions/{session_id}
+# ---------------------------------------------------------------------------
+
+
+def test_delete_session_no_auth_401(tmp_path):
+    client = make_client(tmp_path)
+    resp = client.delete("/api/sessions/whatever")
+    assert resp.status_code == 401
+
+
+def test_delete_session_wrong_token_401(tmp_path):
+    client = make_client(tmp_path)
+    resp = client.delete(
+        "/api/sessions/whatever", headers={"Authorization": "Bearer wrong"}
+    )
+    assert resp.status_code == 401
+
+
+def test_delete_session_nonexistent_404(tmp_path):
+    client = make_client(tmp_path)
+    resp = client.delete("/api/sessions/does_not_exist", headers=AUTH)
+    assert resp.status_code == 404
+    assert resp.json() == {"detail": "session not found"}
+
+
+def test_delete_session_removes_row(tmp_path):
+    client = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    client.post("/api/sessions", json=_session(sid), headers=AUTH)
+
+    resp = client.delete(f"/api/sessions/{sid}", headers=AUTH)
+    assert resp.status_code == 200
+    assert resp.json() == {"deleted": True}
+
+    resp = client.get("/api/sessions", params={"session_id": sid}, headers=AUTH)
+    assert resp.json() == []
+
+
 # ---------------------------------------------------------------------------
 # POST /api/sessions/{session_id}/state
 # ---------------------------------------------------------------------------

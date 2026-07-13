@@ -412,3 +412,78 @@ def test_edit_invalid_processed_state_400(tmp_path):
     }
     resp = client.post(f"/sessions/{sid}", data=form)
     assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# session delete (POST /sessions/{session_id}/delete)
+# ---------------------------------------------------------------------------
+
+
+def test_delete_unauthenticated_redirects_to_login(tmp_path):
+    client, db_path = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db_path, _session(sid))
+
+    resp = client.post(f"/sessions/{sid}/delete", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"].startswith("/login")
+
+    # Row untouched.
+    conn = catalog_db.open_db(db_path)
+    try:
+        rows = catalog_db.query_sessions(conn, session_id=sid)
+    finally:
+        conn.close()
+    assert len(rows) == 1
+
+
+def test_delete_redirects_to_target_when_other_sessions_remain(tmp_path):
+    client, db_path = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db_path, _session(sid))
+    upsert_session(
+        db_path,
+        _session(
+            "M81_20260220_FRA400_ZWOASI585MCPro_L-Pro",
+            obs_date="2026-02-20",
+        ),
+    )
+    login(client)
+
+    resp = client.post(f"/sessions/{sid}/delete", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/targets/M%2081"
+
+    conn = catalog_db.open_db(db_path)
+    try:
+        gone = catalog_db.query_sessions(conn, session_id=sid)
+        remaining = catalog_db.query_sessions(conn, target="M 81")
+    finally:
+        conn.close()
+    assert gone == []
+    assert len(remaining) == 1
+
+
+def test_delete_last_session_of_target_redirects_to_index(tmp_path):
+    client, db_path = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db_path, _session(sid))
+    login(client)
+
+    resp = client.post(f"/sessions/{sid}/delete", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/"
+
+    conn = catalog_db.open_db(db_path)
+    try:
+        rows = catalog_db.query_sessions(conn, session_id=sid)
+    finally:
+        conn.close()
+    assert rows == []
+
+
+def test_delete_unknown_session_404(tmp_path):
+    client, _ = make_client(tmp_path)
+    login(client)
+    resp = client.post("/sessions/does-not-exist/delete", follow_redirects=False)
+    assert resp.status_code == 404

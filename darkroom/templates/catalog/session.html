@@ -43,4 +43,9 @@
   <div class="field-row"><label>Created</label><span>{{ session.created_at or '—' }}</span></div>
   <div class="field-row"><label>Updated</label><span>{{ session.updated_at or '—' }}</span></div>
 </div>
+
+<form class="deleteform" method="post" action="/sessions/{{ session.session_id }}/delete"
+      onsubmit="return confirm('Delete session {{ session.session_id }}? This removes the catalog row only — archive files are untouched.');">
+  <button type="submit">Delete session</button>
+</form>
 {% endblock %}

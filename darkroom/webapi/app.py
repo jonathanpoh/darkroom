@@ -125,6 +125,13 @@ def create_app(db_path: Path, api_token: str) -> FastAPI:
             raise HTTPException(status_code=404, detail="session not found")
         return {"updated": True}
 
+    @app.delete("/api/sessions/{session_id}", dependencies=[auth_dep])
+    def delete_session(session_id: str, conn=Depends(_get_conn)):
+        deleted = catalog_db.delete_session(conn, session_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="session not found")
+        return {"deleted": True}
+
     @app.post("/api/sessions/{session_id}/state", dependencies=[auth_dep])
     def post_session_state(session_id: str, body: StateIn):
         from darkroom import cataloger

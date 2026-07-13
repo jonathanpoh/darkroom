@@ -14,6 +14,7 @@ actually need it.
 from __future__ import annotations
 
 import secrets
+import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -342,5 +343,34 @@ def build_ui_router(db_path: Path, api_token: str) -> APIRouter:
 
         new_session_id = new_row["session_id"] if new_row else session_id
         return RedirectResponse(f"/sessions/{new_session_id}", status_code=303)
+
+    @router.post("/sessions/{session_id}/delete")
+    def delete_submit(
+        request: Request,
+        session_id: str,
+        darkroom_token: str | None = Cookie(default=None),
+    ):
+        redirect = _require_auth(request, darkroom_token)
+        if redirect:
+            return redirect
+
+        conn = _get_conn()
+        try:
+            rows = catalog_db.query_sessions(conn, session_id=session_id)
+            if not rows:
+                raise HTTPException(status_code=404, detail="session not found")
+            target = rows[0]["target"]
+
+            catalog_db.delete_session(conn, session_id)
+
+            remaining = catalog_db.query_sessions(conn, target=target)
+        finally:
+            conn.close()
+
+        if remaining:
+            return RedirectResponse(
+                f"/targets/{urllib.parse.quote(target)}", status_code=303
+            )
+        return RedirectResponse("/", status_code=303)
 
     return router

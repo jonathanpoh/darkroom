@@ -15,7 +15,7 @@ import yaml
 from darkroom.cataloger import make_session_id
 from darkroom.catalog_client import resolve_backend
 from darkroom.config import resolve_catalog, resolve_path
-from darkroom.names import _normalize_camera
+from darkroom.names import _normalize_camera, session_dest_rel
 from darkroom.scanner import CalibrationGroup, Session, ScanResult, scan_source
 
 
@@ -35,15 +35,6 @@ def _require_path(cli_val, env_var, toml_key, label) -> Path:
 def camera_slug(camera: str) -> str:
     """Canonical camera name for folder names (delegates to _normalize_camera)."""
     return _normalize_camera(camera)
-
-
-def session_dest_rel(
-    target: str, obs_date: str, ota: str, camera: str, filter_: str | None
-) -> Path:
-    """Return relative destination path for a session's Lights/<filter>/ folder."""
-    f = filter_ or "NoFilter"
-    folder = f"{obs_date}_{ota}_{camera_slug(camera)}"
-    return Path("01_Deep Sky Objects") / target / folder / "Lights" / f
 
 
 def cal_dest_rel(

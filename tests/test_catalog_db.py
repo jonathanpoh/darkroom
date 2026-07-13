@@ -10,6 +10,7 @@ from darkroom.catalog_db import (
     query_sessions,
     count_sessions,
     update_session_fields,
+    delete_session,
 )
 
 
@@ -349,6 +350,94 @@ def test_update_identity_change_colliding_with_existing_row_raises(tmp_path):
     # exact same session_id as sid_a -> must raise.
     with pytest.raises(ValueError):
         update_session_fields(conn, "M81_20260220_FRA400_ZWOASI585MCPro_L-Pro", obs_date="2026-02-19")
+
+
+def test_update_identity_field_recomputes_lights_path(tmp_path):
+    db = make_db(tmp_path)
+    conn = open_db(db)
+    old_sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+
+    ok = update_session_fields(conn, old_sid, filter="L-Extreme")
+    assert ok is True
+
+    new_sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Extreme"
+    row = conn.execute(
+        "SELECT lights_path FROM sessions WHERE session_id = ?", (new_sid,)
+    ).fetchone()
+    assert row["lights_path"] == (
+        "01_Deep Sky Objects/M 81/2026-02-19_FRA400_ZWOASI585MCPro/Lights/L-Extreme"
+    )
+
+
+def test_update_target_spacing_only_recomputes_lights_path_same_session_id(tmp_path):
+    db = tmp_path / "test.db"
+    init_db(db)
+    # Target stored without a space: same session_id slug as 'M 81', but a
+    # different archive folder name.
+    sid = "M81_20260301_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db, _session(sid, target="M81", obs_date="2026-03-01"))
+    conn = open_db(db)
+
+    ok = update_session_fields(conn, sid, target="M 81")
+    assert ok is True
+
+    row = conn.execute(
+        "SELECT session_id, lights_path FROM sessions WHERE session_id = ?", (sid,)
+    ).fetchone()
+    assert row is not None  # session_id unchanged (slug strips spaces)
+    assert row["lights_path"] == (
+        "01_Deep Sky Objects/M 81/2026-03-01_FRA400_ZWOASI585MCPro/Lights/L-Pro"
+    )
+
+
+def test_update_identity_field_leaves_null_lights_path_null(tmp_path):
+    db = tmp_path / "test.db"
+    init_db(db)
+    sid = "M81_20260301_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db, _session(sid, obs_date="2026-03-01", lights_path=None))
+    conn = open_db(db)
+
+    ok = update_session_fields(conn, sid, filter="L-Extreme")
+    assert ok is True
+
+    new_sid = "M81_20260301_FRA400_ZWOASI585MCPro_L-Extreme"
+    row = conn.execute(
+        "SELECT lights_path FROM sessions WHERE session_id = ?", (new_sid,)
+    ).fetchone()
+    assert row["lights_path"] is None
+
+
+def test_update_non_identity_field_leaves_lights_path_untouched(tmp_path):
+    db = make_db(tmp_path)
+    conn = open_db(db)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    before = conn.execute(
+        "SELECT lights_path FROM sessions WHERE session_id = ?", (sid,)
+    ).fetchone()["lights_path"]
+
+    update_session_fields(conn, sid, notes="just a note")
+
+    after = conn.execute(
+        "SELECT lights_path FROM sessions WHERE session_id = ?", (sid,)
+    ).fetchone()["lights_path"]
+    assert after == before
+
+
+# ---------------------------------------------------------------------------
+# delete_session
+# ---------------------------------------------------------------------------
+
+def test_delete_session_removes_row(tmp_path):
+    conn = open_db(make_db(tmp_path))
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    assert delete_session(conn, sid) is True
+    row = conn.execute("SELECT * FROM sessions WHERE session_id = ?", (sid,)).fetchone()
+    assert row is None
+
+
+def test_delete_session_unknown_id_returns_false(tmp_path):
+    conn = open_db(make_db(tmp_path))
+    assert delete_session(conn, "does_not_exist") is False
 
 
 # ---------------------------------------------------------------------------

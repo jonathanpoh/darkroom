@@ -14,12 +14,13 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from darkroom.names import _normalize_target, make_session_id
+from darkroom.names import _normalize_target, make_session_id, session_dest_rel
 
 # Columns a UI is allowed to edit via update_session_fields. Deliberately
 # excludes id, session_id (derived, not directly settable), frame_count,
-# total_integration_sec/hours, lights_path, processed_status (legacy),
-# created_at/updated_at (managed by this module).
+# total_integration_sec/hours, processed_status (legacy), created_at/updated_at
+# (managed by this module), and lights_path — excluded from direct editing but
+# recomputed server-side (via session_dest_rel) when an identity field changes.
 _EDITABLE_FIELDS = frozenset({
     "target", "obs_date", "ota", "camera", "filter",
     "gain", "temperature_c", "exposure_sec", "focal_length",
@@ -202,6 +203,8 @@ def update_session_fields(conn: sqlite3.Connection, session_id: str, **fields) -
     old+new identity values and updated on the SAME row (single UPDATE by
     numeric id) — so processed_state/processed_path/processed_date/notes/
     created_at are carried forward rather than orphaned onto a stale row.
+    On the same identity change, lights_path is recomputed from
+    session_dest_rel (a NULL lights_path stays NULL).
 
     Returns True if the session was found and updated, False if session_id
     doesn't match any row.
@@ -227,7 +230,8 @@ def update_session_fields(conn: sqlite3.Connection, session_id: str, **fields) -
             )
 
     row = conn.execute(
-        "SELECT id, target, obs_date, ota, camera, filter FROM sessions WHERE session_id = ?",
+        "SELECT id, target, obs_date, ota, camera, filter, lights_path "
+        "FROM sessions WHERE session_id = ?",
         (session_id,),
     ).fetchone()
     if row is None:
@@ -260,6 +264,19 @@ def update_session_fields(conn: sqlite3.Connection, session_id: str, **fields) -
             set_clauses.append("session_id = ?")
             params.append(new_session_id)
 
+        # lights_path is derived from the same identity components, so it can
+        # change even when session_id doesn't (e.g. a spacing-only target edit
+        # like 'M81' -> 'M 81' keeps the slug but renames the folder). A NULL
+        # lights_path stays NULL — never invent a path for a row without one.
+        if row["lights_path"] is not None:
+            new_lights_path = str(session_dest_rel(
+                merged["target"], merged["obs_date"], merged["ota"],
+                merged["camera"], merged["filter"],
+            ))
+            if new_lights_path != row["lights_path"]:
+                set_clauses.append("lights_path = ?")
+                params.append(new_lights_path)
+
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     set_clauses.append("updated_at = ?")
     params.append(now)
@@ -271,3 +288,12 @@ def update_session_fields(conn: sqlite3.Connection, session_id: str, **fields) -
     )
     conn.commit()
     return True
+
+
+def delete_session(conn: sqlite3.Connection, session_id: str) -> bool:
+    """Delete a session row by session_id. Returns True if a row was deleted,
+    False if session_id matched nothing. Catalog row only — never touches
+    archive files."""
+    cur = conn.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
+    conn.commit()
+    return cur.rowcount > 0
