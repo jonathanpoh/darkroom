@@ -14,10 +14,12 @@ from fastapi.testclient import TestClient
 from darkroom.catalog import find_darks, find_flat_darks, find_flats, query_all_sessions
 from darkroom.catalog_client import HttpBackend, LocalBackend
 from darkroom.webapi.app import create_app
+from darkroom.webapi.auth import hash_password
 
 from tests.test_catalog_client import _cal_set, _session
 
 _VOLATILE = ("created_at", "updated_at")
+_UI_HASH = hash_password("unused-in-this-test")  # scrypt is slow — hash once
 
 
 def _strip(rows: list[dict]) -> list[dict]:
@@ -28,7 +30,7 @@ def _strip(rows: list[dict]) -> list[dict]:
 def backends(tmp_path):
     """(LocalBackend, HttpBackend) pair on separate fresh DBs."""
     local = LocalBackend(tmp_path / "local.db")
-    app = create_app(tmp_path / "server.db", "tok")
+    app = create_app(tmp_path / "server.db", "tok", _UI_HASH)
     tc = TestClient(app, headers={"Authorization": "Bearer tok"})
     http = HttpBackend("http://testserver", client=tc)
     yield local, http

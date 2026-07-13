@@ -1,10 +1,11 @@
 """darkroom.webapi.ui — Jinja2 browser UI for the catalog web API (W9 phase 2).
 
 Sits alongside the bearer-token `/api` routes in `darkroom.webapi.app`, as a
-separate router mounted on the same app. Auth is cookie-based (same token
-value as the API, entered once via /login) — this is a convenience layer for
-humans in a browser, not a new trust boundary: it must never grant access to
-the `/api` routes, which stay bearer-only.
+separate router mounted on the same app. Auth is a separate password (not the
+API bearer token) checked once at /login, which mints an HMAC-signed,
+stateless session cookie (see `darkroom.webapi.auth`) — this is a convenience
+layer for humans in a browser, not a new trust boundary: it must never grant
+access to the `/api` routes, which stay bearer-only.
 
 Like `darkroom.webapi.app`, this module keeps its own import light:
 `darkroom.cataloger` (astropy) is only imported lazily, inside handlers that
@@ -13,8 +14,9 @@ actually need it.
 
 from __future__ import annotations
 
-import secrets
+import time
 import urllib.parse
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -23,15 +25,52 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from darkroom import catalog_db
+from darkroom.webapi import auth
 from darkroom.webapi.common_names import common_name
 
 _TEMPLATES_DIR = Path(__file__).parent.parent / "templates" / "catalog"
 COOKIE_NAME = "darkroom_token"
-# 90 days: single-user LAN/tailnet tool, re-pasting the token every browser
-# session is friction without a threat model to justify it. Sliding window
-# (see app.py's cookie-refresh middleware) means this resets on every visit,
-# so it only bites a machine that's gone untouched for the full 90 days.
+# 90 days: single-user LAN/tailnet tool, re-logging-in every browser session
+# is friction without a threat model to justify it. Sliding window (see
+# app.py's cookie-refresh middleware) means this resets on every visit, so it
+# only bites a machine that's gone untouched for the full 90 days.
 SESSION_MAX_AGE_SECONDS = 90 * 24 * 3600
+
+# Login rate limiting: module-level, in-memory, per-client-IP. Window and
+# limit are small and single-user-appropriate — this is a brake on brute
+# force from one source, not a distributed defence.
+_RATE_LIMIT_WINDOW_SECONDS = 60
+_RATE_LIMIT_MAX_FAILURES = 5
+_LOGIN_FAILURES: dict[str, deque[float]] = {}
+
+
+def _client_ip(request: Request) -> str:
+    client = request.client
+    return client.host if client is not None else "unknown"
+
+
+def _throttled(ip: str) -> bool:
+    now = time.time()
+    attempts = _LOGIN_FAILURES.get(ip)
+    if not attempts:
+        return False
+    while attempts and now - attempts[0] > _RATE_LIMIT_WINDOW_SECONDS:
+        attempts.popleft()
+    return len(attempts) >= _RATE_LIMIT_MAX_FAILURES
+
+
+def _record_failure(ip: str) -> None:
+    now = time.time()
+    attempts = _LOGIN_FAILURES.setdefault(ip, deque())
+    attempts.append(now)
+    while attempts and now - attempts[0] > _RATE_LIMIT_WINDOW_SECONDS:
+        attempts.popleft()
+
+
+def reset_login_rate_limit() -> None:
+    """Clear all recorded login failures. Test-only helper."""
+    _LOGIN_FAILURES.clear()
+
 
 _EDIT_FIELDS = (
     "target", "obs_date", "ota", "camera", "filter",
@@ -107,8 +146,8 @@ def _build_aggregate(rows: list[dict]) -> list[dict]:
     return aggregate
 
 
-def build_ui_router(db_path: Path, api_token: str) -> APIRouter:
-    """Build the Jinja2 UI router, bound to the same DB + token as the API."""
+def build_ui_router(db_path: Path, ui_password_hash: str) -> APIRouter:
+    """Build the Jinja2 UI router, bound to the DB + UI password hash."""
     db_path = Path(db_path)
     templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
     router = APIRouter()
@@ -116,8 +155,8 @@ def build_ui_router(db_path: Path, api_token: str) -> APIRouter:
     def _get_conn():
         return catalog_db.open_db(db_path)
 
-    def _authed(token: str | None) -> bool:
-        return token is not None and secrets.compare_digest(token, api_token)
+    def _authed(cookie_value: str | None) -> bool:
+        return auth.verify_cookie(ui_password_hash, cookie_value)
 
     def _require_auth(request: Request, darkroom_token: str | None) -> RedirectResponse | None:
         """Return a redirect-to-login response if the cookie is missing/wrong, else None."""
@@ -127,35 +166,44 @@ def build_ui_router(db_path: Path, api_token: str) -> APIRouter:
             )
         return None
 
-    def _login_redirect(token: str, next_: str) -> RedirectResponse:
+    def _login_redirect(next_: str) -> RedirectResponse:
         resp = RedirectResponse(_safe_next(next_), status_code=303)
         resp.set_cookie(
-            COOKIE_NAME, token, httponly=True, samesite="lax",
+            COOKIE_NAME,
+            auth.mint_cookie(ui_password_hash, SESSION_MAX_AGE_SECONDS),
+            httponly=True, samesite="lax",
             max_age=SESSION_MAX_AGE_SECONDS,
         )
         return resp
 
     @router.get("/login", response_class=HTMLResponse)
-    def login_form(request: Request, next: str = "/", token: str | None = None):
-        # Bookmarkable login: a URL like /login?token=... logs in on load, so
-        # onboarding a new machine is one bookmark click instead of copy-pasting
-        # into the form. Falls through to the form if the token is missing/bad.
-        if token is not None and _authed(token):
-            return _login_redirect(token, next)
+    def login_form(request: Request, next: str = "/"):
         return templates.TemplateResponse(
             request, "login.html", {"error": None, "next": _safe_next(next)}
         )
 
     @router.post("/login")
-    def login_submit(request: Request, token: str = Form(...), next: str = Form("/")):
-        if not _authed(token):
+    def login_submit(request: Request, password: str = Form(...), next: str = Form("/")):
+        ip = _client_ip(request)
+        if _throttled(ip):
             return templates.TemplateResponse(
                 request,
                 "login.html",
-                {"error": "Invalid token", "next": _safe_next(next)},
+                {
+                    "error": "Too many attempts — try again in a minute",
+                    "next": _safe_next(next),
+                },
+                status_code=429,
+            )
+        if not auth.verify_password(password, ui_password_hash):
+            _record_failure(ip)
+            return templates.TemplateResponse(
+                request,
+                "login.html",
+                {"error": "Invalid password", "next": _safe_next(next)},
                 status_code=400,
             )
-        return _login_redirect(token, next)
+        return _login_redirect(next)
 
     @router.get("/logout")
     def logout():

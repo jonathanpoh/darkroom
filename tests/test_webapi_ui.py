@@ -9,9 +9,21 @@ from fastapi.testclient import TestClient
 
 from darkroom import catalog_db
 from darkroom.cataloger import upsert_session
+from darkroom.webapi import auth
 from darkroom.webapi.app import create_app
+from darkroom.webapi.auth import hash_password
+from darkroom.webapi.ui import reset_login_rate_limit
 
 TOKEN = "testtoken"
+UI_PASSWORD = "test-password"
+UI_HASH = hash_password(UI_PASSWORD)  # scrypt is slow — hash once at module level
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limit():
+    reset_login_rate_limit()
+    yield
+    reset_login_rate_limit()
 
 
 def _embedded_data(html: str) -> list[dict]:
@@ -56,14 +68,18 @@ def _session(
 
 def make_client(tmp_path) -> tuple[TestClient, "Path"]:
     db_path = tmp_path / "catalog.db"
-    app = create_app(db_path, TOKEN)
+    app = create_app(db_path, TOKEN, UI_HASH)
     return TestClient(app), db_path
 
 
 def login(client: TestClient) -> None:
-    resp = client.post("/login", data={"token": TOKEN, "next": "/"}, follow_redirects=False)
+    resp = client.post(
+        "/login", data={"password": UI_PASSWORD, "next": "/"}, follow_redirects=False
+    )
     assert resp.status_code == 303
-    assert resp.cookies.get("darkroom_token") == TOKEN
+    cookie = resp.cookies.get("darkroom_token")
+    assert cookie is not None
+    assert auth.verify_cookie(UI_HASH, cookie)
 
 
 # ---------------------------------------------------------------------------
@@ -78,15 +94,15 @@ def test_index_unauthenticated_redirects_to_login(tmp_path):
     assert resp.headers["location"].startswith("/login")
 
 
-def test_login_wrong_token_rerenders_error(tmp_path):
+def test_login_wrong_password_rerenders_error(tmp_path):
     client, _ = make_client(tmp_path)
-    resp = client.post("/login", data={"token": "wrong", "next": "/"})
+    resp = client.post("/login", data={"password": "wrong", "next": "/"})
     assert resp.status_code == 400
-    assert "Invalid token" in resp.text
+    assert "Invalid password" in resp.text
     assert "darkroom_token" not in resp.cookies
 
 
-def test_login_correct_token_sets_cookie_and_index_renders(tmp_path):
+def test_login_correct_password_sets_cookie_and_index_renders(tmp_path):
     client, db_path = make_client(tmp_path)
     upsert_session(db_path, _session("M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"))
 
@@ -104,6 +120,80 @@ def test_api_routes_require_bearer_not_cookie(tmp_path):
     # Cookie alone (no Authorization header) must not authorize /api.
     resp = client.get("/api/sessions")
     assert resp.status_code == 401
+
+
+def test_raw_api_token_as_cookie_does_not_authenticate(tmp_path):
+    client, _ = make_client(tmp_path)
+    client.cookies.set("darkroom_token", TOKEN)
+    resp = client.get("/", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"].startswith("/login")
+
+
+def test_tampered_cookie_redirects_to_login(tmp_path):
+    client, _ = make_client(tmp_path)
+    login(client)
+    good_cookie = client.cookies.get("darkroom_token")
+    expiry, sig = good_cookie.split(".", 1)
+    tampered = f"{expiry}.{'f' * len(sig)}"
+    client.cookies.set("darkroom_token", tampered)
+
+    resp = client.get("/", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"].startswith("/login")
+
+
+def test_expired_cookie_redirects_to_login(tmp_path):
+    client, _ = make_client(tmp_path)
+    expired = auth.mint_cookie(UI_HASH, max_age_seconds=-1)
+    client.cookies.set("darkroom_token", expired)
+
+    resp = client.get("/", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"].startswith("/login")
+
+
+def test_login_query_param_token_no_longer_logs_in(tmp_path):
+    client, _ = make_client(tmp_path)
+    resp = client.get(f"/login?token={TOKEN}", follow_redirects=False)
+    assert resp.status_code == 200
+    assert "darkroom_token" not in resp.cookies
+    # Confirm we're actually still logged out.
+    resp = client.get("/", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"].startswith("/login")
+
+
+def test_sliding_refresh_resets_cookie_on_authenticated_hit(tmp_path):
+    client, _ = make_client(tmp_path)
+    login(client)
+    first_cookie = client.cookies.get("darkroom_token")
+
+    resp = client.get("/")
+    assert resp.status_code == 200
+    refreshed_cookie = resp.cookies.get("darkroom_token")
+    assert refreshed_cookie is not None
+    assert auth.verify_cookie(UI_HASH, refreshed_cookie)
+
+
+def test_login_rate_limit_blocks_after_five_failures(tmp_path):
+    client, _ = make_client(tmp_path)
+    for _ in range(5):
+        resp = client.post("/login", data={"password": "wrong", "next": "/"})
+        assert resp.status_code == 400
+
+    resp = client.post("/login", data={"password": "wrong", "next": "/"})
+    assert resp.status_code == 429
+
+
+def test_login_rate_limit_blocks_correct_password_while_throttled(tmp_path):
+    client, _ = make_client(tmp_path)
+    for _ in range(5):
+        client.post("/login", data={"password": "wrong", "next": "/"})
+
+    resp = client.post("/login", data={"password": UI_PASSWORD, "next": "/"})
+    assert resp.status_code == 429
+    assert "darkroom_token" not in resp.cookies
 
 
 # ---------------------------------------------------------------------------
@@ -242,7 +332,7 @@ def test_login_page_renders_without_auth(tmp_path):
     resp = client.get("/login")
     assert resp.status_code == 200
     assert "DARKR" in resp.text
-    assert 'name="token"' in resp.text
+    assert 'name="password"' in resp.text
 
 
 # ---------------------------------------------------------------------------

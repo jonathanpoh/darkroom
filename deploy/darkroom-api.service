@@ -8,7 +8,7 @@ Group=claude
 EnvironmentFile=/etc/darkroom/env
 Environment=DARKROOM_CATALOG=/var/lib/darkroom/astro_catalog.db
 WorkingDirectory=/opt/darkroom
-ExecStart=/opt/darkroom/.venv/bin/uvicorn --factory darkroom.webapi.app:create_app_from_env --host 0.0.0.0 --port 8000
+ExecStart=/opt/darkroom/.venv/bin/uvicorn --factory darkroom.webapi.app:create_app_from_env --host 0.0.0.0 --port 8000 --no-access-log
 Restart=on-failure
 
 [Install]

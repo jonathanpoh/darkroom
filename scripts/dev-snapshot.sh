@@ -25,8 +25,10 @@ LATEST=$(ssh -p "$SSH_PORT" -i "$KEY" -o BatchMode=yes "$NAS" \
 scp -O -P "$SSH_PORT" -i "$KEY" -o BatchMode=yes "$NAS:$LATEST" "$DEST_DIR/"
 SNAP="$DEST_DIR/$(basename "$LATEST")"
 echo "snapshot: $SNAP"
-echo "serving on http://127.0.0.1:$PORT — login token: \${DARKROOM_API_TOKEN:-dev}"
+echo "serving on http://127.0.0.1:$PORT — login password: ${DARKROOM_UI_PASSWORD:-dev}"
 
 cd "$(dirname "$0")/.."
+UI_HASH="${DARKROOM_UI_PASSWORD_HASH:-$(uv run python -m darkroom.webapi.passwd --hash "${DARKROOM_UI_PASSWORD:-dev}")}"
 DARKROOM_API_TOKEN="${DARKROOM_API_TOKEN:-dev}" DARKROOM_CATALOG="$SNAP" \
+    DARKROOM_UI_PASSWORD_HASH="$UI_HASH" \
     exec uv run uvicorn --factory darkroom.webapi.app:create_app_from_env --port "$PORT"

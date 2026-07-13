@@ -23,6 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from darkroom import catalog_db, config
+from darkroom.webapi import auth
 from darkroom.webapi.ui import COOKIE_NAME, SESSION_MAX_AGE_SECONDS, build_ui_router
 
 _STATIC_DIR = Path(__file__).parent / "static"
@@ -69,7 +70,7 @@ class StateIn(BaseModel):
     notes: str | None = None
 
 
-def create_app(db_path: Path, api_token: str) -> FastAPI:
+def create_app(db_path: Path, api_token: str, ui_password_hash: str) -> FastAPI:
     """Build the catalog API FastAPI app, bound to a single SQLite catalog file.
 
     The server owns the schema: `cataloger.init_db` runs once here, at app
@@ -228,9 +229,9 @@ def create_app(db_path: Path, api_token: str) -> FastAPI:
             exposure_sec=exposure_sec,
         )
 
-    app.include_router(build_ui_router(db_path, api_token))
+    app.include_router(build_ui_router(db_path, ui_password_hash))
     # No auth on static assets (CSS/JS/fonts) — nothing sensitive lives here,
-    # and the login page itself needs the CSS before a token is ever entered.
+    # and the login page itself needs the CSS before logging in.
     app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
     @app.middleware("http")
@@ -239,9 +240,11 @@ def create_app(db_path: Path, api_token: str) -> FastAPI:
         # machine used at least once per window never sees the login page.
         response = await call_next(request)
         cookie_token = request.cookies.get(COOKIE_NAME)
-        if cookie_token is not None and secrets.compare_digest(cookie_token, api_token):
+        if auth.verify_cookie(ui_password_hash, cookie_token):
             response.set_cookie(
-                COOKIE_NAME, cookie_token, httponly=True, samesite="lax",
+                COOKIE_NAME,
+                auth.mint_cookie(ui_password_hash, SESSION_MAX_AGE_SECONDS),
+                httponly=True, samesite="lax",
                 max_age=SESSION_MAX_AGE_SECONDS,
             )
         return response
@@ -250,11 +253,13 @@ def create_app(db_path: Path, api_token: str) -> FastAPI:
 
 
 def create_app_from_env() -> FastAPI:
-    """Build the app from environment: DARKROOM_API_TOKEN + DARKROOM_CATALOG.
+    """Build the app from environment: DARKROOM_API_TOKEN + DARKROOM_UI_PASSWORD_HASH
+    + DARKROOM_CATALOG.
 
     Used by the uvicorn factory deployment (see module docstring). Raises
-    RuntimeError if DARKROOM_API_TOKEN is unset or empty — the server must
-    not start without an auth token.
+    RuntimeError if DARKROOM_API_TOKEN or DARKROOM_UI_PASSWORD_HASH is unset
+    or empty — the server must not start without both an API auth token and
+    a UI password hash (see `darkroom.webapi.passwd` to generate the latter).
     """
     token = os.environ.get("DARKROOM_API_TOKEN")
     if not token:
@@ -262,5 +267,11 @@ def create_app_from_env() -> FastAPI:
             "DARKROOM_API_TOKEN environment variable must be set to a "
             "non-empty value to start the darkroom catalog API server."
         )
+    ui_password_hash = os.environ.get("DARKROOM_UI_PASSWORD_HASH")
+    if not ui_password_hash:
+        raise RuntimeError(
+            "DARKROOM_UI_PASSWORD_HASH environment variable must be set to a "
+            "non-empty value to start the darkroom catalog API server."
+        )
     db_path = config.resolve_catalog(None)
-    return create_app(db_path, token)
+    return create_app(db_path, token, ui_password_hash)

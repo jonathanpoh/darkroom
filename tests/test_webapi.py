@@ -4,13 +4,16 @@ import pytest
 from fastapi.testclient import TestClient
 
 from darkroom.webapi.app import create_app, create_app_from_env
+from darkroom.webapi.auth import hash_password
 
 TOKEN = "testtoken"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
+UI_PASSWORD = "test-password"
+UI_HASH = hash_password(UI_PASSWORD)  # scrypt is slow — hash once at module level
 
 
 def make_client(tmp_path) -> TestClient:
-    app = create_app(tmp_path / "catalog.db", TOKEN)
+    app = create_app(tmp_path / "catalog.db", TOKEN, UI_HASH)
     return TestClient(app)
 
 
@@ -372,12 +375,21 @@ def test_post_session_twice_is_idempotent_and_updates(tmp_path):
 
 def test_create_app_from_env_missing_token_raises(monkeypatch):
     monkeypatch.delenv("DARKROOM_API_TOKEN", raising=False)
+    monkeypatch.setenv("DARKROOM_UI_PASSWORD_HASH", UI_HASH)
+    with pytest.raises(RuntimeError):
+        create_app_from_env()
+
+
+def test_create_app_from_env_missing_ui_password_hash_raises(monkeypatch):
+    monkeypatch.setenv("DARKROOM_API_TOKEN", "envtoken")
+    monkeypatch.delenv("DARKROOM_UI_PASSWORD_HASH", raising=False)
     with pytest.raises(RuntimeError):
         create_app_from_env()
 
 
 def test_create_app_from_env_with_token_returns_app(tmp_path, monkeypatch):
     monkeypatch.setenv("DARKROOM_API_TOKEN", "envtoken")
+    monkeypatch.setenv("DARKROOM_UI_PASSWORD_HASH", UI_HASH)
     monkeypatch.setenv("DARKROOM_CATALOG", str(tmp_path / "env_catalog.db"))
     app = create_app_from_env()
     assert app is not None
