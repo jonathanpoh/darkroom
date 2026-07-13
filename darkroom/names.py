@@ -7,6 +7,7 @@ what lets darkroom/catalog.py (the read layer) avoid astropy entirely.
 """
 
 import re
+from pathlib import Path
 from typing import overload
 
 _DSLR_RE = re.compile(r"canon|nikon|sony|pentax|fuji", re.IGNORECASE)
@@ -100,6 +101,20 @@ def make_session_id(target: str, obs_date: str, ota: str, camera: str, filter_: 
     # A session legitimately shot bare would need to be flagged explicitly (future work).
     f = filter_ or "UnknownFilter"
     return f"{slug}_{date}_{ota}_{camera_slug}_{f}"
+
+
+def session_dest_rel(
+    target: str, obs_date: str, ota: str, camera: str, filter_: str | None
+) -> Path:
+    """Return relative destination path for a session's Lights/<filter>/ folder.
+
+    Single source of truth for `lights_path` derivation: `darkroom.ingest` computes
+    new sessions' destinations from this, and `catalog_db.update_session_fields`
+    recomputes `lights_path` from this on identity edits.
+    """
+    f = filter_ or "NoFilter"
+    folder = f"{obs_date}_{ota}_{_normalize_camera(camera)}"
+    return Path("01_Deep Sky Objects") / target / folder / "Lights" / f
 
 
 def _round_exposure(x):
