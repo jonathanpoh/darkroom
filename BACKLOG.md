@@ -579,7 +579,19 @@ default recompute). Related: U2 (filter cleanup queue) is a natural second UI vi
 
 ---
 
-### W10. Edit UI/API can't fix `lights_path`, and there's no way to delete a session
+### W10. Edit UI/API can't fix `lights_path`, and there's no way to delete a session — ✅ DONE
+
+> Shipped 2026-07-13 (`1cc9c61`, merged `109940d`): `session_dest_rel` moved to
+> `darkroom/names.py` (stays astropy-free; ingest re-imports it) as the single
+> source of truth for `lights_path` derivation. `update_session_fields` now
+> recomputes `lights_path` on any identity-field change — independent of whether
+> the session_id itself changed (a spacing-only target edit renames the folder
+> but keeps the slug); a NULL `lights_path` stays NULL. Delete path added:
+> `catalog_db.delete_session`, bearer-auth `DELETE /api/sessions/{id}`, and a
+> confirm-guarded delete button on the session edit page (redirects to the
+> target page, or `/` when it was the target's last session). Catalog row only —
+> archive files untouched. 13 new tests; suite 565 passed. Not yet deployed to
+> the LXC.
 
 The `/sessions/{session_id}` edit form and `PATCH /api/sessions/{id}` both
 correctly recompute `session_id` when an identity field (target/obs_date/
