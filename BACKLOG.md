@@ -460,18 +460,26 @@ tracked, with `tests/test_check_missing_object.py`). Remaining:
 > dropdowns (filter = any-session partial match); common names under
 > designations (hardcoded map v1 — decide `common_name` storage +
 > SIMBAD backfill later). Single dark theme by design.
-> **Auth-flow review (queued 2026-07-07):** current browser auth is the
-> raw API bearer token pasted into a login form and stored in a 90-day
-> HttpOnly cookie (`ui.py:login_submit`). Fine for LAN single-user, but
-> review before any exposure beyond the LAN (Tailscale is OK): consider
-> a separate UI secret (revocable independently of the API token),
-> cookie rotation/expiry on token change, and rate-limiting the login
-> form. No user accounts — it stays single-user.
-> **Scope addition 2026-07-12:** the bookmarkable login (`/login?token=...`,
-> `4e27f06`) puts the raw API bearer token in browser history and uvicorn
-> access logs on the LXC. Fold into the same review: either a short-lived
-> random login code instead of the raw token in the URL, or accept the
-> tradeoff deliberately and document it.
+> **Auth-flow review — ✅ RESOLVED 2026-07-13** (`79ac9c9`, pending deploy):
+> browser auth is now a real password login, fully decoupled from the API
+> bearer token (which stays `/api`-only and untouched). New
+> `darkroom/webapi/auth.py` (stdlib-only): scrypt password hash stored as
+> `DARKROOM_UI_PASSWORD_HASH` in `/etc/darkroom/env` (generate with
+> `python -m darkroom.webapi.passwd`), cookie is a stateless HMAC-signed
+> expiry stamp keyed on the hash string itself — so changing the password
+> invalidates every browser, and no browser ever holds an API credential.
+> The bookmarkable `/login?token=...` is REMOVED (that was the
+> history/access-log leak). Extras: per-IP login rate limit (5 failures/min,
+> checked before password verification) and `--no-access-log` on the
+> systemd unit. Sliding 90-day window unchanged. `scripts/dev-snapshot.sh`
+> mints a dev hash (password `dev`) at launch. 28 new tests; suite 593.
+> Deploy needs a one-time step: generate the hash on the LXC, add the env
+> var, `daemon-reload` + restart; each browser logs in once with the new
+> password. **Passkeys considered and deferred**: WebAuthn requires a
+> secure context + domain-based RP ID — impossible on
+> `http://192.168.2.217:8000`. Becomes feasible if the app ever moves
+> behind Tailscale Serve (HTTPS + ts.net domain); recorded as a possible
+> future upgrade, not queued.
 
 Captured 2026-07-05. **The build item** that W1–W8 were prep for: an
 always-on FastAPI app on a homelab LXC that both serves the edit UI *and* owns
