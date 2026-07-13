@@ -7,6 +7,7 @@ what lets darkroom/catalog.py (the read layer) avoid astropy entirely.
 """
 
 import re
+from typing import overload
 
 _DSLR_RE = re.compile(r"canon|nikon|sony|pentax|fuji", re.IGNORECASE)
 
@@ -56,7 +57,13 @@ _CAMERA_ALIASES = {
 }
 
 
-def _normalize_camera(name):
+@overload
+def _normalize_camera(name: str) -> str: ...
+@overload
+def _normalize_camera(name: None) -> None: ...
+
+
+def _normalize_camera(name: str | None) -> str | None:
     """Canonicalize a camera name: strip whitespace, then apply known aliases.
 
     Idempotent and safe on None. e.g. "Canon EOS 6D" and "CanonEOS6D" both
