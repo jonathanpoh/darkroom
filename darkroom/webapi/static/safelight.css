@@ -274,4 +274,36 @@ details[open] .rigsum .strip { visibility: hidden; }
 }
 .deleteform button:hover { background: var(--safelight); color: #fff; }
 
+/* ── filter-assignment queue (U2 phase 2) ───
+   Server-rendered list of suspect sessions (unknown/garbage filter values).
+   Reuses .dethead/.error/.backlink/.cleanup from above; this block only adds
+   what's genuinely new: the per-row card, its hint line, and the inline
+   fix form's selects/button (styled like .editform's, at compact size). */
+.qsection { margin-top: 24px; }
+.qsectitle { color: var(--ink-2); font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
+             font-weight: 500; margin: 0 0 4px; padding-top: 14px; border-top: 1px solid var(--hairline);
+             display: flex; align-items: baseline; gap: 8px; }
+.qsectitle .n { color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.qempty { color: var(--ink-3); font-size: 12px; padding: 8px 0; }
+.qrow { padding: 12px 0; border-bottom: 1px solid var(--hairline); }
+.qhead { display: flex; align-items: center; gap: 10px; }
+.qhead .tname { font-size: 14px; }
+.qbadge { color: var(--safelight-hi); font-size: 10px; letter-spacing: .08em; text-transform: uppercase;
+          border: 1px solid var(--safelight); border-radius: 2px; padding: 1px 6px; }
+.qmeta { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 4px; color: var(--ink-2); font-size: 12px;
+         font-variant-numeric: tabular-nums; }
+.qmeta .qcurrent { color: var(--ink); }
+.qhints { margin-top: 5px; display: flex; flex-direction: column; gap: 2px; }
+.qhint { color: var(--ink-3); font-size: 11.5px; }
+.qfixform { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.qfixform select {
+  background: var(--panel); border: 1px solid var(--hairline); color: var(--ink);
+  font: inherit; font-size: 12px; padding: 5px 8px; border-radius: 3px;
+}
+.qfixform button {
+  background: var(--safelight); border: none; color: #fff; padding: 5px 14px; border-radius: 3px;
+  cursor: pointer; font: inherit; font-size: 12px; letter-spacing: .06em; text-transform: uppercase;
+}
+.qfixform button:hover { background: var(--safelight-hi); }
+
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }

@@ -12,6 +12,16 @@ from typing import overload
 
 _DSLR_RE = re.compile(r"canon|nikon|sony|pentax|fuji", re.IGNORECASE)
 
+# Physical filters that have actually been used, in dropdown order. 'NoFilter'
+# means confirmed shot bare — distinct from NULL/'UnknownFilter', which mean
+# the filter is simply unknown (see make_session_id below). Used by the U2
+# filter-assignment cleanup queue (darkroom.webapi.ui) to tell a real filter
+# value apart from a null/garbage one.
+KNOWN_FILTERS = (
+    "L-Pro", "L-Extreme", "L-Synergy", "L-Ultimate",
+    "BaaderNeodymium", "AstronomikL2", "NoFilter",
+)
+
 
 def _format_gain(camera: str, gain: int) -> str:
     """Return 'ISO1600' for DSLRs or '200g' for astro cameras."""

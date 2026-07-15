@@ -1,0 +1,86 @@
+<!-- darkroom/templates/catalog/queue.html -->
+{% extends "base.html" %}
+{% block title %}darkroom — queue{% endblock %}
+{% block content %}
+<a class="backlink" href="/">&larr; back to targets</a>
+<div class="dethead">
+  <span><span class="tname display">Queue</span></span>
+  <span class="sub">{{ total_count }} session{{ '' if total_count == 1 else 's' }} need review</span>
+</div>
+
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+
+{% if pending_renames_count %}
+<div class="cleanup">
+  <span><b>{{ pending_renames_count }}</b> folder rename{{ '' if pending_renames_count == 1 else 's' }} pending — run <code>darkroom catalog apply-renames</code> on the Mac</span>
+</div>
+{% endif %}
+
+{% macro queue_row(s) %}
+<div class="qrow">
+  <div class="qhead">
+    <a class="tname" href="/sessions/{{ s.session_id | urlencode }}">{{ s.session_id }}</a>
+    {% if s.unknown_ota %}<span class="qbadge">unknown OTA</span>{% endif %}
+  </div>
+  <div class="qmeta">
+    <span class="qfield">{{ s.obs_date }}</span>
+    <span class="qfield">{{ s.camera or '—' }}</span>
+    <span class="qfield">{{ s.ota or '—' }}</span>
+    <span class="qfield">{{ s.exposure_sec ~ 's' if s.exposure_sec is not none else '—' }}</span>
+    <span class="qfield">gain {{ s.gain if s.gain is not none else '—' }}</span>
+    <span class="qfield">{{ s.frame_count }} frames</span>
+    <span class="qfield">{{ s.processed_state }}</span>
+    <span class="qfield qcurrent">filter: {{ s.filter or '—' }}</span>
+  </div>
+  {% if s.neighbour_filters or s.flat_hints %}
+  <div class="qhints">
+    {% if s.neighbour_filters %}
+    <span class="qhint">neighbours:
+      {%- for h in s.neighbour_filters %} {{ h.filter }}{% if h.camera %} · {{ h.camera }}{% endif %} · {{ h.obs_date }} (±{{ h.dist }}d){% if not loop.last %},{% endif %}{% endfor -%}
+    </span>
+    {% endif %}
+    {% if s.flat_hints %}
+    <span class="qhint">flats:
+      {%- for h in s.flat_hints %} {{ h.filter }} · {{ h.capture_date }} (±{{ h.dist }}d){% if not loop.last %},{% endif %}{% endfor -%}
+    </span>
+    {% endif %}
+  </div>
+  {% endif %}
+  <form class="qfixform" method="post" action="/queue/{{ s.session_id | urlencode }}/fix">
+    <select name="filter" required>
+      <option value="" disabled selected>filter…</option>
+      {% for f in known_filters %}
+      <option value="{{ f }}">{{ f }}</option>
+      {% endfor %}
+    </select>
+    {% if s.unknown_ota %}
+    <select name="ota">
+      <option value="">ota (unchanged)…</option>
+      {% for o in known_otas %}
+      <option value="{{ o }}">{{ o }}</option>
+      {% endfor %}
+    </select>
+    {% endif %}
+    <button type="submit">Fix</button>
+  </form>
+</div>
+{% endmacro %}
+
+<section class="qsection">
+  <h3 class="qsectitle">Unknown filter <span class="n">{{ unknown_rows | length }}</span></h3>
+  {% if unknown_rows %}
+    {% for s in unknown_rows %}{{ queue_row(s) }}{% endfor %}
+  {% else %}
+    <p class="qempty">Nothing here.</p>
+  {% endif %}
+</section>
+
+<section class="qsection">
+  <h3 class="qsectitle">Suspicious value <span class="n">{{ suspicious_rows | length }}</span></h3>
+  {% if suspicious_rows %}
+    {% for s in suspicious_rows %}{{ queue_row(s) }}{% endfor %}
+  {% else %}
+    <p class="qempty">Nothing here.</p>
+  {% endif %}
+</section>
+{% endblock %}

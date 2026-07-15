@@ -17,6 +17,7 @@ from __future__ import annotations
 import time
 import urllib.parse
 from collections import deque
+from datetime import date as date_cls
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from darkroom import catalog_db
+from darkroom.names import KNOWN_FILTERS
 from darkroom.webapi import auth
 from darkroom.webapi.common_names import common_name
 
@@ -146,6 +148,114 @@ def _build_aggregate(rows: list[dict]) -> list[dict]:
     return aggregate
 
 
+def _date_diff(a: str | None, b: str | None) -> int | None:
+    """Return |days between two ISO date strings|, or None if either is missing/unparseable."""
+    if not a or not b:
+        return None
+    try:
+        return abs((date_cls.fromisoformat(a) - date_cls.fromisoformat(b)).days)
+    except ValueError:
+        return None
+
+
+def _is_unknown_ota(ota: str | None) -> bool:
+    return ota is None or ota == "" or ota == "Unknown"
+
+
+def _neighbour_filters(row: dict, all_rows: list[dict], limit: int = 3) -> list[dict]:
+    """Other sessions of the same target with a known filter, nearest date first.
+
+    Same-camera matches rank ahead of other-camera matches at equal date
+    distance. Each hint carries `camera` only when it differs from `row`'s,
+    so the template can show it just for the cases where it matters.
+    """
+    candidates = []
+    for other in all_rows:
+        if other["session_id"] == row["session_id"]:
+            continue
+        if other["target"] != row["target"]:
+            continue
+        if other["filter"] not in KNOWN_FILTERS:
+            continue
+        dist = _date_diff(row["obs_date"], other["obs_date"])
+        if dist is None:
+            continue
+        same_camera = other["camera"] == row["camera"]
+        candidates.append((dist, 0 if same_camera else 1, other))
+    candidates.sort(key=lambda c: (c[0], c[1]))
+    hints = []
+    for dist, _, other in candidates[:limit]:
+        hints.append({
+            "filter": other["filter"],
+            "camera": None if other["camera"] == row["camera"] else other["camera"],
+            "obs_date": other["obs_date"],
+            "dist": dist,
+        })
+    return hints
+
+
+def _flat_hints(row: dict, flat_sets: list[dict], window_days: int = 7, limit: int = 3) -> list[dict]:
+    """Calibration Flat sets near this session's date, same camera (+ OTA if known)."""
+    candidates = []
+    for cal in flat_sets:
+        if cal["camera"] != row["camera"]:
+            continue
+        if not _is_unknown_ota(row["ota"]) and cal["ota"] != row["ota"]:
+            continue
+        dist = _date_diff(row["obs_date"], cal["capture_date"])
+        if dist is None or dist > window_days:
+            continue
+        candidates.append((dist, cal))
+    candidates.sort(key=lambda c: c[0])
+    return [
+        {"filter": cal["filter"], "capture_date": cal["capture_date"], "dist": dist}
+        for dist, cal in candidates[:limit]
+    ]
+
+
+def _build_queue(conn) -> tuple[list[dict], list[dict]]:
+    """Return (unknown_filter_rows, suspicious_value_rows), each obs_date-desc.
+
+    'unknown filter' = filter IS NULL or 'UnknownFilter' (never parsed).
+    'suspicious value' = filter is set but isn't one of KNOWN_FILTERS (the
+    panel-name-in-filter-column garbage rows). Every row also carries an
+    `unknown_ota` badge flag and context hints (neighbour sessions, nearby
+    flats) to jog the user's memory when fixing it inline.
+    """
+    all_rows = catalog_db.query_sessions(conn)
+    flat_sets = catalog_db.query_calibration_sets(conn, frame_type="Flat")
+
+    unknown_rows: list[dict] = []
+    suspicious_rows: list[dict] = []
+    for row in all_rows:
+        filt = row["filter"]
+        if filt is None or filt == "UnknownFilter":
+            section = unknown_rows
+        elif filt not in KNOWN_FILTERS:
+            section = suspicious_rows
+        else:
+            continue
+
+        entry = dict(row)
+        entry["unknown_ota"] = _is_unknown_ota(row["ota"])
+        entry["neighbour_filters"] = _neighbour_filters(row, all_rows)
+        entry["flat_hints"] = _flat_hints(row, flat_sets)
+        section.append(entry)
+
+    unknown_rows.sort(key=lambda r: r["obs_date"] or "", reverse=True)
+    suspicious_rows.sort(key=lambda r: r["obs_date"] or "", reverse=True)
+    return unknown_rows, suspicious_rows
+
+
+def _known_otas(conn) -> list[str]:
+    """Distinct non-null, non-'Unknown' OTA values on record — for the fix form's select."""
+    rows = conn.execute(
+        "SELECT DISTINCT ota FROM sessions "
+        "WHERE ota IS NOT NULL AND ota != '' AND ota != 'Unknown' ORDER BY ota"
+    ).fetchall()
+    return [r[0] for r in rows]
+
+
 def build_ui_router(db_path: Path, ui_password_hash: str) -> APIRouter:
     """Build the Jinja2 UI router, bound to the DB + UI password hash."""
     db_path = Path(db_path)
@@ -259,6 +369,81 @@ def build_ui_router(db_path: Path, ui_password_hash: str) -> APIRouter:
             "target.html",
             {"data": aggregate, "target": aggregate[0]["target"]},
         )
+
+    def _queue_context() -> dict:
+        conn = _get_conn()
+        try:
+            unknown_rows, suspicious_rows = _build_queue(conn)
+            known_otas = _known_otas(conn)
+            pending_renames = catalog_db.list_pending_renames(conn)
+        finally:
+            conn.close()
+        return {
+            "unknown_rows": unknown_rows,
+            "suspicious_rows": suspicious_rows,
+            "total_count": len(unknown_rows) + len(suspicious_rows),
+            "known_filters": KNOWN_FILTERS,
+            "known_otas": known_otas,
+            "pending_renames_count": len(pending_renames),
+        }
+
+    @router.get("/queue", response_class=HTMLResponse)
+    def queue(
+        request: Request,
+        darkroom_token: str | None = Cookie(default=None),
+    ):
+        redirect = _require_auth(request, darkroom_token)
+        if redirect:
+            return redirect
+
+        ctx = _queue_context()
+        ctx["error"] = None
+        return templates.TemplateResponse(request, "queue.html", ctx)
+
+    @router.post("/queue/{session_id}/fix")
+    async def queue_fix(
+        request: Request,
+        session_id: str,
+        darkroom_token: str | None = Cookie(default=None),
+    ):
+        redirect = _require_auth(request, darkroom_token)
+        if redirect:
+            return redirect
+
+        form_data = await request.form()
+        filt = form_data.get("filter")
+        ota_raw = form_data.get("ota")
+        ota = ota_raw.strip() if isinstance(ota_raw, str) else ota_raw
+
+        if filt not in KNOWN_FILTERS:
+            ctx = _queue_context()
+            ctx["error"] = (
+                f"{session_id}: filter must be one of {', '.join(KNOWN_FILTERS)}"
+            )
+            return templates.TemplateResponse(
+                request, "queue.html", ctx, status_code=400
+            )
+
+        changed: dict[str, Any] = {"filter": filt}
+        if ota:
+            changed["ota"] = ota
+
+        conn = _get_conn()
+        try:
+            try:
+                updated = catalog_db.update_session_fields(conn, session_id, **changed)
+            except ValueError as e:
+                ctx = _queue_context()
+                ctx["error"] = f"{session_id}: {e}"
+                return templates.TemplateResponse(
+                    request, "queue.html", ctx, status_code=400
+                )
+            if not updated:
+                raise HTTPException(status_code=404, detail="session not found")
+        finally:
+            conn.close()
+
+        return RedirectResponse("/queue", status_code=303)
 
     @router.post("/sessions/{session_id}/state")
     def set_state(

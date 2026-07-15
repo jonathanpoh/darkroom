@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from darkroom import catalog_db
-from darkroom.cataloger import upsert_session
+from darkroom.cataloger import upsert_calibration_set, upsert_session
 from darkroom.webapi import auth
 from darkroom.webapi.app import create_app
 from darkroom.webapi.auth import hash_password
@@ -61,6 +61,24 @@ def _session(
         "dec_deg": 69.07,
         "lights_path": f"01_Deep Sky Objects/{target}/{obs_date}_{ota}_{camera}/Lights/{filter}",
         "notes": "",
+    }
+    base.update(extra)
+    return base
+
+
+def _cal_set(set_id, frame_type="Flat", camera="ZWOASI585MCPro", ota="FRA400", **extra):
+    base = {
+        "set_id": set_id,
+        "frame_type": frame_type,
+        "camera": camera,
+        "ota": ota,
+        "filter": "L-Pro",
+        "gain": 200,
+        "exposure_sec": 0.02,
+        "temperature_c": -20.0,
+        "frame_count": 30,
+        "capture_date": "2026-02-19",
+        "folder_path": "00_Calibration/Flats/FRA400_ZWOASI585MCPro_L-Pro/2026-02-19",
     }
     base.update(extra)
     return base
@@ -577,3 +595,218 @@ def test_delete_unknown_session_404(tmp_path):
     login(client)
     resp = client.post("/sessions/does-not-exist/delete", follow_redirects=False)
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# filter-assignment cleanup queue (U2 phase 2, GET /queue, POST .../fix)
+# ---------------------------------------------------------------------------
+
+
+def test_queue_unauthenticated_redirects_to_login(tmp_path):
+    client, _ = make_client(tmp_path)
+    resp = client.get("/queue", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"].startswith("/login")
+
+
+def test_queue_lists_null_and_unknown_filter_but_not_known_filter(tmp_path):
+    client, db_path = make_client(tmp_path)
+    null_sid = "M81_20260219_FRA400_ZWOASI585MCPro_UnknownFilter"
+    upsert_session(db_path, _session(null_sid, filter=None, obs_date="2026-02-19"))
+    unknown_sid = "M81_20260220_FRA400_ZWOASI585MCPro_UnknownFilter"
+    upsert_session(
+        db_path,
+        _session(unknown_sid, filter="UnknownFilter", obs_date="2026-02-20"),
+    )
+    known_sid = "M81_20260221_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db_path, _session(known_sid, obs_date="2026-02-21", filter="L-Pro"))
+    login(client)
+
+    resp = client.get("/queue")
+    assert resp.status_code == 200
+    assert null_sid in resp.text
+    assert unknown_sid in resp.text
+    assert known_sid not in resp.text
+    assert "2 sessions need review" in resp.text  # total_count header
+
+
+def test_queue_suspicious_value_section(tmp_path):
+    client, db_path = make_client(tmp_path)
+    garbage_sid = "IC4604_20260219_FRA400_ZWOASI585MCPro_IC4604_1-1"
+    upsert_session(
+        db_path,
+        _session(garbage_sid, target="IC 4604", filter="IC4604_1-1", obs_date="2026-02-19"),
+    )
+    login(client)
+
+    resp = client.get("/queue")
+    assert resp.status_code == 200
+    assert garbage_sid in resp.text
+    assert "Suspicious value" in resp.text
+    assert "IC4604_1-1" in resp.text
+
+
+def test_queue_unknown_ota_badge(tmp_path):
+    client, db_path = make_client(tmp_path)
+    bad_ota_sid = "M81_20260219_Unknown_ZWOASI585MCPro_UnknownFilter"
+    upsert_session(
+        db_path,
+        _session(bad_ota_sid, ota="Unknown", filter=None, obs_date="2026-02-19"),
+    )
+    ok_ota_sid = "M81_20260220_FRA400_ZWOASI585MCPro_UnknownFilter"
+    upsert_session(
+        db_path,
+        _session(ok_ota_sid, ota="FRA400", filter=None, obs_date="2026-02-20"),
+    )
+    login(client)
+
+    resp = client.get("/queue")
+    assert resp.status_code == 200
+    # Both suspect rows render; only the bad-OTA one carries the badge.
+    bad_block = resp.text.split(bad_ota_sid, 1)[1].split("qrow", 1)[0]
+    ok_block = resp.text.split(ok_ota_sid, 1)[1].split("qrow", 1)[0]
+    assert "unknown OTA" in bad_block
+    assert "unknown OTA" not in ok_block
+
+
+def test_queue_neighbour_filter_hint(tmp_path):
+    client, db_path = make_client(tmp_path)
+    suspect_sid = "M81_20260219_FRA400_ZWOASI585MCPro_UnknownFilter"
+    upsert_session(
+        db_path,
+        _session(suspect_sid, filter=None, obs_date="2026-02-19"),
+    )
+    neighbour_sid = "M81_20260221_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(
+        db_path,
+        _session(neighbour_sid, filter="L-Pro", obs_date="2026-02-21"),
+    )
+    login(client)
+
+    resp = client.get("/queue")
+    assert resp.status_code == 200
+    assert "L-Pro" in resp.text
+    assert "±2d" in resp.text
+
+
+def test_queue_flat_hint(tmp_path):
+    client, db_path = make_client(tmp_path)
+    suspect_sid = "M81_20260219_FRA400_ZWOASI585MCPro_UnknownFilter"
+    upsert_session(
+        db_path,
+        _session(suspect_sid, filter=None, obs_date="2026-02-19"),
+    )
+    upsert_calibration_set(
+        db_path,
+        _cal_set(
+            "Flat_FRA400_ZWOASI585MCPro_L-Extreme_20260222",
+            filter="L-Extreme",
+            capture_date="2026-02-22",
+        ),
+    )
+    login(client)
+
+    resp = client.get("/queue")
+    assert resp.status_code == 200
+    assert "flats:" in resp.text
+    assert "L-Extreme" in resp.text
+    assert "2026-02-22" in resp.text
+
+
+def test_queue_fix_valid_filter_updates_row_and_creates_pending_rename(tmp_path):
+    client, db_path = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_UnknownFilter"
+    upsert_session(
+        db_path,
+        _session(sid, filter=None, obs_date="2026-02-19"),
+    )
+    login(client)
+
+    resp = client.post(
+        f"/queue/{sid}/fix", data={"filter": "L-Extreme"}, follow_redirects=False
+    )
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/queue"
+
+    conn = catalog_db.open_db(db_path)
+    try:
+        old_rows = catalog_db.query_sessions(conn, session_id=sid)
+        new_sid = sid.replace("UnknownFilter", "L-Extreme")
+        new_rows = catalog_db.query_sessions(conn, session_id=new_sid)
+        pending = catalog_db.list_pending_renames(conn)
+    finally:
+        conn.close()
+    assert old_rows == []
+    assert len(new_rows) == 1
+    assert new_rows[0]["filter"] == "L-Extreme"
+    assert len(pending) == 1
+    assert pending[0]["session_id"] == new_sid
+
+    # Fixed row drops out of the queue on reload.
+    resp = client.get("/queue")
+    assert new_sid not in resp.text
+
+
+def test_queue_fix_invalid_filter_rejected(tmp_path):
+    client, db_path = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_UnknownFilter"
+    upsert_session(
+        db_path,
+        _session(sid, filter=None, obs_date="2026-02-19"),
+    )
+    login(client)
+
+    resp = client.post(f"/queue/{sid}/fix", data={"filter": "NotARealFilter"})
+    assert resp.status_code == 400
+
+    conn = catalog_db.open_db(db_path)
+    try:
+        rows = catalog_db.query_sessions(conn, session_id=sid)
+    finally:
+        conn.close()
+    assert rows[0]["filter"] is None
+
+
+def test_queue_fix_collision_surfaced_not_raised(tmp_path):
+    client, db_path = make_client(tmp_path)
+    existing_sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db_path, _session(existing_sid, filter="L-Pro", obs_date="2026-02-19"))
+    suspect_sid = "M81_20260219_FRA400_ZWOASI585MCPro_UnknownFilter"
+    upsert_session(
+        db_path,
+        _session(suspect_sid, filter=None, obs_date="2026-02-19"),
+    )
+    login(client)
+
+    # Fixing suspect_sid's filter to L-Pro recomputes a session_id that
+    # collides with existing_sid — update_session_fields raises ValueError,
+    # which must be surfaced as an error banner, not a 500.
+    resp = client.post(f"/queue/{suspect_sid}/fix", data={"filter": "L-Pro"})
+    assert resp.status_code == 400
+    assert suspect_sid in resp.text
+
+    conn = catalog_db.open_db(db_path)
+    try:
+        rows = catalog_db.query_sessions(conn, session_id=suspect_sid)
+    finally:
+        conn.close()
+    assert rows[0]["filter"] is None  # untouched
+
+
+def test_queue_pending_renames_banner_shown_when_nonempty(tmp_path):
+    client, db_path = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_UnknownFilter"
+    upsert_session(
+        db_path,
+        _session(sid, filter=None, obs_date="2026-02-19"),
+    )
+    login(client)
+
+    resp = client.get("/queue")
+    assert "folder renames pending" not in resp.text
+
+    client.post(f"/queue/{sid}/fix", data={"filter": "L-Extreme"})
+
+    resp = client.get("/queue")
+    assert "<b>1</b> folder rename" in resp.text
+    assert "darkroom catalog apply-renames" in resp.text
