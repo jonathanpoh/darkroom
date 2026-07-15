@@ -26,6 +26,7 @@ pipeline); now one package with subcommands:
 | `darkroom catalog scan-processed --archive <path> [--apply]` | Reconcile processed_state from on-disk output artifacts (dry-run by default) |
 | `darkroom catalog list [--target X]` | Browse the catalog |
 | `darkroom catalog migrate-archive --archive <path> [--dry-run]` | Migrate archive from old filter-in-folder layout to `Lights/<filter>/` |
+| `darkroom catalog apply-renames --archive <path> [--apply]` | Execute archive folder moves owed by catalog identity edits (pending_renames ledger; dry-run by default) |
 | `darkroom ingest scan --asiair <path> [--manifest F]` / `ingest review F` / `ingest commit [F]` | Archive an ASIAir session (scan → review → commit) |
 | `darkroom wbpp --target X [--date Y \| --session ID] [--flat-window DAYS]` | Build SESSION_N symlink dirs for PixInsight |
 | `darkroom finish --target X [--date Y]` | Copy WBPP stacks back to archive and mark sessions processed |

@@ -659,7 +659,41 @@ bursty imaging runs, and mismatches fail with a shrug instead of showing what
   `--date`, no `--from/--to`). Internal refactor: split "resolve sessions" from
   "build dirs" in `prep.py:cmd_prep` so picker and flags feed the same build path.
 
-### U2. Filter-assignment cleanup queue for `NoFilter`/`UnknownFilter` sessions
+### U2. Filter-assignment cleanup queue for `NoFilter`/`UnknownFilter` sessions — ✅ DONE
+
+> Shipped 2026-07-15 (`1724e5a`, `6fbb17d`, `a43dec6`), pending deploy to the
+> LXC. Three pieces:
+> **1. Pending-renames ledger** — the both-sides constraint resolved: the LXC
+> has no NAS mount, so identity edits that change `lights_path` record the
+> owed folder move in a new `pending_renames` table (one coalesced row per
+> session; `old_path` stays pinned to what's on disk across repeated edits;
+> editing back to the on-disk identity deletes the row; `delete_session`
+> clears it). New Mac-side `darkroom catalog apply-renames --archive PATH
+> [--apply]` (dry-run default) fetches the ledger over the API, moves folders,
+> prunes emptied dirs (never at/above the archive root), detects already-done
+> renames, skips conflicts/missing, and acks. Also closes the W10 gap where
+> edits silently orphaned folders. `GET/DELETE /api/pending-renames`.
+> **2. `/queue` view** on the W9 app — sessions with filter NULL/`UnknownFilter`
+> ("unknown") or a non-`KNOWN_FILTERS` value ("suspicious" — the mosaic-panel-
+> in-filter-column rows), unknown-OTA badges, hints (neighbouring same-target
+> sessions' filters, Flat sets ±7 days), inline fix via the standard
+> `update_session_fields` machinery. `KNOWN_FILTERS` lives in `names.py`.
+> **3. Target merge/rename** — `rename_target` = N per-row identity edits (so
+> ledger/session_id/lights_path recompute fire per row; same-night panel
+> collisions are per-row errors, batch continues); handles normalization-drift
+> (`SH2-103`→`Sh2-103`) via raw+normalized matching. `POST /api/targets/rename`
+> + Targets section on `/queue` with suggestions (panel suffix `_N-M`,
+> duplicated designations, drift) and a manual merge form.
+> Verified end-to-end against a live server: login → queue → fix → ledger →
+> `apply-renames` dry-run → `--apply` moved folders + acked. Suite 651.
+> **Deploy**: restart webapi on the LXC (init_db migrates the live DB —
+> creates `pending_renames` at startup), then work the queue in the browser
+> and run `apply-renames` on the Mac against the NAS mount afterwards.
+> Live-data note (2026-07-15): 92 filter-suspect sessions, 9 panel-name
+> filter rows, ~7 dup/suspect targets (`M 82 M 82`, `M 81 M 82`, `NGC 281W`,
+> `IC 4604_*`); many legacy `lights_path` values won't exist on disk under
+> their recorded names — expect `missing`/`conflict` rows in the first
+> `apply-renames` dry run; they stay pending and are harmless.
 - ASIAir doesn't write FILTER headers and Jonathan didn't always log filters, so
   the archive has sessions cataloged `NoFilter`/`UnknownFilter` that may be
   wrong — which silently poisons flat matching (`find_flats` keys on filter).
@@ -850,6 +884,8 @@ table), and whether to compute stats at scan time or store raw logs.
    W9 item for the full sketch.
 8. **U2/U3** filter cleanup queue + interactive ingest review (U2 is a natural
    second UI view on the W9 app; U3 benefits from U1's picker helpers).
+   U2 ✅ DONE 2026-07-15 (ledger + apply-renames + /queue + target merge;
+   pending LXC deploy). U3 remains.
 9. **R1–R5, B7** cleanup as capacity allows. Litestream (continuous DB
    replication) also lands here as an optional upgrade over the nightly backup.
 </content>
