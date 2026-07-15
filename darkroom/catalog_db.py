@@ -355,6 +355,65 @@ def update_session_fields(conn: sqlite3.Connection, session_id: str, **fields) -
     return True
 
 
+def rename_target(conn: sqlite3.Connection, old_target: str, new_target: str) -> dict:
+    """Rename a target across every session that matches it (U2 phase 3).
+
+    Merges duplicate/suspect target names (mosaic panels cataloged as
+    distinct targets, duplicated designations like 'M 82 M 82', spacing/
+    casing variants) by delegating each matching row to
+    `update_session_fields(conn, session_id, target=new_target)` rather than
+    a single bulk UPDATE. That's deliberate: identity-edit side effects
+    (recomputed session_id, recomputed lights_path, a pending_renames ledger
+    entry) must fire per row exactly as they would for a manual edit — a
+    merge is nothing more than N identity edits sharing a new target.
+
+    Both `old_target` and `new_target` are normalised via `_normalize_target`
+    before matching/writing (same canonicalisation `query_sessions` applies
+    to its `target` filter, including COLLATE NOCASE matching). Rows are
+    matched against the raw *and* normalised form of `old_target`, and rows
+    whose stored target already equals `new_norm` exactly are skipped — so a
+    normalisation-drift fix like 'SH2-103' -> 'Sh2-103' (where old and new
+    share a normalised form) still reaches the denormalised rows, while a
+    genuine no-op ('M 81' -> 'M 81') matches nothing. Raises ValueError if
+    `new_target` is empty/whitespace-only.
+
+    Returns {"renamed": <int>, "errors": [{"session_id", "error"}, ...],
+    "total": <int>}. `total` counts the matched rows that actually needed a
+    change (renamed + errors == total). A collision on one row (e.g. two
+    mosaic panels shot the same night collapsing to an identical session
+    identity once merged) is recorded as a per-row error and does NOT stop
+    the remaining rows from being processed — this is a batch operation
+    where a partial success is still useful progress.
+    """
+    if new_target is None or not new_target.strip():
+        raise ValueError("new_target must not be empty")
+    new_norm = _normalize_target(new_target)
+    old_norm = _normalize_target(old_target)
+    old_raw = old_target.strip()
+
+    rows = conn.execute(
+        "SELECT session_id, target FROM sessions "
+        "WHERE (target = ? COLLATE NOCASE OR target = ? COLLATE NOCASE) "
+        "ORDER BY obs_date, session_id",
+        (old_norm, old_raw),
+    ).fetchall()
+
+    renamed = 0
+    errors: list[dict] = []
+    total = 0
+    for row in rows:
+        if row["target"] == new_norm:
+            continue
+        total += 1
+        try:
+            update_session_fields(conn, row["session_id"], target=new_norm)
+        except ValueError as e:
+            errors.append({"session_id": row["session_id"], "error": str(e)})
+        else:
+            renamed += 1
+    return {"renamed": renamed, "errors": errors, "total": total}
+
+
 def delete_session(conn: sqlite3.Connection, session_id: str) -> bool:
     """Delete a session row by session_id, along with any pending_renames row
     owed for it (U2 — a deleted session can't have a rename left dangling).

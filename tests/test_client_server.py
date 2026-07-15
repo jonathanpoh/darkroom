@@ -266,6 +266,29 @@ def test_pending_renames_roundtrip_parity(backends):
         assert b.ack_pending_rename(rename_id) is False
 
 
+def test_rename_target_parity(backends):
+    local, http = backends
+    sid1 = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    sid2 = "M81_20260220_FRA400_ZWOASI585MCPro_L-Extreme"
+    for b in (local, http):
+        b.upsert_session(_session(sid1, target="M 81", obs_date="2026-02-19"))
+        b.upsert_session(
+            _session(sid2, target="M 81", obs_date="2026-02-20", filter="L-Extreme")
+        )
+
+        result = b.rename_target("M 81", "M 82")
+        assert result["renamed"] == 2
+        assert result["total"] == 2
+        assert result["errors"] == []
+        assert len(b.query_sessions(target="M 82")) == 2
+
+    # HttpBackend's 404 (no matching sessions) maps to a zero-result dict,
+    # not an exception — same contract as update_session_fields's False.
+    assert http.rename_target("Nonexistent Target", "Something Else") == {
+        "renamed": 0, "errors": [], "total": 0,
+    }
+
+
 def test_find_darks_parity(backends):
     local, http = backends
     dark = _cal_set(

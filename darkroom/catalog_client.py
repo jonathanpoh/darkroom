@@ -39,6 +39,8 @@ class CatalogBackend(Protocol):
 
     def update_session_fields(self, session_id: str, **fields) -> bool: ...
 
+    def rename_target(self, old_target: str, new_target: str) -> dict: ...
+
     def query_sessions(
         self,
         *,
@@ -162,6 +164,19 @@ class LocalBackend:
         conn = self._open()
         try:
             return update_session_fields(conn, session_id, **fields)
+        finally:
+            conn.close()
+
+    def rename_target(self, old_target: str, new_target: str) -> dict:
+        from darkroom.catalog_db import rename_target
+
+        # Same rationale as update_session_fields: rename_target writes to
+        # pending_renames via update_session_fields internally, so a legacy
+        # pre-U2 DB file needs its schema brought current first.
+        self._ensure_schema()
+        conn = self._open()
+        try:
+            return rename_target(conn, old_target, new_target)
         finally:
             conn.close()
 
@@ -345,6 +360,19 @@ class HttpBackend:
             raise ValueError(resp.json()["detail"])
         resp.raise_for_status()
         return True
+
+    def rename_target(self, old_target: str, new_target: str) -> dict:
+        resp = self._client.post(
+            "/api/targets/rename",
+            json={"old_target": old_target, "new_target": new_target},
+        )
+        self._check(resp)
+        if resp.status_code == 404:
+            return {"renamed": 0, "errors": [], "total": 0}
+        if resp.status_code == 400:
+            raise ValueError(resp.json()["detail"])
+        resp.raise_for_status()
+        return resp.json()
 
     # -- reads -----------------------------------------------------------
 

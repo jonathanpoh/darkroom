@@ -8,6 +8,7 @@
   <span class="sub">{{ total_count }} session{{ '' if total_count == 1 else 's' }} need review</span>
 </div>
 
+{% if success %}<div class="success">{{ success }}</div>{% endif %}
 {% if error %}<div class="error">{{ error }}</div>{% endif %}
 
 {% if pending_renames_count %}
@@ -82,5 +83,37 @@
   {% else %}
     <p class="qempty">Nothing here.</p>
   {% endif %}
+</section>
+
+<section class="qsection">
+  <h3 class="qsectitle">Targets <span class="n">{{ target_suggestions | length }}</span></h3>
+  {% if target_suggestions %}
+    {% for sug in target_suggestions %}
+    <div class="qrow">
+      <div class="qhead">
+        <span class="tname">{{ sug.target }}</span>
+        <span class="qcount">{{ sug.count }} session{{ '' if sug.count == 1 else 's' }}</span>
+      </div>
+      <form class="qfixform" method="post" action="/queue/targets/rename">
+        <input type="hidden" name="old_target" value="{{ sug.target }}">
+        <input type="hidden" name="new_target" value="{{ sug.suggested }}">
+        <button type="submit">Merge into {{ sug.suggested }}</button>
+      </form>
+    </div>
+    {% endfor %}
+  {% else %}
+    <p class="qempty">Nothing here.</p>
+  {% endif %}
+
+  <form class="qfixform targetmerge" method="post" action="/queue/targets/rename">
+    <select name="old_target" required>
+      <option value="" disabled selected>target…</option>
+      {% for t, n in target_counts %}
+      <option value="{{ t }}">{{ t }} ({{ n }})</option>
+      {% endfor %}
+    </select>
+    <input type="text" name="new_target" placeholder="new target name" required>
+    <button type="submit">Merge</button>
+  </form>
 </section>
 {% endblock %}

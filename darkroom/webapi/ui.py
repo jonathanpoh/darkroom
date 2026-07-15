@@ -14,9 +14,10 @@ actually need it.
 
 from __future__ import annotations
 
+import re
 import time
 import urllib.parse
-from collections import deque
+from collections import Counter, deque
 from datetime import date as date_cls
 from pathlib import Path
 from typing import Any
@@ -26,7 +27,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from darkroom import catalog_db
-from darkroom.names import KNOWN_FILTERS
+from darkroom.names import KNOWN_FILTERS, _normalize_target
 from darkroom.webapi import auth
 from darkroom.webapi.common_names import common_name
 
@@ -256,6 +257,90 @@ def _known_otas(conn) -> list[str]:
     return [r[0] for r in rows]
 
 
+def _all_targets(conn) -> list[str]:
+    """Every session's target value, one entry per session (repeats expected).
+
+    Feeds `_target_suggestions` (which needs per-target session counts) and
+    the manual merge form's target dropdown (session counts there come from
+    the same list via Counter).
+    """
+    rows = conn.execute(
+        "SELECT target FROM sessions WHERE target IS NOT NULL"
+    ).fetchall()
+    return [r[0] for r in rows]
+
+
+# Mosaic panel suffix, e.g. "IC 4604_1-1" -> base "IC 4604" (U2 phase 3
+# heuristic a). Suggested even when the base isn't itself an existing target.
+_PANEL_SUFFIX_RE = re.compile(r"^(.*)_\d+-\d+$")
+
+# Two catalog-style designations back to back with nothing else, e.g.
+# "M 82 M 82" (duplicated) or "M 81 M 82" (two different designations,
+# ambiguous unless the first is itself an existing target) — heuristic b.
+_DOUBLE_DESIGNATION_RE = re.compile(r"^([A-Za-z]+\s*\d+[\w-]*)\s+([A-Za-z]+\s*\d+[\w-]*)$")
+
+
+def _target_suggestions(targets: list[str]) -> list[dict]:
+    """Suggest merge targets for suspect duplicate/variant target names (U2 phase 3).
+
+    Pure — no DB access. `targets` is every session's target value, one
+    entry per session (repeats expected and used to compute each
+    suggestion's `count`); candidate names are the distinct values within it.
+
+    Heuristics are tried in priority order per target, first match wins:
+      a. Mosaic panel suffix (`_N-M` at the end) -> strip it, normalize.
+      b. Duplicated designation ("M 82 M 82" -> "M 82") or two distinct
+         designations where the first is itself an existing target
+         ("M 81 M 82" -> "M 81", but ONLY if "M 81" already exists —
+         otherwise it's ambiguous and no suggestion is made).
+      c. Normalization drift: `_normalize_target(target) != target`.
+
+    A target that matches nothing, or whose only candidate suggestion is
+    itself (a self-map), gets no entry in the result.
+    """
+    counts = Counter(targets)
+    distinct = sorted(counts)
+    distinct_normalized = {_normalize_target(t) for t in distinct}
+
+    suggestions: list[dict] = []
+    for target in distinct:
+        suggested: str | None = None
+
+        m = _PANEL_SUFFIX_RE.match(target)
+        if m:
+            base = _normalize_target(m.group(1).strip())
+            if base:
+                suggested = base
+
+        if suggested is None:
+            m = _DOUBLE_DESIGNATION_RE.match(target)
+            if m:
+                d1 = _normalize_target(m.group(1).strip())
+                d2 = _normalize_target(m.group(2).strip())
+                if d1 == d2:
+                    suggested = d1
+                elif d1 in distinct_normalized:
+                    suggested = d1
+                # else: two different designations and the first isn't a
+                # known target — ambiguous, no suggestion from this rule.
+
+        if suggested is None:
+            norm = _normalize_target(target)
+            if norm != target:
+                suggested = norm
+
+        if suggested is None or suggested == target:
+            continue
+
+        suggestions.append({
+            "target": target,
+            "suggested": suggested,
+            "count": counts[target],
+        })
+
+    return suggestions
+
+
 def build_ui_router(db_path: Path, ui_password_hash: str) -> APIRouter:
     """Build the Jinja2 UI router, bound to the DB + UI password hash."""
     db_path = Path(db_path)
@@ -376,6 +461,7 @@ def build_ui_router(db_path: Path, ui_password_hash: str) -> APIRouter:
             unknown_rows, suspicious_rows = _build_queue(conn)
             known_otas = _known_otas(conn)
             pending_renames = catalog_db.list_pending_renames(conn)
+            all_targets = _all_targets(conn)
         finally:
             conn.close()
         return {
@@ -385,6 +471,8 @@ def build_ui_router(db_path: Path, ui_password_hash: str) -> APIRouter:
             "known_filters": KNOWN_FILTERS,
             "known_otas": known_otas,
             "pending_renames_count": len(pending_renames),
+            "target_suggestions": _target_suggestions(all_targets),
+            "target_counts": sorted(Counter(all_targets).items()),
         }
 
     @router.get("/queue", response_class=HTMLResponse)
@@ -398,6 +486,7 @@ def build_ui_router(db_path: Path, ui_password_hash: str) -> APIRouter:
 
         ctx = _queue_context()
         ctx["error"] = None
+        ctx["success"] = None
         return templates.TemplateResponse(request, "queue.html", ctx)
 
     @router.post("/queue/{session_id}/fix")
@@ -444,6 +533,65 @@ def build_ui_router(db_path: Path, ui_password_hash: str) -> APIRouter:
             conn.close()
 
         return RedirectResponse("/queue", status_code=303)
+
+    @router.post("/queue/targets/rename")
+    async def queue_targets_rename(
+        request: Request,
+        darkroom_token: str | None = Cookie(default=None),
+    ):
+        redirect = _require_auth(request, darkroom_token)
+        if redirect:
+            return redirect
+
+        form_data = await request.form()
+        old_target = form_data.get("old_target") or ""
+        new_target = form_data.get("new_target") or ""
+        old_target = old_target.strip() if isinstance(old_target, str) else old_target
+        new_target = new_target.strip() if isinstance(new_target, str) else new_target
+
+        conn = _get_conn()
+        try:
+            try:
+                result = catalog_db.rename_target(conn, old_target, new_target)
+            except ValueError as e:
+                ctx = _queue_context()
+                ctx["error"] = str(e)
+                ctx["success"] = None
+                return templates.TemplateResponse(
+                    request, "queue.html", ctx, status_code=400
+                )
+        finally:
+            conn.close()
+
+        if result["total"] == 0:
+            ctx = _queue_context()
+            ctx["error"] = f"No sessions found for target {old_target!r}"
+            ctx["success"] = None
+            return templates.TemplateResponse(
+                request, "queue.html", ctx, status_code=404
+            )
+
+        ctx = _queue_context()
+        ctx["success"] = (
+            f"renamed {result['renamed']} session"
+            f"{'' if result['renamed'] == 1 else 's'} of {old_target} → {new_target}"
+            if result["renamed"] else None
+        )
+        if result["errors"]:
+            details = "; ".join(
+                f"{e['session_id']}: {e['error']}" for e in result["errors"]
+            )
+            ctx["error"] = (
+                f"{len(result['errors'])} session"
+                f"{'' if len(result['errors']) == 1 else 's'} failed to merge: {details}"
+            )
+            status_code = 200 if result["renamed"] else 400
+        else:
+            ctx["error"] = None
+            status_code = 200
+        return templates.TemplateResponse(
+            request, "queue.html", ctx, status_code=status_code
+        )
 
     @router.post("/sessions/{session_id}/state")
     def set_state(

@@ -12,7 +12,7 @@ from darkroom.cataloger import upsert_calibration_set, upsert_session
 from darkroom.webapi import auth
 from darkroom.webapi.app import create_app
 from darkroom.webapi.auth import hash_password
-from darkroom.webapi.ui import reset_login_rate_limit
+from darkroom.webapi.ui import reset_login_rate_limit, _target_suggestions
 
 TOKEN = "testtoken"
 UI_PASSWORD = "test-password"
@@ -810,3 +810,154 @@ def test_queue_pending_renames_banner_shown_when_nonempty(tmp_path):
     resp = client.get("/queue")
     assert "<b>1</b> folder rename" in resp.text
     assert "darkroom catalog apply-renames" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# _target_suggestions (pure function, U2 phase 3)
+# ---------------------------------------------------------------------------
+
+
+def test_target_suggestions_panel_suffix():
+    result = _target_suggestions(["IC 4604_1-1", "IC 4604_1-1", "IC 4604_1-2"])
+    by_target = {s["target"]: s for s in result}
+    assert by_target["IC 4604_1-1"]["suggested"] == "IC 4604"
+    assert by_target["IC 4604_1-1"]["count"] == 2
+    assert by_target["IC 4604_1-2"]["suggested"] == "IC 4604"
+    assert by_target["IC 4604_1-2"]["count"] == 1
+
+
+def test_target_suggestions_panel_suffix_suggested_even_if_base_absent():
+    # "NGC 6960" isn't itself a target in the input list — still suggested.
+    result = _target_suggestions(["NGC 6960_1-1"])
+    assert result == [{"target": "NGC 6960_1-1", "suggested": "NGC 6960", "count": 1}]
+
+
+def test_target_suggestions_duplicated_designation():
+    result = _target_suggestions(["M 82 M 82", "M 82 M 82"])
+    assert result == [{"target": "M 82 M 82", "suggested": "M 82", "count": 2}]
+
+
+def test_target_suggestions_two_designations_only_if_base_exists():
+    # "M 81" isn't itself a known target here -> ambiguous, no suggestion.
+    assert _target_suggestions(["M 81 M 82"]) == []
+
+    # "M 81" IS a known target -> suggest merging "M 81 M 82" into it.
+    result = _target_suggestions(["M 81 M 82", "M 81"])
+    by_target = {s["target"]: s for s in result}
+    assert by_target["M 81 M 82"]["suggested"] == "M 81"
+    assert "M 81" not in by_target  # M 81 itself isn't suspect
+
+
+def test_target_suggestions_normalization_drift():
+    result = _target_suggestions(["m81"])
+    assert result == [{"target": "m81", "suggested": "M 81", "count": 1}]
+
+
+def test_target_suggestions_skips_clean_targets():
+    assert _target_suggestions(["M 81", "NGC 7380"]) == []
+
+
+# ---------------------------------------------------------------------------
+# target merge/rename (U2 phase 3, /queue Targets section, POST /queue/targets/rename)
+# ---------------------------------------------------------------------------
+
+
+def test_queue_shows_target_suggestions(tmp_path):
+    client, db_path = make_client(tmp_path)
+    upsert_session(
+        db_path,
+        _session(
+            "IC46041_1_20260219_FRA400_ZWOASI585MCPro_L-Pro",
+            target="IC 4604_1-1", obs_date="2026-02-19",
+        ),
+    )
+    login(client)
+
+    resp = client.get("/queue")
+    assert resp.status_code == 200
+    assert "IC 4604_1-1" in resp.text
+    assert "Merge into IC 4604" in resp.text
+
+
+def test_queue_targets_rename_unauthenticated_redirects(tmp_path):
+    client, _ = make_client(tmp_path)
+    resp = client.post(
+        "/queue/targets/rename",
+        data={"old_target": "M 81", "new_target": "M 82"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert resp.headers["location"].startswith("/login")
+
+
+def test_queue_targets_rename_success_banner(tmp_path):
+    client, db_path = make_client(tmp_path)
+    sid1 = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    sid2 = "M81_20260220_FRA400_ZWOASI585MCPro_L-Extreme"
+    upsert_session(db_path, _session(sid1, target="M 81", obs_date="2026-02-19"))
+    upsert_session(
+        db_path,
+        _session(sid2, target="M 81", obs_date="2026-02-20", filter="L-Extreme"),
+    )
+    login(client)
+
+    resp = client.post(
+        "/queue/targets/rename", data={"old_target": "M 81", "new_target": "M 82"}
+    )
+    assert resp.status_code == 200
+    assert "renamed 2 sessions of M 81" in resp.text
+    assert "M 82" in resp.text
+
+    conn = catalog_db.open_db(db_path)
+    try:
+        rows = catalog_db.query_sessions(conn, target="M 82")
+    finally:
+        conn.close()
+    assert len(rows) == 2
+
+
+def test_queue_targets_rename_unknown_target_error_banner(tmp_path):
+    client, _ = make_client(tmp_path)
+    login(client)
+
+    resp = client.post(
+        "/queue/targets/rename",
+        data={"old_target": "Nonexistent", "new_target": "M 82"},
+    )
+    assert resp.status_code == 404
+    assert "Nonexistent" in resp.text
+
+
+def test_queue_targets_rename_partial_failure_lists_per_session_errors(tmp_path):
+    client, db_path = make_client(tmp_path)
+    sidA, sidB, sidC = "sidA", "sidB", "sidC"
+    upsert_session(
+        db_path,
+        _session(sidA, target="IC 4604_1-1", obs_date="2026-02-19", filter="L-Pro"),
+    )
+    upsert_session(
+        db_path,
+        _session(sidB, target="IC 4604_2-1", obs_date="2026-02-19", filter="L-Pro"),
+    )
+    upsert_session(
+        db_path,
+        _session(sidC, target="IC 4604_1-1", obs_date="2026-02-20", filter="L-Pro"),
+    )
+    login(client)
+
+    # Merge the _2-1 panel into the base first, landing a row that the
+    # second merge will collide with.
+    resp = client.post(
+        "/queue/targets/rename",
+        data={"old_target": "IC 4604_2-1", "new_target": "IC 4604"},
+    )
+    assert resp.status_code == 200
+
+    resp = client.post(
+        "/queue/targets/rename",
+        data={"old_target": "IC 4604_1-1", "new_target": "IC 4604"},
+    )
+    assert resp.status_code == 200  # partial success: one renamed, one errored
+    assert "renamed 1 session of IC 4604_1-1" in resp.text
+    assert sidA in resp.text
+    assert "failed to merge" in resp.text

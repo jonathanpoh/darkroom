@@ -13,6 +13,7 @@ from darkroom.catalog_db import (
     delete_session,
     list_pending_renames,
     ack_pending_rename,
+    rename_target,
 )
 
 
@@ -567,6 +568,149 @@ def test_ack_pending_rename_removes_row_and_returns_true(tmp_path):
 def test_ack_pending_rename_unknown_id_returns_false(tmp_path):
     conn = open_db(make_db(tmp_path))
     assert ack_pending_rename(conn, 999999) is False
+
+
+# ---------------------------------------------------------------------------
+# rename_target (U2 phase 3)
+# ---------------------------------------------------------------------------
+
+
+def test_rename_target_renames_all_rows_session_id_and_lights_path(tmp_path):
+    db = tmp_path / "test.db"
+    init_db(db)
+    sid1 = "sid1"
+    sid2 = "sid2"
+    upsert_session(
+        db, _session(sid1, target="M 82 M 82", obs_date="2026-02-19", filter="L-Pro")
+    )
+    upsert_session(
+        db, _session(sid2, target="M 82 M 82", obs_date="2026-02-20", filter="L-Extreme")
+    )
+    conn = open_db(db)
+
+    result = rename_target(conn, "M 82 M 82", "M 82")
+
+    assert result == {"renamed": 2, "errors": [], "total": 2}
+
+    rows = query_sessions(conn, target="M 82")
+    assert len(rows) == 2
+    ids = {r["session_id"] for r in rows}
+    assert ids == {
+        "M82_20260219_FRA400_ZWOASI585MCPro_L-Pro",
+        "M82_20260220_FRA400_ZWOASI585MCPro_L-Extreme",
+    }
+    for r in rows:
+        assert r["target"] == "M 82"
+        assert "01_Deep Sky Objects/M 82/" in r["lights_path"]
+
+    pending = list_pending_renames(conn)
+    assert len(pending) == 2
+    assert {p["session_id"] for p in pending} == ids
+
+
+def test_rename_target_collision_partial_success(tmp_path):
+    db = tmp_path / "test.db"
+    init_db(db)
+    # Two mosaic panels of IC 4604, one shot on the same night as each other
+    # under different panel-suffixed target names — merging both into the
+    # shared base target collapses that pair to an identical session
+    # identity, but a third session (different date) doesn't collide.
+    sidA = "sidA"
+    sidB = "sidB"
+    sidC = "sidC"
+    upsert_session(
+        db, _session(sidA, target="IC 4604_1-1", obs_date="2026-02-19", filter="L-Pro")
+    )
+    upsert_session(
+        db, _session(sidB, target="IC 4604_2-1", obs_date="2026-02-19", filter="L-Pro")
+    )
+    upsert_session(
+        db, _session(sidC, target="IC 4604_1-1", obs_date="2026-02-20", filter="L-Pro")
+    )
+    conn = open_db(db)
+
+    r1 = rename_target(conn, "IC 4604_2-1", "IC 4604")
+    assert r1 == {"renamed": 1, "errors": [], "total": 1}
+
+    r2 = rename_target(conn, "IC 4604_1-1", "IC 4604")
+    assert r2["total"] == 2
+    assert r2["renamed"] == 1
+    assert len(r2["errors"]) == 1
+    assert r2["errors"][0]["session_id"] == sidA
+    assert "already used" in r2["errors"][0]["error"]
+
+    # sidA's row is untouched — the collision aborted just that row.
+    untouched = query_sessions(conn, session_id=sidA)
+    assert len(untouched) == 1
+    assert untouched[0]["target"] == "IC 4604_1-1"
+
+    merged = query_sessions(conn, target="IC 4604")
+    assert {r["session_id"] for r in merged} == {
+        "IC4604_20260219_FRA400_ZWOASI585MCPro_L-Pro",  # sidB, from r1
+        "IC4604_20260220_FRA400_ZWOASI585MCPro_L-Pro",  # sidC, from r2
+    }
+
+
+def test_rename_target_case_and_spacing_insensitive_match(tmp_path):
+    db = tmp_path / "test.db"
+    init_db(db)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db, _session(sid, target="M 81", obs_date="2026-02-19"))
+    conn = open_db(db)
+
+    result = rename_target(conn, "m81", "M 82")
+    assert result == {"renamed": 1, "errors": [], "total": 1}
+    assert len(query_sessions(conn, target="M 82")) == 1
+
+
+def test_rename_target_noop_when_normalized_equal(tmp_path):
+    db = tmp_path / "test.db"
+    init_db(db)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db, _session(sid, target="M 81", obs_date="2026-02-19"))
+    conn = open_db(db)
+
+    result = rename_target(conn, "M81", "M 81")
+    assert result == {"renamed": 0, "errors": [], "total": 0}
+
+    rows = query_sessions(conn, session_id=sid)
+    assert rows[0]["target"] == "M 81"
+
+
+def test_rename_target_empty_new_target_raises(tmp_path):
+    conn = open_db(make_db(tmp_path))
+    with pytest.raises(ValueError):
+        rename_target(conn, "M 81", "   ")
+
+
+def test_rename_target_fixes_denormalized_stored_target(tmp_path):
+    """Normalization-drift fix: old and new share a normalized form, but the
+    stored rows are denormalized ('SH2-103' vs canonical 'Sh2-103') — the
+    rename must still reach them instead of short-circuiting as a no-op."""
+    db = tmp_path / "test.db"
+    init_db(db)
+    sid = "Sh2-103_20250622_FMA180_Canon6D_NoFilter"
+    upsert_session(db, _session(
+        sid, target="Sh2-103", obs_date="2025-06-22", ota="FMA180",
+        camera="Canon6D", filter="NoFilter",
+    ))
+    conn = open_db(db)
+    # Denormalize the stored value directly — upserts normalize on the way in.
+    conn.execute("UPDATE sessions SET target = 'SH2-103' WHERE session_id = ?", (sid,))
+    conn.commit()
+
+    result = rename_target(conn, "SH2-103", "Sh2-103")
+    assert result["renamed"] == 1
+    assert result["errors"] == []
+    assert result["total"] == 1
+
+    rows = query_sessions(conn, target="Sh2-103")
+    assert len(rows) == 1
+    assert rows[0]["target"] == "Sh2-103"
+
+    # Rows already in canonical form are skipped, so re-running is a no-op.
+    again = rename_target(conn, "SH2-103", "Sh2-103")
+    assert again == {"renamed": 0, "errors": [], "total": 0}
 
 
 # ---------------------------------------------------------------------------

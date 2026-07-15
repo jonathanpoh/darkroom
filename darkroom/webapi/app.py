@@ -70,6 +70,11 @@ class StateIn(BaseModel):
     notes: str | None = None
 
 
+class TargetRenameIn(BaseModel):
+    old_target: str
+    new_target: str
+
+
 def create_app(db_path: Path, api_token: str, ui_password_hash: str) -> FastAPI:
     """Build the catalog API FastAPI app, bound to a single SQLite catalog file.
 
@@ -132,6 +137,16 @@ def create_app(db_path: Path, api_token: str, ui_password_hash: str) -> FastAPI:
         if not deleted:
             raise HTTPException(status_code=404, detail="session not found")
         return {"deleted": True}
+
+    @app.post("/api/targets/rename", dependencies=[auth_dep])
+    def post_target_rename(body: TargetRenameIn, conn=Depends(_get_conn)):
+        try:
+            result = catalog_db.rename_target(conn, body.old_target, body.new_target)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        if result["total"] == 0:
+            raise HTTPException(status_code=404, detail="no sessions match old_target")
+        return result
 
     @app.post("/api/sessions/{session_id}/state", dependencies=[auth_dep])
     def post_session_state(session_id: str, body: StateIn):

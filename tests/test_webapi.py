@@ -444,6 +444,73 @@ def test_delete_pending_rename_acks_row(tmp_path):
     assert resp.json() == []
 
 
+# ---------------------------------------------------------------------------
+# target rename (U2 phase 3)
+# ---------------------------------------------------------------------------
+
+
+def test_post_target_rename_happy_path(tmp_path):
+    client = make_client(tmp_path)
+    sid1 = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    sid2 = "M81_20260220_FRA400_ZWOASI585MCPro_L-Extreme"
+    client.post(
+        "/api/sessions",
+        json=_session(sid1, target="M 81", obs_date="2026-02-19"),
+        headers=AUTH,
+    )
+    client.post(
+        "/api/sessions",
+        json=_session(sid2, target="M 81", obs_date="2026-02-20", filter="L-Extreme"),
+        headers=AUTH,
+    )
+
+    resp = client.post(
+        "/api/targets/rename",
+        json={"old_target": "M 81", "new_target": "M 82"},
+        headers=AUTH,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["renamed"] == 2
+    assert body["total"] == 2
+    assert body["errors"] == []
+
+    resp = client.get("/api/sessions", params={"target": "M 82"}, headers=AUTH)
+    assert len(resp.json()) == 2
+
+
+def test_post_target_rename_unknown_target_404(tmp_path):
+    client = make_client(tmp_path)
+    resp = client.post(
+        "/api/targets/rename",
+        json={"old_target": "Nonexistent Target", "new_target": "M 82"},
+        headers=AUTH,
+    )
+    assert resp.status_code == 404
+
+
+def test_post_target_rename_empty_new_target_400(tmp_path):
+    client = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    client.post("/api/sessions", json=_session(sid), headers=AUTH)
+
+    resp = client.post(
+        "/api/targets/rename",
+        json={"old_target": "M 81", "new_target": "   "},
+        headers=AUTH,
+    )
+    assert resp.status_code == 400
+
+
+def test_post_target_rename_no_auth_401(tmp_path):
+    client = make_client(tmp_path)
+    resp = client.post(
+        "/api/targets/rename",
+        json={"old_target": "M 81", "new_target": "M 82"},
+    )
+    assert resp.status_code == 401
+
+
 def test_create_app_from_env_missing_token_raises(monkeypatch):
     monkeypatch.delenv("DARKROOM_API_TOKEN", raising=False)
     monkeypatch.setenv("DARKROOM_UI_PASSWORD_HASH", UI_HASH)
