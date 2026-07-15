@@ -248,6 +248,24 @@ def test_find_flat_darks_parity(backends):
     )
 
 
+def test_pending_renames_roundtrip_parity(backends):
+    local, http = backends
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    for b in (local, http):
+        b.upsert_session(_session(sid))
+        assert b.list_pending_renames() == []
+
+        assert b.update_session_fields(sid, filter="L-Extreme") is True
+        rows = b.list_pending_renames()
+        assert len(rows) == 1
+        assert rows[0]["session_id"] == "M81_20260219_FRA400_ZWOASI585MCPro_L-Extreme"
+
+        rename_id = rows[0]["id"]
+        assert b.ack_pending_rename(rename_id) is True
+        assert b.list_pending_renames() == []
+        assert b.ack_pending_rename(rename_id) is False
+
+
 def test_find_darks_parity(backends):
     local, http = backends
     dark = _cal_set(

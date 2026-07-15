@@ -192,6 +192,63 @@ def query_calibration_sets(
     return [dict(r) for r in rows]
 
 
+def _record_pending_rename(
+    conn: sqlite3.Connection,
+    session_row_id: int,
+    session_id: str,
+    old_path: str,
+    new_path: str,
+) -> None:
+    """Insert/update/delete the pending_renames ledger row for one session (U2).
+
+    - No existing row: INSERT one (created_at == updated_at).
+    - Existing row, new_path == that row's old_path: the identity edit landed
+      back on what's still on disk, so the rename is moot — DELETE the row.
+    - Existing row, otherwise: UPDATE session_id/new_path/updated_at in place.
+      old_path is deliberately left untouched — it's still what's on disk, and
+      coalescing repeated edits must chain to a single move from the
+      original on-disk path to the latest desired one.
+
+    Participates in the caller's transaction — no commit here.
+    """
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    existing = conn.execute(
+        "SELECT id, old_path FROM pending_renames WHERE session_row_id = ?",
+        (session_row_id,),
+    ).fetchone()
+    if existing is None:
+        conn.execute(
+            "INSERT INTO pending_renames "
+            "(session_row_id, session_id, old_path, new_path, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (session_row_id, session_id, old_path, new_path, now, now),
+        )
+        return
+
+    if new_path == existing["old_path"]:
+        conn.execute("DELETE FROM pending_renames WHERE id = ?", (existing["id"],))
+        return
+
+    conn.execute(
+        "UPDATE pending_renames SET session_id = ?, new_path = ?, updated_at = ? "
+        "WHERE id = ?",
+        (session_id, new_path, now, existing["id"]),
+    )
+
+
+def list_pending_renames(conn: sqlite3.Connection) -> list[dict]:
+    """Return all pending_renames rows, ordered by id."""
+    rows = conn.execute("SELECT * FROM pending_renames ORDER BY id").fetchall()
+    return [dict(r) for r in rows]
+
+
+def ack_pending_rename(conn: sqlite3.Connection, rename_id: int) -> bool:
+    """Delete a pending_renames row by id. Returns True if a row was deleted."""
+    cur = conn.execute("DELETE FROM pending_renames WHERE id = ?", (rename_id,))
+    conn.commit()
+    return cur.rowcount > 0
+
+
 def update_session_fields(conn: sqlite3.Connection, session_id: str, **fields) -> bool:
     """Update whitelisted fields on an existing session, in place.
 
@@ -276,6 +333,14 @@ def update_session_fields(conn: sqlite3.Connection, session_id: str, **fields) -
             if new_lights_path != row["lights_path"]:
                 set_clauses.append("lights_path = ?")
                 params.append(new_lights_path)
+                # U2: the webapi host has no NAS mount, so it can't rename the
+                # folder itself — record the move owed on the Mac side.
+                # new_session_id is always defined here (identity_changed is
+                # True in this branch) and already equals session_id when
+                # the identity edit didn't change the derived slug.
+                _record_pending_rename(
+                    conn, row_id, new_session_id, row["lights_path"], new_lights_path,
+                )
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     set_clauses.append("updated_at = ?")
@@ -291,9 +356,16 @@ def update_session_fields(conn: sqlite3.Connection, session_id: str, **fields) -
 
 
 def delete_session(conn: sqlite3.Connection, session_id: str) -> bool:
-    """Delete a session row by session_id. Returns True if a row was deleted,
-    False if session_id matched nothing. Catalog row only — never touches
-    archive files."""
-    cur = conn.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
+    """Delete a session row by session_id, along with any pending_renames row
+    owed for it (U2 — a deleted session can't have a rename left dangling).
+    Returns True if the session row was deleted, False if session_id matched
+    nothing. Catalog rows only — never touches archive files."""
+    row = conn.execute(
+        "SELECT id FROM sessions WHERE session_id = ?", (session_id,)
+    ).fetchone()
+    if row is None:
+        return False
+    conn.execute("DELETE FROM pending_renames WHERE session_row_id = ?", (row["id"],))
+    cur = conn.execute("DELETE FROM sessions WHERE id = ?", (row["id"],))
     conn.commit()
     return cur.rowcount > 0

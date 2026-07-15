@@ -80,6 +80,10 @@ class CatalogBackend(Protocol):
         exposure_sec: float | None = None,
     ) -> list[dict]: ...
 
+    def list_pending_renames(self) -> list[dict]: ...
+
+    def ack_pending_rename(self, rename_id: int) -> bool: ...
+
 
 class LocalBackend:
     """In-process SQLite backend — today's behaviour, unchanged.
@@ -150,6 +154,11 @@ class LocalBackend:
     def update_session_fields(self, session_id: str, **fields) -> bool:
         from darkroom.catalog_db import update_session_fields
 
+        # An identity-changing edit here can now write to pending_renames
+        # (U2) — ensure the table exists even on a pre-U2 DB file that
+        # predates it (open_db's own lazy init_db only fires for a wholly
+        # missing file, not an existing one with an older schema).
+        self._ensure_schema()
         conn = self._open()
         try:
             return update_session_fields(conn, session_id, **fields)
@@ -232,6 +241,29 @@ class LocalBackend:
                 frame_type=frame_type, camera=camera, ota=ota,
                 filter=filter, gain=gain, exposure_sec=exposure_sec,
             )
+        finally:
+            conn.close()
+
+    def list_pending_renames(self) -> list[dict]:
+        from darkroom.catalog_db import list_pending_renames
+
+        # Read from a table created by init_db — ensure schema first, same
+        # rationale as update_session_fields: a legacy pre-U2 file would
+        # otherwise raise OperationalError on a missing table.
+        self._ensure_schema()
+        conn = self._open()
+        try:
+            return list_pending_renames(conn)
+        finally:
+            conn.close()
+
+    def ack_pending_rename(self, rename_id: int) -> bool:
+        from darkroom.catalog_db import ack_pending_rename
+
+        self._ensure_schema()
+        conn = self._open()
+        try:
+            return ack_pending_rename(conn, rename_id)
         finally:
             conn.close()
 
@@ -387,6 +419,20 @@ class HttpBackend:
         self._check(resp)
         resp.raise_for_status()
         return resp.json()
+
+    def list_pending_renames(self) -> list[dict]:
+        resp = self._client.get("/api/pending-renames")
+        self._check(resp)
+        resp.raise_for_status()
+        return resp.json()
+
+    def ack_pending_rename(self, rename_id: int) -> bool:
+        resp = self._client.delete(f"/api/pending-renames/{rename_id}")
+        self._check(resp)
+        if resp.status_code == 404:
+            return False
+        resp.raise_for_status()
+        return True
 
 
 def resolve_backend(

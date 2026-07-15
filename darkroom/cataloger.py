@@ -298,6 +298,21 @@ def init_db(db_path: Path) -> None:
                 created_at    TEXT,
                 updated_at    TEXT
             );
+            -- U2: archive folder moves owed to the NAS after identity edits
+            -- changed a session's lights_path. The webapi host has no NAS
+            -- mount, so renames are recorded here and executed later on the
+            -- Mac via `darkroom catalog apply-renames`. One row per session
+            -- (UNIQUE session_row_id): old_path stays pinned to what's still
+            -- on disk while new_path tracks the latest catalog value.
+            CREATE TABLE IF NOT EXISTS pending_renames (
+                id              INTEGER PRIMARY KEY,
+                session_row_id  INTEGER NOT NULL UNIQUE,
+                session_id      TEXT NOT NULL,
+                old_path        TEXT NOT NULL,
+                new_path        TEXT NOT NULL,
+                created_at      TEXT,
+                updated_at      TEXT
+            );
         """
         )
         # Additive migrations for existing (pre-W3) sessions tables. These must

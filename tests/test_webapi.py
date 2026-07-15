@@ -373,6 +373,77 @@ def test_post_session_twice_is_idempotent_and_updates(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# pending-renames ledger (U2)
+# ---------------------------------------------------------------------------
+
+
+def test_get_pending_renames_no_auth_401(tmp_path):
+    client = make_client(tmp_path)
+    resp = client.get("/api/pending-renames")
+    assert resp.status_code == 401
+
+
+def test_get_pending_renames_empty(tmp_path):
+    client = make_client(tmp_path)
+    resp = client.get("/api/pending-renames", headers=AUTH)
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+def test_get_pending_renames_populated_via_identity_patch(tmp_path):
+    client = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    client.post("/api/sessions", json=_session(sid), headers=AUTH)
+
+    resp = client.patch(
+        f"/api/sessions/{sid}", json={"filter": "L-Extreme"}, headers=AUTH
+    )
+    assert resp.status_code == 200
+
+    resp = client.get("/api/pending-renames", headers=AUTH)
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["session_id"] == "M81_20260219_FRA400_ZWOASI585MCPro_L-Extreme"
+    assert row["old_path"] == (
+        "01_Deep Sky Objects/M 81/2026-02-19_FRA400_ZWOASI585MCPro/Lights/L-Pro"
+    )
+    assert row["new_path"] == (
+        "01_Deep Sky Objects/M 81/2026-02-19_FRA400_ZWOASI585MCPro/Lights/L-Extreme"
+    )
+
+
+def test_delete_pending_rename_no_auth_401(tmp_path):
+    client = make_client(tmp_path)
+    resp = client.delete("/api/pending-renames/1")
+    assert resp.status_code == 401
+
+
+def test_delete_pending_rename_unknown_404(tmp_path):
+    client = make_client(tmp_path)
+    resp = client.delete("/api/pending-renames/999999", headers=AUTH)
+    assert resp.status_code == 404
+    assert resp.json() == {"detail": "pending rename not found"}
+
+
+def test_delete_pending_rename_acks_row(tmp_path):
+    client = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    client.post("/api/sessions", json=_session(sid), headers=AUTH)
+    client.patch(f"/api/sessions/{sid}", json={"filter": "L-Extreme"}, headers=AUTH)
+
+    rename_id = client.get("/api/pending-renames", headers=AUTH).json()[0]["id"]
+
+    resp = client.delete(f"/api/pending-renames/{rename_id}", headers=AUTH)
+    assert resp.status_code == 200
+    assert resp.json() == {"deleted": True}
+
+    resp = client.get("/api/pending-renames", headers=AUTH)
+    assert resp.json() == []
+
+
 def test_create_app_from_env_missing_token_raises(monkeypatch):
     monkeypatch.delenv("DARKROOM_API_TOKEN", raising=False)
     monkeypatch.setenv("DARKROOM_UI_PASSWORD_HASH", UI_HASH)

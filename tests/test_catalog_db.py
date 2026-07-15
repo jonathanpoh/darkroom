@@ -11,6 +11,8 @@ from darkroom.catalog_db import (
     count_sessions,
     update_session_fields,
     delete_session,
+    list_pending_renames,
+    ack_pending_rename,
 )
 
 
@@ -438,6 +440,133 @@ def test_delete_session_removes_row(tmp_path):
 def test_delete_session_unknown_id_returns_false(tmp_path):
     conn = open_db(make_db(tmp_path))
     assert delete_session(conn, "does_not_exist") is False
+
+
+# ---------------------------------------------------------------------------
+# pending_renames ledger (U2)
+# ---------------------------------------------------------------------------
+
+
+def test_identity_edit_records_pending_rename(tmp_path):
+    conn = open_db(make_db(tmp_path))
+    old_sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    old_path = conn.execute(
+        "SELECT lights_path FROM sessions WHERE session_id = ?", (old_sid,)
+    ).fetchone()["lights_path"]
+
+    ok = update_session_fields(conn, old_sid, filter="L-Extreme")
+    assert ok is True
+    new_sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Extreme"
+
+    rows = list_pending_renames(conn)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["session_id"] == new_sid
+    assert row["old_path"] == old_path
+    assert row["new_path"] == (
+        "01_Deep Sky Objects/M 81/2026-02-19_FRA400_ZWOASI585MCPro/Lights/L-Extreme"
+    )
+    assert row["created_at"] is not None
+    assert row["updated_at"] is not None
+
+
+def test_second_identity_edit_coalesces_pending_rename(tmp_path):
+    conn = open_db(make_db(tmp_path))
+    old_sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    original_path = conn.execute(
+        "SELECT lights_path FROM sessions WHERE session_id = ?", (old_sid,)
+    ).fetchone()["lights_path"]
+
+    update_session_fields(conn, old_sid, filter="L-Extreme")
+    mid_sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Extreme"
+
+    # Second identity edit on the coalesced row.
+    update_session_fields(conn, mid_sid, filter="NoFilter")
+    final_sid = "M81_20260219_FRA400_ZWOASI585MCPro_NoFilter"
+
+    rows = list_pending_renames(conn)
+    assert len(rows) == 1  # still one row — coalesced, not appended
+    row = rows[0]
+    assert row["session_id"] == final_sid
+    assert row["old_path"] == original_path  # pinned to the original disk path
+    assert row["new_path"] == (
+        "01_Deep Sky Objects/M 81/2026-02-19_FRA400_ZWOASI585MCPro/Lights/NoFilter"
+    )
+
+
+def test_identity_edit_back_to_original_deletes_pending_rename(tmp_path):
+    conn = open_db(make_db(tmp_path))
+    old_sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+
+    update_session_fields(conn, old_sid, filter="L-Extreme")
+    assert len(list_pending_renames(conn)) == 1
+
+    mid_sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Extreme"
+    update_session_fields(conn, mid_sid, filter="L-Pro")  # back to original
+
+    assert list_pending_renames(conn) == []
+    row = conn.execute(
+        "SELECT * FROM sessions WHERE session_id = ?", (old_sid,)
+    ).fetchone()
+    assert row is not None  # session itself still exists, just no pending rename
+
+
+def test_non_identity_edit_records_no_pending_rename(tmp_path):
+    conn = open_db(make_db(tmp_path))
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    update_session_fields(conn, sid, notes="just a note")
+    assert list_pending_renames(conn) == []
+
+
+def test_identity_edit_with_null_lights_path_records_no_pending_rename(tmp_path):
+    db = tmp_path / "test.db"
+    init_db(db)
+    sid = "M81_20260301_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db, _session(sid, obs_date="2026-03-01", lights_path=None))
+    conn = open_db(db)
+
+    update_session_fields(conn, sid, filter="L-Extreme")
+    assert list_pending_renames(conn) == []
+
+
+def test_delete_session_removes_pending_rename(tmp_path):
+    conn = open_db(make_db(tmp_path))
+    old_sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    update_session_fields(conn, old_sid, filter="L-Extreme")
+    new_sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Extreme"
+    assert len(list_pending_renames(conn)) == 1
+
+    assert delete_session(conn, new_sid) is True
+    assert list_pending_renames(conn) == []
+
+
+def test_list_pending_renames_ordered_by_id(tmp_path):
+    conn = open_db(make_db(tmp_path))
+    update_session_fields(
+        conn, "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro", filter="L-Extreme"
+    )
+    update_session_fields(
+        conn, "M81_20260220_FRA400_ZWOASI585MCPro_L-Extreme", filter="L-Pro"
+    )
+    rows = list_pending_renames(conn)
+    assert len(rows) == 2
+    assert [r["id"] for r in rows] == sorted(r["id"] for r in rows)
+
+
+def test_ack_pending_rename_removes_row_and_returns_true(tmp_path):
+    conn = open_db(make_db(tmp_path))
+    update_session_fields(
+        conn, "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro", filter="L-Extreme"
+    )
+    rename_id = list_pending_renames(conn)[0]["id"]
+
+    assert ack_pending_rename(conn, rename_id) is True
+    assert list_pending_renames(conn) == []
+
+
+def test_ack_pending_rename_unknown_id_returns_false(tmp_path):
+    conn = open_db(make_db(tmp_path))
+    assert ack_pending_rename(conn, 999999) is False
 
 
 # ---------------------------------------------------------------------------

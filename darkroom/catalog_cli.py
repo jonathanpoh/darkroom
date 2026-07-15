@@ -117,6 +117,50 @@ def _scan_processed_run(args: argparse.Namespace) -> None:
     print(f"\nApplied {applied} change(s), {len(transitions) - applied} unchanged")
 
 
+def _apply_renames_run(args: argparse.Namespace) -> None:
+    """Execute (or preview) pending archive folder renames (U2 Phase 1).
+
+    Dry run (default) only classifies each pending_renames row against the
+    archive filesystem — no moves, no acks. --apply performs the moves
+    (darkroom.renames.apply_renames) and acks the ledger row for everything
+    it resolved. Exits 1 if any item errored (unsafe path or a filesystem
+    error mid-move), 0 otherwise — including when items are left pending as
+    'missing' or 'conflict', which are reported but not treated as failure.
+    """
+    from darkroom import renames
+
+    backend = resolve_backend(
+        args.catalog, url_flag=args.catalog_url, token_flag=args.api_token
+    )
+    archive = resolve_path(args.archive, "DARKROOM_ARCHIVE", "archive_path")
+    if archive is None:
+        sys.exit("Error: --archive / DARKROOM_ARCHIVE / darkroom.toml archive_path required")
+    if not archive.is_dir():
+        sys.exit(f"Error: archive path is not a directory: {archive}")
+
+    results = renames.apply_renames(archive, backend, apply=args.apply)
+
+    verbs = {
+        renames.APPLIED: "applied" if args.apply else "would apply",
+        renames.ALREADY_DONE: "already in place" + (" (acked)" if args.apply else ""),
+        renames.CONFLICT: "conflict",
+        renames.MISSING: "missing",
+        renames.ERROR: "error",
+    }
+    for r in results:
+        tag = f"  [{r.detail}]" if r.detail else ""
+        print(f"  {r.session_id}  {r.old_path} -> {r.new_path}  [{verbs[r.outcome]}]{tag}")
+
+    counts = Counter(r.outcome for r in results)
+    order = (renames.APPLIED, renames.ALREADY_DONE, renames.CONFLICT, renames.MISSING, renames.ERROR)
+    parts = [f"{counts.get(o, 0)} {o}" for o in order]
+    suffix = "" if args.apply else "; run with --apply to write"
+    print(f"\n{', '.join(parts)}{suffix}")
+
+    if counts.get(renames.ERROR, 0):
+        sys.exit(1)
+
+
 def add_subparser(subparsers) -> None:
     p = subparsers.add_parser(
         "catalog",
@@ -189,3 +233,22 @@ def add_subparser(subparsers) -> None:
     sp.add_argument("--apply", action="store_true",
                      help="Write proposed changes to the catalog (default: dry run, read-only)")
     sp.set_defaults(func=_scan_processed_run)
+
+    ar = sub.add_parser(
+        "apply-renames", parents=[catalog_flag],
+        help="Execute pending archive folder renames owed by catalog identity edits",
+        description="Read the pending_renames ledger (populated server-side when a "
+                    "catalog identity edit changes a session's lights_path — the "
+                    "webapi host has no NAS mount, so it can only record the folder "
+                    "move it owes) and resolve each entry against the local/mounted "
+                    "archive. Dry run by default (prints proposed actions, writes "
+                    "nothing); pass --apply to move folders and ack the ledger.",
+    )
+    ar.add_argument("--archive", metavar="PATH", help="Archive root (env: DARKROOM_ARCHIVE)")
+    ar.add_argument("--catalog-url", metavar="URL",
+                     help="Catalog API base URL (env: DARKROOM_CATALOG_URL)")
+    ar.add_argument("--api-token", metavar="TOKEN",
+                     help="Catalog API bearer token (env: DARKROOM_API_TOKEN)")
+    ar.add_argument("--apply", action="store_true",
+                     help="Move folders and ack the ledger (default: dry run, read-only)")
+    ar.set_defaults(func=_apply_renames_run)

@@ -209,6 +209,17 @@ def create_app(db_path: Path, api_token: str, ui_password_hash: str) -> FastAPI:
         )
         return {"count": count}
 
+    @app.get("/api/pending-renames", dependencies=[auth_dep])
+    def get_pending_renames(conn=Depends(_get_conn)):
+        return catalog_db.list_pending_renames(conn)
+
+    @app.delete("/api/pending-renames/{rename_id}", dependencies=[auth_dep])
+    def delete_pending_rename(rename_id: int, conn=Depends(_get_conn)):
+        acked = catalog_db.ack_pending_rename(conn, rename_id)
+        if not acked:
+            raise HTTPException(status_code=404, detail="pending rename not found")
+        return {"deleted": True}
+
     @app.get("/api/calibration-sets", dependencies=[auth_dep])
     def get_calibration_sets(
         frame_type: str | None = None,
