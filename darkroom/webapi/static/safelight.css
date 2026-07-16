@@ -221,7 +221,8 @@ details[open] .rigsum .strip { visibility: hidden; }
   display: flex; gap: 10px; align-items: baseline;
 }
 .cleanup b { color: var(--ink); font-weight: 500; }
-.cleanup .go { margin-left: auto; color: var(--ink-3); }
+.cleanup .go { margin-left: auto; color: var(--ink-3); text-decoration: none; }
+.cleanup .go:hover { color: var(--safelight-hi); }
 .footnote { margin-top: 44px; color: var(--ink-3); font-size: 11px; border-top: 1px solid var(--hairline); padding-top: 14px; }
 .footnote .lamp { color: var(--safelight); }
 

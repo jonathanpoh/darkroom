@@ -192,7 +192,7 @@ function renderOverview() {
     </div>
     ${rows || `<p style="color:var(--ink-3); padding:20px 10px">No targets match. Clear a filter above.</p>`}
     <div class="cleanup"><b>${badFilters} sessions</b> have a missing or suspect filter · <b>${badTargets} targets</b> look like mosaic panels or duplicated names
-      <span class="go">→ cleanup queue (coming soon)</span></div>
+      <a class="go" href="/queue">→ cleanup queue</a></div>
     <p class="footnote">
       Open = hours in sessions still open or in progress ·
       Depth = open hours: &lt;2h needs data · 5–10h workable · 20h+ deep ·
