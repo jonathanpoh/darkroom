@@ -79,7 +79,7 @@ def reset_login_rate_limit() -> None:
 _EDIT_FIELDS = (
     "target", "obs_date", "ota", "camera", "filter",
     "gain", "temperature_c", "exposure_sec", "focal_length",
-    "ra_deg", "dec_deg", "notes",
+    "ra_deg", "dec_deg", "site_lat", "site_lon", "notes",
     "processed_state", "processed_path", "processed_date",
 )
 _NUMERIC_FIELDS = {
@@ -89,6 +89,8 @@ _NUMERIC_FIELDS = {
     "focal_length": float,
     "ra_deg": float,
     "dec_deg": float,
+    "site_lat": float,
+    "site_lon": float,
 }
 _PROCESSED_STATES = ("unprocessed", "in_progress", "processed", "skipped")
 

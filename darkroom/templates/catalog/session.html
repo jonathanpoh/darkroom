@@ -20,6 +20,8 @@
   <div class="field-row"><label>Focal length</label><input type="text" name="focal_length" value="{{ session.focal_length if session.focal_length is not none else '' }}"></div>
   <div class="field-row"><label>RA (deg)</label><input type="text" name="ra_deg" value="{{ session.ra_deg if session.ra_deg is not none else '' }}"></div>
   <div class="field-row"><label>Dec (deg)</label><input type="text" name="dec_deg" value="{{ session.dec_deg if session.dec_deg is not none else '' }}"></div>
+  <div class="field-row"><label>Site lat</label><input type="text" name="site_lat" value="{{ session.site_lat if session.site_lat is not none else '' }}"></div>
+  <div class="field-row"><label>Site lon</label><input type="text" name="site_lon" value="{{ session.site_lon if session.site_lon is not none else '' }}"></div>
   <div class="field-row"><label>Notes</label><textarea name="notes" rows="3">{{ session.notes or '' }}</textarea></div>
   <div class="field-row">
     <label>Processed state</label>
