@@ -186,7 +186,7 @@ details[open] .rigsum .strip { visibility: hidden; }
 .gword { font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); }
 .gword.deep { color: var(--safelight); }
 
-.nightcols { grid-template-columns: 36px 100px 1fr 150px 110px 90px 76px; }
+.nightcols { grid-template-columns: 36px 100px 150px 150px 110px 1fr 76px; }
 .night { align-items: center; cursor: default; }
 .night:hover { background: none; }
 .night .fchip { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }

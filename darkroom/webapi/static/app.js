@@ -108,7 +108,7 @@ const OV_SORTS = {
   n:      (a, b) => a.n - b.n,
   latest: (a, b) => (a.last || "").localeCompare(b.last || ""),
 };
-let ovSort = { key: "latest", desc: true }, query = "", catSel = "", filtSel = "";
+let ovSort = { key: "latest", desc: true }, query = "", catSel = "", filtSel = "", siteSel = "";
 
 function sortHead(key, label, current, extra="") {
   const on = current.key === key;
@@ -119,11 +119,13 @@ function sortHead(key, label, current, extra="") {
 function renderOverview() {
   const maxH = Math.max(...DATA.map(t => t.total_h));
   const allFilters = [...new Set(DATA.flatMap(t => t.nights.map(n => n.filter || "None")))].sort();
+  const allSites = [...new Set(DATA.flatMap(t => t.nights.map(n => n.site).filter(Boolean)))].sort();
   const visible = DATA
     .filter(t => t.target.toLowerCase().includes(query) ||
                  (t.cname || "").toLowerCase().includes(query))
     .filter(t => !catSel || catalogOf(t.target) === catSel)
-    .filter(t => !filtSel || t.nights.some(n => (n.filter || "None") === filtSel));
+    .filter(t => !filtSel || t.nights.some(n => (n.filter || "None") === filtSel))
+    .filter(t => !siteSel || t.nights.some(n => n.site === siteSel));
   const rows = visible
     .sort((a, b) => (ovSort.desc ? -1 : 1) * OV_SORTS[ovSort.key](a, b))
     .map(t => {
@@ -153,6 +155,10 @@ function renderOverview() {
         <option value="">any filter</option>
         ${allFilters.map(f => `<option value="${f}" ${filtSel === f ? "selected" : ""}>${fname(f)}</option>`).join("")}
       </select>
+      <select id="sitesel" class="${siteSel ? "active" : ""}" aria-label="Filter by imaging site">
+        <option value="">any site</option>
+        ${allSites.map(s => `<option value="${s}" ${siteSel === s ? "selected" : ""}>${s}</option>`).join("")}
+      </select>
       <div class="legend">
         <span><i style="background:var(--f-lpro)"></i>L-Pro</span>
         <span><i style="background:var(--f-extreme)"></i>L-Extreme</span>
@@ -181,6 +187,7 @@ function renderOverview() {
   document.getElementById("q").addEventListener("input", e => { query = e.target.value.toLowerCase(); renderOverview(); const q = document.getElementById("q"); q.focus(); q.setSelectionRange(q.value.length, q.value.length); });
   document.getElementById("catsel").addEventListener("change", e => { catSel = e.target.value; renderOverview(); });
   document.getElementById("filtsel").addEventListener("change", e => { filtSel = e.target.value; renderOverview(); });
+  document.getElementById("sitesel").addEventListener("change", e => { siteSel = e.target.value; renderOverview(); });
   document.querySelectorAll(".colhead.sortable").forEach(h => h.addEventListener("click", () => {
     const k = h.dataset.key;
     ovSort = { key: k, desc: ovSort.key === k ? !ovSort.desc : true };
@@ -226,14 +233,13 @@ function renderDetail() {
       const on = gsort.key === key;
       return `<button class="colhead sortable ${on ? "sorted" : ""} ${extra}" data-rig="${rig}" data-key="${key}">${label} ${on ? `<span class="dir">${gsort.desc ? "▼" : "▲"}</span>` : ""}</button>`;
     };
-    const weighted = Math.abs(gh - ghw) > 0.05;
     return `<details class="rig" data-rig="${rig}" ${detail.closed.has(rig) ? "" : "open"}>
       <summary class="rigsum">
         <svg class="tri" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2.5 1 L8 5 L2.5 9 Z" fill="currentColor"/></svg>
         <span class="rigname display">${rig}</span>
         ${gaugeHTML(ghw, true, gh)}
         ${stripHTML(hoursOf(nights), null)}
-        <span class="hnum num"><b>${gh.toFixed(1)}</b>h${weighted ? ` ≈ ${ghw.toFixed(1)}h @home` : ""}</span>
+        <span class="hnum num"><b>${gh.toFixed(1)}</b>h</span>
         <span class="n">${nights.length} sessions</span>
       </summary>
       <div class="rigbody">
