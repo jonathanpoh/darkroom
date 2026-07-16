@@ -25,6 +25,19 @@ const FILTER_COLOR = {
 const fcolor = f => FILTER_COLOR[f] || "var(--f-none)";
 const fname = f => (f === "None" ? "no filter recorded" : f);
 
+/* hardcoded — home first, then increasing distance from home (Azores last).
+   Sites don't change often enough to warrant computing this from lat/lon. */
+const SITE_ORDER = [
+  "Home (Palmela)",
+  "Quinta do Lago (Azeitão)",
+  "Santa Susana",
+  "São Cristóvão",
+  "Sorte Verde",
+  "Cais do Pico (Pico Island, Azores)",
+  "Mount Pico (Pico Island, Azores)",
+];
+const siteRank = s => { const i = SITE_ORDER.indexOf(s); return i === -1 ? SITE_ORDER.length : i; };
+
 const CATALOGS = [
   ["M", "Messier", t => /^M \d/.test(t)],
   ["NGC", "NGC", t => /^NGC/.test(t)],
@@ -119,7 +132,8 @@ function sortHead(key, label, current, extra="") {
 function renderOverview() {
   const maxH = Math.max(...DATA.map(t => t.total_h));
   const allFilters = [...new Set(DATA.flatMap(t => t.nights.map(n => n.filter || "None")))].sort();
-  const allSites = [...new Set(DATA.flatMap(t => t.nights.map(n => n.site).filter(Boolean)))].sort();
+  const allSites = [...new Set(DATA.flatMap(t => t.nights.map(n => n.site).filter(Boolean)))]
+    .sort((a, b) => siteRank(a) - siteRank(b) || a.localeCompare(b));
   const visible = DATA
     .filter(t => t.target.toLowerCase().includes(query) ||
                  (t.cname || "").toLowerCase().includes(query))
