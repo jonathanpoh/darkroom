@@ -289,6 +289,50 @@ def test_rename_target_parity(backends):
     }
 
 
+def _site(name="Home", lat=38.5245, lon=-8.8926, **extra):
+    base = {"name": name, "lat": lat, "lon": lon}
+    base.update(extra)
+    return base
+
+
+def test_sites_roundtrip_parity(backends):
+    local, http = backends
+    for b in (local, http):
+        site_id = b.add_site(_site())
+        assert isinstance(site_id, int)
+
+        rows = _strip(b.list_sites())
+        assert len(rows) == 1
+        assert rows[0]["name"] == "Home"
+        assert rows[0]["radius_m"] == 1000.0
+
+        with pytest.raises(ValueError):
+            b.add_site(_site())
+
+        assert b.update_site("Home", {"sqm": 21.4, "bortle": 4}) is True
+        rows = b.list_sites()
+        assert rows[0]["sqm"] == 21.4
+        assert rows[0]["bortle"] == 4
+
+        assert b.update_site("NoSuchSite", {"sqm": 1.0}) is False
+
+    # diacritics/spaces in a rename — proves URL-quoting parity end to end.
+    new_name = "São Cristóvão"
+    assert http.update_site("Home", {"name": new_name}) is True
+    rows = http.list_sites()
+    assert rows[0]["name"] == new_name
+
+
+def test_session_site_coords_parity(backends):
+    local, http = backends
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    for b in (local, http):
+        b.upsert_session(_session(sid, site_lat=38.5245, site_lon=-8.8926))
+        rows = b.query_sessions(session_id=sid)
+        assert rows[0]["site_lat"] == 38.5245
+        assert rows[0]["site_lon"] == -8.8926
+
+
 def test_find_darks_parity(backends):
     local, http = backends
     dark = _cal_set(

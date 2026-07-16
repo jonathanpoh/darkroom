@@ -154,6 +154,60 @@ def test_local_backend_creates_schema_on_first_write(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# LocalBackend sites (S1 phase 2)
+# ---------------------------------------------------------------------------
+
+
+def _site(name="Home", lat=38.5245, lon=-8.8926, **extra):
+    base = {"name": name, "lat": lat, "lon": lon}
+    base.update(extra)
+    return base
+
+
+def test_local_backend_sites_roundtrip(tmp_path):
+    backend = LocalBackend(tmp_path / "cat.db")
+    site_id = backend.add_site(_site())
+    assert isinstance(site_id, int)
+
+    rows = backend.list_sites()
+    assert len(rows) == 1
+    assert rows[0]["name"] == "Home"
+    assert rows[0]["radius_m"] == 1000.0
+
+    assert backend.update_site("Home", {"sqm": 21.4}) is True
+    rows = backend.list_sites()
+    assert rows[0]["sqm"] == 21.4
+
+
+def test_local_backend_add_site_duplicate_raises(tmp_path):
+    backend = LocalBackend(tmp_path / "cat.db")
+    backend.add_site(_site())
+    with pytest.raises(ValueError):
+        backend.add_site(_site())
+
+
+def test_local_backend_update_site_missing_returns_false(tmp_path):
+    backend = LocalBackend(tmp_path / "cat.db")
+    assert backend.update_site("NoSuchSite", {"sqm": 20.0}) is False
+
+
+def test_local_backend_sites_work_on_pre_existing_db_without_sites_table(tmp_path):
+    # Create a DB file via a plain write first (schema exists but this
+    # simulates a caller that only ever touched sessions), then confirm the
+    # sites table is still reachable through LocalBackend's _ensure_schema.
+    db_path = tmp_path / "cat.db"
+    backend = LocalBackend(db_path)
+    backend.upsert_session(_session("M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"))
+    assert db_path.exists()
+
+    # Fresh backend instance (schema-ready flag reset) against the same file.
+    backend2 = LocalBackend(db_path)
+    assert backend2.list_sites() == []
+    site_id = backend2.add_site(_site())
+    assert isinstance(site_id, int)
+
+
+# ---------------------------------------------------------------------------
 # import isolation
 # ---------------------------------------------------------------------------
 
@@ -289,6 +343,50 @@ def test_http_backend_set_processed_state_400_raises_value_error():
 
     with pytest.raises(ValueError):
         backend.set_processed_state("sid", state="not_a_real_state")
+    backend.close()
+
+
+def test_http_backend_add_site_409_raises_value_error():
+    import httpx
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(409, json={"detail": "site 'Home' already exists"})
+
+    client = httpx.Client(base_url="http://test", transport=httpx.MockTransport(handler))
+    backend = HttpBackend("http://test", client=client)
+
+    with pytest.raises(ValueError):
+        backend.add_site({"name": "Home", "lat": 1.0, "lon": 2.0})
+    backend.close()
+
+
+def test_http_backend_update_site_404_returns_false():
+    import httpx
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404)
+
+    client = httpx.Client(base_url="http://test", transport=httpx.MockTransport(handler))
+    backend = HttpBackend("http://test", client=client)
+
+    assert backend.update_site("NoSuchSite", {"sqm": 20.0}) is False
+    backend.close()
+
+
+def test_http_backend_update_site_quotes_name_in_path():
+    import httpx
+
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        return httpx.Response(200, json={"updated": True})
+
+    client = httpx.Client(base_url="http://test", transport=httpx.MockTransport(handler))
+    backend = HttpBackend("http://test", client=client)
+
+    assert backend.update_site("São Cristóvão", {"sqm": 20.0}) is True
+    assert "S%C3%A3o%20Crist%C3%B3v%C3%A3o" in captured["url"]
     backend.close()
 
 

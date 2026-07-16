@@ -15,6 +15,7 @@ imported lazily inside HttpBackend.
 
 from __future__ import annotations
 
+import urllib.parse
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
@@ -85,6 +86,12 @@ class CatalogBackend(Protocol):
     def list_pending_renames(self) -> list[dict]: ...
 
     def ack_pending_rename(self, rename_id: int) -> bool: ...
+
+    def list_sites(self) -> list[dict]: ...
+
+    def add_site(self, site: dict) -> int: ...
+
+    def update_site(self, name: str, fields: dict) -> bool: ...
 
 
 class LocalBackend:
@@ -282,6 +289,38 @@ class LocalBackend:
         finally:
             conn.close()
 
+    def list_sites(self) -> list[dict]:
+        from darkroom.catalog_db import list_sites
+
+        # sites is a new (S1) table — ensure schema first, same rationale as
+        # list_pending_renames: a legacy pre-S1 DB file predates it.
+        self._ensure_schema()
+        conn = self._open()
+        try:
+            return list_sites(conn)
+        finally:
+            conn.close()
+
+    def add_site(self, site: dict) -> int:
+        from darkroom.catalog_db import add_site
+
+        self._ensure_schema()
+        conn = self._open()
+        try:
+            return add_site(conn, **site)
+        finally:
+            conn.close()
+
+    def update_site(self, name: str, fields: dict) -> bool:
+        from darkroom.catalog_db import update_site_fields
+
+        self._ensure_schema()
+        conn = self._open()
+        try:
+            return update_site_fields(conn, name, **fields)
+        finally:
+            conn.close()
+
 
 class HttpBackend:
     """Thin httpx client for the catalog webapi server (darkroom/webapi/).
@@ -459,6 +498,34 @@ class HttpBackend:
         self._check(resp)
         if resp.status_code == 404:
             return False
+        resp.raise_for_status()
+        return True
+
+    def list_sites(self) -> list[dict]:
+        resp = self._client.get("/api/sites")
+        self._check(resp)
+        resp.raise_for_status()
+        return resp.json()
+
+    def add_site(self, site: dict) -> int:
+        resp = self._client.post("/api/sites", json=site)
+        self._check(resp)
+        if resp.status_code == 409:
+            raise ValueError(resp.json()["detail"])
+        resp.raise_for_status()
+        return resp.json()["id"]
+
+    def update_site(self, name: str, fields: dict) -> bool:
+        # Site names can contain spaces/parentheses/UTF-8 (e.g. "São
+        # Cristóvão") — URL-quote before interpolating into the path.
+        resp = self._client.patch(
+            f"/api/sites/{urllib.parse.quote(name, safe='')}", json=fields
+        )
+        self._check(resp)
+        if resp.status_code == 404:
+            return False
+        if resp.status_code == 400:
+            raise ValueError(resp.json()["detail"])
         resp.raise_for_status()
         return True
 

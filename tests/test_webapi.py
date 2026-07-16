@@ -511,6 +511,163 @@ def test_post_target_rename_no_auth_401(tmp_path):
     assert resp.status_code == 401
 
 
+# ---------------------------------------------------------------------------
+# sites (S1 phase 2)
+# ---------------------------------------------------------------------------
+
+
+def _site(name="Home", lat=38.5245, lon=-8.8926, **extra):
+    base = {"name": name, "lat": lat, "lon": lon}
+    base.update(extra)
+    return base
+
+
+def test_get_sites_no_auth_401(tmp_path):
+    client = make_client(tmp_path)
+    resp = client.get("/api/sites")
+    assert resp.status_code == 401
+
+
+def test_get_sites_empty(tmp_path):
+    client = make_client(tmp_path)
+    resp = client.get("/api/sites", headers=AUTH)
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+def test_post_then_get_sites_roundtrip_with_defaults(tmp_path):
+    client = make_client(tmp_path)
+    resp = client.post("/api/sites", json=_site(), headers=AUTH)
+    assert resp.status_code == 201
+    site_id = resp.json()["id"]
+    assert isinstance(site_id, int)
+
+    resp = client.get("/api/sites", headers=AUTH)
+    rows = resp.json()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["name"] == "Home"
+    assert row["radius_m"] == 1000.0
+    assert row["is_home"] == 0
+
+
+def test_post_site_duplicate_name_409(tmp_path):
+    client = make_client(tmp_path)
+    client.post("/api/sites", json=_site(), headers=AUTH)
+
+    resp = client.post("/api/sites", json=_site(), headers=AUTH)
+    assert resp.status_code == 409
+    assert "detail" in resp.json()
+
+
+def test_post_site_second_is_home_wins(tmp_path):
+    client = make_client(tmp_path)
+    client.post("/api/sites", json=_site(name="Site A", is_home=True), headers=AUTH)
+    client.post("/api/sites", json=_site(name="Site B", is_home=True), headers=AUTH)
+
+    resp = client.get("/api/sites", headers=AUTH)
+    rows = resp.json()
+    home_rows = [r for r in rows if r["is_home"] == 1]
+    assert len(home_rows) == 1
+    assert home_rows[0]["name"] == "Site B"
+
+
+def test_patch_site_sets_sqm_and_bortle(tmp_path):
+    client = make_client(tmp_path)
+    client.post("/api/sites", json=_site(), headers=AUTH)
+
+    resp = client.patch(
+        "/api/sites/Home", json={"sqm": 21.4, "bortle": 4}, headers=AUTH
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"updated": True}
+
+    row = client.get("/api/sites", headers=AUTH).json()[0]
+    assert row["sqm"] == 21.4
+    assert row["bortle"] == 4
+
+
+def test_patch_site_unknown_field_400(tmp_path):
+    client = make_client(tmp_path)
+    client.post("/api/sites", json=_site(), headers=AUTH)
+
+    resp = client.patch("/api/sites/Home", json={"bogus_field": 1}, headers=AUTH)
+    assert resp.status_code == 400
+    assert "detail" in resp.json()
+
+
+def test_patch_site_missing_404(tmp_path):
+    client = make_client(tmp_path)
+    resp = client.patch("/api/sites/NoSuchSite", json={"sqm": 20.0}, headers=AUTH)
+    assert resp.status_code == 404
+    assert resp.json() == {"detail": "site not found"}
+
+
+def test_patch_site_rename_with_diacritics_and_spaces(tmp_path):
+    client = make_client(tmp_path)
+    client.post("/api/sites", json=_site(), headers=AUTH)
+
+    new_name = "São Cristóvão"
+    resp = client.patch(
+        "/api/sites/Home", json={"name": new_name}, headers=AUTH
+    )
+    assert resp.status_code == 200
+
+    resp = client.patch(
+        f"/api/sites/{new_name}", json={"sqm": 21.0}, headers=AUTH
+    )
+    assert resp.status_code == 200
+
+    rows = client.get("/api/sites", headers=AUTH).json()
+    assert len(rows) == 1
+    assert rows[0]["name"] == new_name
+    assert rows[0]["sqm"] == 21.0
+
+
+def test_post_session_with_site_coords_roundtrip(tmp_path):
+    client = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    resp = client.post(
+        "/api/sessions",
+        json=_session(sid, site_lat=38.5245, site_lon=-8.8926),
+        headers=AUTH,
+    )
+    assert resp.status_code == 204
+
+    resp = client.get("/api/sessions", params={"session_id": sid}, headers=AUTH)
+    row = resp.json()[0]
+    assert row["site_lat"] == 38.5245
+    assert row["site_lon"] == -8.8926
+
+
+def test_post_session_without_site_coords_defaults_none(tmp_path):
+    client = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    resp = client.post("/api/sessions", json=_session(sid), headers=AUTH)
+    assert resp.status_code == 204
+
+    resp = client.get("/api/sessions", params={"session_id": sid}, headers=AUTH)
+    row = resp.json()[0]
+    assert row["site_lat"] is None
+    assert row["site_lon"] is None
+
+
+def test_patch_session_site_lat_updates(tmp_path):
+    client = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    client.post("/api/sessions", json=_session(sid), headers=AUTH)
+
+    resp = client.patch(
+        f"/api/sessions/{sid}", json={"site_lat": 38.5245}, headers=AUTH
+    )
+    assert resp.status_code == 200
+
+    row = client.get(
+        "/api/sessions", params={"session_id": sid}, headers=AUTH
+    ).json()[0]
+    assert row["site_lat"] == 38.5245
+
+
 def test_create_app_from_env_missing_token_raises(monkeypatch):
     monkeypatch.delenv("DARKROOM_API_TOKEN", raising=False)
     monkeypatch.setenv("DARKROOM_UI_PASSWORD_HASH", UI_HASH)

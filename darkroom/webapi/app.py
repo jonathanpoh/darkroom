@@ -44,6 +44,8 @@ class SessionIn(BaseModel):
     total_integration_sec: int | None = None
     ra_deg: float | None = None
     dec_deg: float | None = None
+    site_lat: float | None = None
+    site_lon: float | None = None
     lights_path: str | None = None
     notes: str | None = None
 
@@ -73,6 +75,16 @@ class StateIn(BaseModel):
 class TargetRenameIn(BaseModel):
     old_target: str
     new_target: str
+
+
+class SiteIn(BaseModel):
+    name: str
+    lat: float
+    lon: float
+    radius_m: float = 1000.0
+    bortle: int | None = None
+    sqm: float | None = None
+    is_home: bool = False
 
 
 def create_app(db_path: Path, api_token: str, ui_password_hash: str) -> FastAPI:
@@ -234,6 +246,28 @@ def create_app(db_path: Path, api_token: str, ui_password_hash: str) -> FastAPI:
         if not acked:
             raise HTTPException(status_code=404, detail="pending rename not found")
         return {"deleted": True}
+
+    @app.get("/api/sites", dependencies=[auth_dep])
+    def get_sites(conn=Depends(_get_conn)):
+        return catalog_db.list_sites(conn)
+
+    @app.post("/api/sites", status_code=201, dependencies=[auth_dep])
+    def post_site(body: SiteIn, conn=Depends(_get_conn)):
+        try:
+            site_id = catalog_db.add_site(conn, **body.model_dump())
+        except ValueError as e:
+            raise HTTPException(status_code=409, detail=str(e))
+        return {"id": site_id}
+
+    @app.patch("/api/sites/{name}", dependencies=[auth_dep])
+    def patch_site(name: str, body: dict[str, Any], conn=Depends(_get_conn)):
+        try:
+            updated = catalog_db.update_site_fields(conn, name, **body)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        if not updated:
+            raise HTTPException(status_code=404, detail="site not found")
+        return {"updated": True}
 
     @app.get("/api/calibration-sets", dependencies=[auth_dep])
     def get_calibration_sets(
