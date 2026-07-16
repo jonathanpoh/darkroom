@@ -4,6 +4,8 @@ import types
 import pytest
 from pathlib import Path
 
+from astropy.io import fits
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from darkroom.cataloger import (
@@ -13,6 +15,8 @@ from darkroom.cataloger import (
     find_lights_folders,
     compute_imaging_night,
     SessionAnalyzer,
+    FITSHeaderExtractor,
+    _parse_site_deg,
     init_db,
     upsert_session,
     upsert_calibration_set,
@@ -23,6 +27,7 @@ from darkroom.cataloger import (
     mark_processed_by_target,
     finish_command,
 )
+from darkroom.catalog_db import add_site
 
 
 class TestParseFilter:
@@ -1108,3 +1113,219 @@ class TestMarkProcessedCommandCLI:
     def test_missing_db_exits(self, tmp_path):
         with pytest.raises(SystemExit):
             mark_processed_command(self._args(db=str(tmp_path / "missing.db")))
+
+
+# ── S1: observing-site coordinates from FITS SITELAT/SITELONG headers ───────
+
+class TestParseSiteDeg:
+    def test_float_passthrough(self):
+        assert _parse_site_deg(38.5631) == 38.5631
+
+    def test_int_passthrough(self):
+        assert _parse_site_deg(38) == 38.0
+
+    def test_decimal_string(self):
+        assert _parse_site_deg("38.5631") == pytest.approx(38.5631)
+
+    def test_space_separated_sexagesimal(self):
+        assert _parse_site_deg("38 33 47") == pytest.approx(38.563056, abs=1e-6)
+
+    def test_colon_separated_sexagesimal_with_plus_sign(self):
+        assert _parse_site_deg("+38:33:47") == pytest.approx(38.563056, abs=1e-6)
+
+    def test_negative_sexagesimal(self):
+        assert _parse_site_deg("-8 52 53") == pytest.approx(-8.881389, abs=1e-6)
+
+    def test_negative_zero_degrees_still_negative(self):
+        # Sign must come from the string token, not the parsed float (-0 == 0).
+        assert _parse_site_deg("-0 30 0") == pytest.approx(-0.5)
+
+    def test_garbage_returns_none(self):
+        assert _parse_site_deg("garbage") is None
+
+    def test_none_returns_none(self):
+        assert _parse_site_deg(None) is None
+
+    def test_empty_string_returns_none(self):
+        assert _parse_site_deg("") is None
+
+    def test_whitespace_only_returns_none(self):
+        assert _parse_site_deg("   ") is None
+
+
+class TestFITSHeaderExtractorSiteCoords:
+    def _make_fits(self, path: Path, sitelat=None, sitelong=None) -> Path:
+        hdu = fits.PrimaryHDU()
+        hdu.header["OBJECT"] = "M 81"
+        hdu.header["DATE-OBS"] = "2026-02-19T22:00:00"
+        hdu.header["EXPOSURE"] = 180.0
+        if sitelat is not None:
+            hdu.header["SITELAT"] = sitelat
+        if sitelong is not None:
+            hdu.header["SITELONG"] = sitelong
+        hdu.writeto(path, overwrite=True)
+        return path
+
+    def test_extracts_site_coords(self, tmp_path):
+        p = self._make_fits(tmp_path / "frame.fit", sitelat=38.5631, sitelong=-8.88149)
+        meta = FITSHeaderExtractor.extract_metadata(p)
+        assert meta["site_lat"] == pytest.approx(38.5631)
+        assert meta["site_lon"] == pytest.approx(-8.88149)
+
+    def test_missing_headers_return_none(self, tmp_path):
+        p = self._make_fits(tmp_path / "frame.fit")
+        meta = FITSHeaderExtractor.extract_metadata(p)
+        assert meta["site_lat"] is None
+        assert meta["site_lon"] is None
+
+
+class TestAnalyzeSessionsSiteCoords:
+    def _make_meta(self, **overrides):
+        base = {
+            "filename_stem": "Light_M81_180.0s_Bin1_0C_20260219_L-Pro_0001",
+            "file_path": "/fake/path/frame.fit",
+            "date_obs": "2026-02-19T22:00:00",
+            "exposure": 180.0,
+            "camera": "ZWO ASI585MC",
+            "gain": 200,
+            "temperature": -10.0,
+            "focallen": 400,
+            "filter_header": None,
+            "object": "M 81",
+            "ra_deg": None,
+            "dec_deg": None,
+            "site_lat": None,
+            "site_lon": None,
+        }
+        base.update(overrides)
+        return base
+
+    def test_carries_first_frame_site_coords(self, tmp_path):
+        lights = tmp_path / "M81" / "Lights"
+        lights.mkdir(parents=True)
+        meta_list = [
+            self._make_meta(site_lat=38.5631, site_lon=-8.88149),
+            self._make_meta(
+                filename_stem="Light_M81_180.0s_Bin1_0C_20260219_L-Pro_0002",
+                site_lat=38.9999, site_lon=-9.9999,  # second frame's value ignored
+            ),
+        ]
+        result = SessionAnalyzer.analyze_sessions(meta_list, lights)
+        assert len(result) == 1
+        assert result[0]["site_lat"] == pytest.approx(38.5631)
+        assert result[0]["site_lon"] == pytest.approx(-8.88149)
+
+    def test_missing_site_coords_are_none(self, tmp_path):
+        lights = tmp_path / "M81" / "Lights"
+        lights.mkdir(parents=True)
+        result = SessionAnalyzer.analyze_sessions([self._make_meta()], lights)
+        assert result[0]["site_lat"] is None
+        assert result[0]["site_lon"] is None
+
+
+class TestUpsertSessionSiteCoords:
+    def _session(self, **overrides):
+        base = {
+            "session_id": "M81_20260219_FRA400_ASI585MC_L-Pro",
+            "target": "M 81",
+            "obs_date": "2026-02-19",
+            "ota": "FRA400",
+            "camera": "ZWO ASI585MC",
+            "filter": "L-Pro",
+            "gain": 200,
+            "temperature_c": -10.0,
+            "exposure_sec": 180.0,
+            "focal_length": 400.0,
+            "frame_count": 10,
+            "total_integration_sec": 1800,
+            "ra_deg": None,
+            "dec_deg": None,
+            "lights_path": "/fake",
+            "notes": "",
+        }
+        base.update(overrides)
+        return base
+
+    def _site_lat(self, db, session_id="M81_20260219_FRA400_ASI585MC_L-Pro"):
+        with sqlite3.connect(db) as conn:
+            row = conn.execute(
+                "SELECT site_lat, site_lon FROM sessions WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+        return row
+
+    def test_session_without_site_keys_upserts_fine(self, tmp_path):
+        db = tmp_path / "test.db"
+        init_db(db)
+        upsert_session(db, self._session())  # no site_lat/site_lon keys at all
+        assert self._site_lat(db) == (None, None)
+
+    def test_coalesce_preserves_backfilled_value_on_rescan_without_header(self, tmp_path):
+        db = tmp_path / "test.db"
+        init_db(db)
+        upsert_session(db, self._session(site_lat=38.5631, site_lon=-8.88149))
+        assert self._site_lat(db) == pytest.approx((38.5631, -8.88149))
+
+        # A rescan of frames lacking SITELAT must not NULL out the backfilled value.
+        upsert_session(db, self._session(site_lat=None, site_lon=None))
+        assert self._site_lat(db) == pytest.approx((38.5631, -8.88149))
+
+    def test_coalesce_lets_a_header_bearing_rescan_win(self, tmp_path):
+        db = tmp_path / "test.db"
+        init_db(db)
+        upsert_session(db, self._session(site_lat=38.5631, site_lon=-8.88149))
+        upsert_session(db, self._session(site_lat=38.9, site_lon=-9.1))
+        assert self._site_lat(db) == pytest.approx((38.9, -9.1))
+
+
+class TestSiteMigration:
+    def test_adds_site_columns_to_post_w3_db_missing_them(self, tmp_path):
+        # Current (post-W3, id-PK) schema, minus the two S1 columns — models
+        # a real DB from just before this migration was introduced.
+        db = tmp_path / "old.db"
+        with sqlite3.connect(db) as conn:
+            conn.executescript("""
+                CREATE TABLE sessions (
+                    id                       INTEGER PRIMARY KEY,
+                    session_id               TEXT NOT NULL UNIQUE,
+                    target                   TEXT NOT NULL,
+                    obs_date                 TEXT NOT NULL,
+                    ota                      TEXT,
+                    camera                   TEXT,
+                    filter                   TEXT,
+                    gain                     INTEGER,
+                    temperature_c            REAL,
+                    exposure_sec             REAL,
+                    focal_length             REAL,
+                    frame_count              INTEGER,
+                    total_integration_sec    INTEGER,
+                    ra_deg                   REAL,
+                    dec_deg                  REAL,
+                    lights_path              TEXT,
+                    processed_status         TEXT,
+                    processed_state          TEXT NOT NULL DEFAULT 'unprocessed',
+                    processed_path           TEXT,
+                    processed_date           TEXT,
+                    notes                    TEXT,
+                    created_at               TEXT,
+                    updated_at               TEXT
+                );
+                CREATE TABLE calibration_sets (set_id TEXT PRIMARY KEY, frame_type TEXT NOT NULL);
+            """)
+        init_db(db)
+        with sqlite3.connect(db) as conn:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(sessions)")}
+        assert {"site_lat", "site_lon"} <= cols
+
+
+class TestSitesHomeInvariant:
+    def test_partial_unique_index_rejects_second_home(self, tmp_path):
+        db = tmp_path / "test.db"
+        init_db(db)
+        conn = sqlite3.connect(db)
+        add_site(conn, name="Home", lat=38.563, lon=-8.881, is_home=True)
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO sites (name, lat, lon, is_home) VALUES (?, ?, ?, ?)",
+                ("Other", 38.6, -8.9, 1),
+            )

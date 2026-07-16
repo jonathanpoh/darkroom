@@ -87,6 +87,40 @@ def _parse_gain(header) -> int:
     return 0
 
 
+def _parse_site_deg(val) -> float | None:
+    """Parse a SITELAT/SITELONG header value into decimal degrees.
+
+    ASIAir writes these as decimal-degree floats, but tolerate sign-aware
+    sexagesimal strings ("38 33 47", "-8:52:53") too. Returns None for
+    anything unparseable — this runs per-frame, so failures are silent.
+    """
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        return float(val)
+    if not isinstance(val, str):
+        return None
+    s = val.strip()
+    if not s:
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        pass
+    parts = [p for p in re.split(r"[ :]+", s) if p]
+    if len(parts) not in (2, 3):
+        return None
+    try:
+        nums = [float(p) for p in parts]
+    except ValueError:
+        return None
+    deg = abs(nums[0])
+    minutes = nums[1]
+    seconds = nums[2] if len(nums) == 3 else 0.0
+    result = deg + minutes / 60.0 + seconds / 3600.0
+    return -result if parts[0].startswith("-") else result
+
+
 def _target_from_path(lights_path: Path) -> str:
     """Extract target name from NAS folder path.
 
@@ -202,7 +236,9 @@ _SESSIONS_SCHEMA = """
         processed_date           TEXT,
         notes                    TEXT,
         created_at               TEXT,
-        updated_at               TEXT
+        updated_at               TEXT,
+        site_lat                 REAL,
+        site_lon                 REAL
     )
 """
 
@@ -313,6 +349,21 @@ def init_db(db_path: Path) -> None:
                 created_at      TEXT,
                 updated_at      TEXT
             );
+            -- S1: named observing sites for session->site proximity resolution and
+            -- SQM-based depth weighting. bortle/sqm are user-entered (nullable).
+            -- Exactly one row may be the home reference (partial unique index below).
+            CREATE TABLE IF NOT EXISTS sites (
+                id          INTEGER PRIMARY KEY,
+                name        TEXT NOT NULL UNIQUE,
+                lat         REAL NOT NULL,
+                lon         REAL NOT NULL,
+                radius_m    REAL NOT NULL DEFAULT 1000,
+                bortle      INTEGER,
+                sqm         REAL,
+                is_home     INTEGER NOT NULL DEFAULT 0,
+                created_at  TEXT,
+                updated_at  TEXT
+            );
         """
         )
         # Additive migrations for existing (pre-W3) sessions tables. These must
@@ -351,12 +402,22 @@ def init_db(db_path: Path) -> None:
             # the rebuild — never on a DB that's already gone through this.
             _backfill_processed_state(conn)
 
+        # S1: observing-site coordinates from FITS SITELAT/SITELONG headers.
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(sessions)")}
+        if "site_lat" not in cols:
+            conn.execute("ALTER TABLE sessions ADD COLUMN site_lat REAL")
+        if "site_lon" not in cols:
+            conn.execute("ALTER TABLE sessions ADD COLUMN site_lon REAL")
+
         # Indexes are (re)created here, after the rebuild above (which drops
         # them along with the old table) — safe to run every time.
         conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_target ON sessions(target)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_obs_date ON sessions(obs_date)")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_sessions_processed_state ON sessions(processed_state)"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_sites_home ON sites(is_home) WHERE is_home = 1"
         )
 
         # W2: NULL is the empty/unknown sentinel for filter, not "". Safe to
@@ -397,6 +458,8 @@ def upsert_session(db_path: Path, session: dict) -> None:
     # Legacy free-text column — new callers rely on processed_state (default
     # 'unprocessed') instead, so this is only populated for backward compat.
     session.setdefault("processed_status", None)
+    session.setdefault("site_lat", None)
+    session.setdefault("site_lon", None)
     with sqlite3.connect(db_path) as conn:
         conn.execute(
             """
@@ -404,12 +467,14 @@ def upsert_session(db_path: Path, session: dict) -> None:
                 session_id, target, obs_date, ota, camera, filter,
                 gain, temperature_c, exposure_sec, focal_length,
                 frame_count, total_integration_sec, ra_deg, dec_deg,
-                lights_path, processed_status, notes, created_at, updated_at
+                lights_path, processed_status, notes, created_at, updated_at,
+                site_lat, site_lon
             ) VALUES (
                 :session_id, :target, :obs_date, :ota, :camera, :filter,
                 :gain, :temperature_c, :exposure_sec, :focal_length,
                 :frame_count, :total_integration_sec, :ra_deg, :dec_deg,
-                :lights_path, :processed_status, :notes, :created_at, :updated_at
+                :lights_path, :processed_status, :notes, :created_at, :updated_at,
+                :site_lat, :site_lon
             )
             ON CONFLICT(session_id) DO UPDATE SET
                 target                = excluded.target,
@@ -427,7 +492,9 @@ def upsert_session(db_path: Path, session: dict) -> None:
                 dec_deg               = excluded.dec_deg,
                 lights_path           = excluded.lights_path,
                 notes                 = excluded.notes,
-                updated_at            = excluded.updated_at
+                updated_at            = excluded.updated_at,
+                site_lat              = COALESCE(excluded.site_lat, sessions.site_lat),
+                site_lon              = COALESCE(excluded.site_lon, sessions.site_lon)
             """,
             session,
         )
@@ -706,6 +773,8 @@ class FITSHeaderExtractor:
                     "focallen": header.get("FOCALLEN", None),
                     "ra_deg": ra_deg,
                     "dec_deg": dec_deg,
+                    "site_lat": _parse_site_deg(header.get("SITELAT")),
+                    "site_lon": _parse_site_deg(header.get("SITELONG")),
                 }
         except Exception as e:
             print(f"Warning: Could not read {fits_path}: {e}", file=sys.stderr)
@@ -766,6 +835,8 @@ class SessionAnalyzer:
                 "total_integration_sec": int(sum(f["exposure"] for f in frames)),
                 "ra_deg": first.get("ra_deg"),
                 "dec_deg": first.get("dec_deg"),
+                "site_lat": first.get("site_lat"),
+                "site_lon": first.get("site_lon"),
                 "lights_path": str(lights_path),
                 "notes": "",
             })

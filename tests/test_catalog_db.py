@@ -14,6 +14,9 @@ from darkroom.catalog_db import (
     list_pending_renames,
     ack_pending_rename,
     rename_target,
+    list_sites,
+    add_site,
+    update_site_fields,
 )
 
 
@@ -711,6 +714,92 @@ def test_rename_target_fixes_denormalized_stored_target(tmp_path):
     # Rows already in canonical form are skipped, so re-running is a no-op.
     again = rename_target(conn, "SH2-103", "Sh2-103")
     assert again == {"renamed": 0, "errors": [], "total": 0}
+
+
+# ---------------------------------------------------------------------------
+# sites (S1)
+# ---------------------------------------------------------------------------
+
+def test_add_site_and_list_sites_round_trip(tmp_path):
+    conn = open_db(make_db(tmp_path))
+    add_site(conn, name="Palmela", lat=38.563, lon=-8.881)
+    sites = list_sites(conn)
+    assert len(sites) == 1
+    assert sites[0]["name"] == "Palmela"
+    assert sites[0]["lat"] == 38.563
+    assert sites[0]["lon"] == -8.881
+    assert sites[0]["radius_m"] == 1000
+    assert sites[0]["is_home"] == 0
+
+
+def test_add_site_duplicate_name_raises(tmp_path):
+    conn = open_db(make_db(tmp_path))
+    add_site(conn, name="Palmela", lat=38.563, lon=-8.881)
+    with pytest.raises(ValueError):
+        add_site(conn, name="Palmela", lat=38.6, lon=-8.9)
+
+
+def test_update_site_fields_sets_sqm_and_bortle(tmp_path):
+    conn = open_db(make_db(tmp_path))
+    add_site(conn, name="Palmela", lat=38.563, lon=-8.881)
+    assert update_site_fields(conn, "Palmela", sqm=20.9, bortle=4) is True
+    sites = list_sites(conn)
+    assert sites[0]["sqm"] == 20.9
+    assert sites[0]["bortle"] == 4
+
+
+def test_update_site_fields_renames(tmp_path):
+    conn = open_db(make_db(tmp_path))
+    add_site(conn, name="Palmela", lat=38.563, lon=-8.881)
+    assert update_site_fields(conn, "Palmela", name="Palmela Dark Site") is True
+    names = {s["name"] for s in list_sites(conn)}
+    assert names == {"Palmela Dark Site"}
+
+
+def test_update_site_fields_unknown_field_raises(tmp_path):
+    conn = open_db(make_db(tmp_path))
+    add_site(conn, name="Palmela", lat=38.563, lon=-8.881)
+    with pytest.raises(ValueError):
+        update_site_fields(conn, "Palmela", not_a_field=1)
+
+
+def test_update_site_fields_missing_site_returns_false(tmp_path):
+    conn = open_db(make_db(tmp_path))
+    assert update_site_fields(conn, "NoSuchSite", sqm=20.0) is False
+
+
+def test_add_site_home_reassignment(tmp_path):
+    conn = open_db(make_db(tmp_path))
+    add_site(conn, name="A", lat=38.563, lon=-8.881, is_home=True)
+    add_site(conn, name="B", lat=38.444, lon=-8.378, is_home=True)
+    sites = {s["name"]: s for s in list_sites(conn)}
+    assert sites["A"]["is_home"] == 0
+    assert sites["B"]["is_home"] == 1
+
+
+def test_update_site_fields_home_reassignment(tmp_path):
+    conn = open_db(make_db(tmp_path))
+    add_site(conn, name="A", lat=38.563, lon=-8.881, is_home=True)
+    add_site(conn, name="B", lat=38.444, lon=-8.378, is_home=False)
+    update_site_fields(conn, "A", is_home=True)  # A is already home: still true
+    sites = {s["name"]: s for s in list_sites(conn)}
+    assert sites["A"]["is_home"] == 1
+    assert sites["B"]["is_home"] == 0
+
+    update_site_fields(conn, "B", is_home=True)
+    sites = {s["name"]: s for s in list_sites(conn)}
+    assert sites["A"]["is_home"] == 0
+    assert sites["B"]["is_home"] == 1
+
+
+def test_update_session_fields_site_lat_lon_round_trip(tmp_path):
+    db = make_db(tmp_path)
+    conn = open_db(db)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    assert update_session_fields(conn, sid, site_lat=38.563, site_lon=-8.881) is True
+    rows = query_sessions(conn, session_id=sid)
+    assert rows[0]["site_lat"] == 38.563
+    assert rows[0]["site_lon"] == -8.881
 
 
 # ---------------------------------------------------------------------------

@@ -24,7 +24,7 @@ from darkroom.names import _normalize_target, make_session_id, session_dest_rel
 _EDITABLE_FIELDS = frozenset({
     "target", "obs_date", "ota", "camera", "filter",
     "gain", "temperature_c", "exposure_sec", "focal_length",
-    "ra_deg", "dec_deg", "notes",
+    "ra_deg", "dec_deg", "site_lat", "site_lon", "notes",
     "processed_state", "processed_path", "processed_date",
 })
 
@@ -247,6 +247,94 @@ def ack_pending_rename(conn: sqlite3.Connection, rename_id: int) -> bool:
     cur = conn.execute("DELETE FROM pending_renames WHERE id = ?", (rename_id,))
     conn.commit()
     return cur.rowcount > 0
+
+
+_SITE_FIELDS = frozenset({"name", "lat", "lon", "radius_m", "bortle", "sqm", "is_home"})
+
+
+def list_sites(conn: sqlite3.Connection) -> list[dict]:
+    """Return all sites, home first then alphabetical by name."""
+    rows = conn.execute("SELECT * FROM sites ORDER BY is_home DESC, name").fetchall()
+    return [dict(r) for r in rows]
+
+
+def add_site(
+    conn: sqlite3.Connection,
+    *,
+    name: str,
+    lat: float,
+    lon: float,
+    radius_m: float = 1000.0,
+    bortle: int | None = None,
+    sqm: float | None = None,
+    is_home: bool = False,
+) -> int:
+    """Insert a new site. Raises ValueError on a duplicate name.
+
+    If is_home is truthy, any existing home site is cleared first (same
+    transaction) so at most one row ever has is_home = 1.
+    """
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    if is_home:
+        conn.execute("UPDATE sites SET is_home = 0 WHERE is_home = 1")
+    try:
+        cur = conn.execute(
+            "INSERT INTO sites (name, lat, lon, radius_m, bortle, sqm, is_home, "
+            "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (name, lat, lon, radius_m, bortle, sqm, int(bool(is_home)), now, now),
+        )
+    except sqlite3.IntegrityError:
+        raise ValueError(f"site {name!r} already exists")
+    conn.commit()
+    return cur.lastrowid
+
+
+def update_site_fields(conn: sqlite3.Connection, name: str, /, **fields) -> bool:
+    """Update whitelisted fields on an existing site, in place.
+
+    Rejects unknown field names with ValueError. If is_home is set truthy,
+    any existing home site is cleared first (same transaction). "name" in
+    fields renames the site; a rename that collides with another site's name
+    raises ValueError. Returns True if the site was found and updated, False
+    if name doesn't match any row.
+    """
+    if not fields:
+        raise ValueError("no fields given to update")
+    unknown = set(fields) - _SITE_FIELDS
+    if unknown:
+        raise ValueError(
+            f"Unknown/non-editable field(s): {sorted(unknown)} "
+            f"(editable: {sorted(_SITE_FIELDS)})"
+        )
+
+    row = conn.execute("SELECT id FROM sites WHERE name = ?", (name,)).fetchone()
+    if row is None:
+        return False
+
+    if fields.get("is_home"):
+        conn.execute("UPDATE sites SET is_home = 0 WHERE is_home = 1")
+
+    set_clauses = []
+    params: list = []
+    for key, value in fields.items():
+        if key == "is_home":
+            value = int(bool(value))
+        set_clauses.append(f"{key} = ?")
+        params.append(value)
+
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    set_clauses.append("updated_at = ?")
+    params.append(now)
+    params.append(row["id"])
+    try:
+        conn.execute(
+            f"UPDATE sites SET {', '.join(set_clauses)} WHERE id = ?",
+            params,
+        )
+    except sqlite3.IntegrityError:
+        raise ValueError(f"site {fields.get('name')!r} already exists")
+    conn.commit()
+    return True
 
 
 def update_session_fields(conn: sqlite3.Connection, session_id: str, **fields) -> bool:
