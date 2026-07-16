@@ -239,14 +239,19 @@ def _flat_hints(row: dict, flat_sets: list[dict], window_days: int = 7, limit: i
     ]
 
 
-def _build_queue(conn) -> tuple[list[dict], list[dict]]:
-    """Return (unknown_filter_rows, suspicious_value_rows), each obs_date-desc.
+def _build_queue(conn) -> tuple[list[dict], list[dict], list[dict]]:
+    """Return (unknown_filter_rows, suspicious_value_rows, missing_site_rows), each obs_date-desc.
 
     'unknown filter' = filter IS NULL or 'UnknownFilter' (never parsed).
     'suspicious value' = filter is set but isn't one of KNOWN_FILTERS (the
     panel-name-in-filter-column garbage rows). Every row also carries an
     `unknown_ota` badge flag and context hints (neighbour sessions, nearby
     flats) to jog the user's memory when fixing it inline.
+
+    'missing site coordinates' = site_lat or site_lon IS NULL. Mostly
+    pre-ASIAir (Canon) frames that never had GPS headers, but also catches
+    ASIAir sessions the header parse missed — surfaced so coordinates can be
+    added by hand via the session edit screen rather than assumed.
     """
     all_rows = catalog_db.query_sessions(conn)
     flat_sets = catalog_db.query_calibration_sets(conn, frame_type="Flat")
@@ -270,7 +275,14 @@ def _build_queue(conn) -> tuple[list[dict], list[dict]]:
 
     unknown_rows.sort(key=lambda r: r["obs_date"] or "", reverse=True)
     suspicious_rows.sort(key=lambda r: r["obs_date"] or "", reverse=True)
-    return unknown_rows, suspicious_rows
+
+    missing_site_rows = [
+        dict(row) for row in all_rows
+        if row["site_lat"] is None or row["site_lon"] is None
+    ]
+    missing_site_rows.sort(key=lambda r: r["obs_date"] or "", reverse=True)
+
+    return unknown_rows, suspicious_rows, missing_site_rows
 
 
 def _known_otas(conn) -> list[str]:
@@ -485,7 +497,7 @@ def build_ui_router(db_path: Path, ui_password_hash: str) -> APIRouter:
     def _queue_context() -> dict:
         conn = _get_conn()
         try:
-            unknown_rows, suspicious_rows = _build_queue(conn)
+            unknown_rows, suspicious_rows, missing_site_rows = _build_queue(conn)
             known_otas = _known_otas(conn)
             pending_renames = catalog_db.list_pending_renames(conn)
             all_targets = _all_targets(conn)
@@ -494,6 +506,7 @@ def build_ui_router(db_path: Path, ui_password_hash: str) -> APIRouter:
         return {
             "unknown_rows": unknown_rows,
             "suspicious_rows": suspicious_rows,
+            "missing_site_rows": missing_site_rows,
             "total_count": len(unknown_rows) + len(suspicious_rows),
             "known_filters": KNOWN_FILTERS,
             "known_otas": known_otas,
@@ -554,6 +567,39 @@ def build_ui_router(db_path: Path, ui_password_hash: str) -> APIRouter:
                 return templates.TemplateResponse(
                     request, "queue.html", ctx, status_code=400
                 )
+            if not updated:
+                raise HTTPException(status_code=404, detail="session not found")
+        finally:
+            conn.close()
+
+        return RedirectResponse("/queue", status_code=303)
+
+    @router.post("/queue/{session_id}/fix-site")
+    async def queue_fix_site(
+        request: Request,
+        session_id: str,
+        darkroom_token: str | None = Cookie(default=None),
+    ):
+        redirect = _require_auth(request, darkroom_token)
+        if redirect:
+            return redirect
+
+        form_data = await request.form()
+        try:
+            lat = float(form_data.get("site_lat"))
+            lon = float(form_data.get("site_lon"))
+        except (TypeError, ValueError):
+            ctx = _queue_context()
+            ctx["error"] = f"{session_id}: latitude/longitude must be numeric"
+            return templates.TemplateResponse(
+                request, "queue.html", ctx, status_code=400
+            )
+
+        conn = _get_conn()
+        try:
+            updated = catalog_db.update_session_fields(
+                conn, session_id, site_lat=lat, site_lon=lon
+            )
             if not updated:
                 raise HTTPException(status_code=404, detail="session not found")
         finally:

@@ -619,7 +619,13 @@ def test_queue_lists_null_and_unknown_filter_but_not_known_filter(tmp_path):
         _session(unknown_sid, filter="UnknownFilter", obs_date="2026-02-20"),
     )
     known_sid = "M81_20260221_FRA400_ZWOASI585MCPro_L-Pro"
-    upsert_session(db_path, _session(known_sid, obs_date="2026-02-21", filter="L-Pro"))
+    upsert_session(
+        db_path,
+        _session(
+            known_sid, obs_date="2026-02-21", filter="L-Pro",
+            site_lat=38.563, site_lon=-8.881,
+        ),
+    )
     login(client)
 
     resp = client.get("/queue")
@@ -718,7 +724,10 @@ def test_queue_fix_valid_filter_updates_row_and_creates_pending_rename(tmp_path)
     sid = "M81_20260219_FRA400_ZWOASI585MCPro_UnknownFilter"
     upsert_session(
         db_path,
-        _session(sid, filter=None, obs_date="2026-02-19"),
+        _session(
+            sid, filter=None, obs_date="2026-02-19",
+            site_lat=38.563, site_lon=-8.881,
+        ),
     )
     login(client)
 

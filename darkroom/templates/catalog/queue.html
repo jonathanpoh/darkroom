@@ -86,6 +86,32 @@
 </section>
 
 <section class="qsection">
+  <h3 class="qsectitle">Missing site coordinates <span class="n">{{ missing_site_rows | length }}</span></h3>
+  {% if missing_site_rows %}
+    {% for s in missing_site_rows %}
+    <div class="qrow">
+      <div class="qhead">
+        <a class="tname" href="/sessions/{{ s.session_id | urlencode }}">{{ s.session_id }}</a>
+      </div>
+      <div class="qmeta">
+        <span class="qfield">{{ s.obs_date }}</span>
+        <span class="qfield">{{ s.target }}</span>
+        <span class="qfield">{{ s.camera or '—' }}</span>
+        <span class="qfield">{{ s.ota or '—' }}</span>
+      </div>
+      <form class="qfixform" method="post" action="/queue/{{ s.session_id | urlencode }}/fix-site">
+        <input type="text" name="site_lat" placeholder="lat" required>
+        <input type="text" name="site_lon" placeholder="lon" required>
+        <button type="submit">Fix</button>
+      </form>
+    </div>
+    {% endfor %}
+  {% else %}
+    <p class="qempty">Nothing here.</p>
+  {% endif %}
+</section>
+
+<section class="qsection">
   <h3 class="qsectitle">Targets <span class="n">{{ target_suggestions | length }}</span></h3>
   {% if target_suggestions %}
     {% for sug in target_suggestions %}
