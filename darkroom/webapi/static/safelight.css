@@ -186,7 +186,7 @@ details[open] .rigsum .strip { visibility: hidden; }
 .gword { font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); }
 .gword.deep { color: var(--safelight); }
 
-.nightcols { grid-template-columns: 36px 100px 1fr 150px 110px 76px; }
+.nightcols { grid-template-columns: 36px 100px 1fr 150px 110px 90px 76px; }
 .night { align-items: center; cursor: default; }
 .night:hover { background: none; }
 .night .fchip { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
@@ -197,6 +197,10 @@ details[open] .rigsum .strip { visibility: hidden; }
 .night .date a { color: inherit; text-decoration: none; }
 .night .date a:hover { color: var(--safelight-hi); text-decoration: underline; }
 .nightcols .colhead { padding-top: 8px; }
+.sitecell { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.sitechip { color: var(--ink-3); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wbadge { color: var(--ink-2); font-size: 10px; font-variant-numeric: tabular-nums;
+          border: 1px solid var(--hairline); border-radius: 2px; padding: 0 4px; flex: none; }
 
 .markbtn { background: none; border: none; padding: 0; cursor: pointer; width: 36px; height: 30px; position: relative; }
 .markbtn svg { position: absolute; inset: 0; margin: auto; overflow: visible; }

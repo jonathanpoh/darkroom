@@ -76,14 +76,18 @@ function stripHTML(hours, totalMax) {
    the overview). <2h needs more data · 5–10h workable · 20h+ good.
    sqrt scale, 30h = full. */
 const GAUGE_MAX = 30;
-function gaugeHTML(h, withWord = true) {
+function gaugeHTML(h, withWord = true, rawH) {
   const zone = h < 2 ? ["needs data", "var(--ink-3)", ""] :
                h < 10 ? ["workable", "var(--ink-2)", ""] :
                h < 20 ? ["solid", "var(--ink)", ""] :
                         ["deep", "var(--safelight)", "deep"];
   const w = Math.min(Math.sqrt(h / GAUGE_MAX), 1) * 100;
   const tick = v => `<i class="gtick" style="left:${Math.sqrt(v / GAUGE_MAX) * 100}%"></i>`;
-  return `<span class="gauge" data-tip="<b>${h.toFixed(1)}h</b> — ${zone[0]}">
+  const weighted = rawH !== undefined && Math.abs(h - rawH) > 0.05;
+  const tip = weighted
+    ? `<b>${h.toFixed(1)}h</b> home-equivalent (${rawH.toFixed(1)}h raw) — ${zone[0]}`
+    : `<b>${h.toFixed(1)}h</b> — ${zone[0]}`;
+  return `<span class="gauge" data-tip="${tip}">
     <span class="gtrack"><span class="gfill" style="width:${w}%; background:${zone[1]}"></span>${tick(2)}${tick(10)}${tick(20)}</span>
     ${withWord ? `<span class="gword ${zone[2]}">${zone[0]}</span>` : ""}</span>`;
 }
@@ -93,6 +97,8 @@ const nameCell = (t) =>
 
 const backlogH = t => t.nights.filter(n => n.state === "unprocessed" || n.state === "in_progress")
                               .reduce((a, n) => a + n.h, 0);
+const backlogWH = t => t.nights.filter(n => n.state === "unprocessed" || n.state === "in_progress")
+                               .reduce((a, n) => a + (n.wh ?? n.h), 0);
 
 /* ── overview ──────────────────────────────── */
 const OV_SORTS = {
@@ -127,7 +133,7 @@ function renderOverview() {
       return `<a class="row cols" href="/targets/${encodeURIComponent(t.target)}">
         ${nameCell(t)}
         ${stripHTML(t.hours, maxH)}
-        ${gaugeHTML(backlogH(t), false)}
+        ${gaugeHTML(backlogWH(t), false, backlogH(t))}
         <span class="hnum num"><b>${t.total_h.toFixed(1)}</b>h</span>
         <span class="opennum num ${open > 0 ? "some" : ""}">${open > 0 ? open.toFixed(1) + "h" : "—"}</span>
         <span class="marks">${counts}</span>
@@ -170,7 +176,8 @@ function renderOverview() {
     <p class="footnote">
       Open = hours in sessions still open or in progress ·
       Depth = open hours: &lt;2h needs data · 5–10h workable · 20h+ deep ·
-      marks are clickable in the target view</p>`;
+      marks are clickable in the target view ·
+      Depth is weighted by site sky quality (SQM flux ratio) when known — home-equivalent hours</p>`;
   document.getElementById("q").addEventListener("input", e => { query = e.target.value.toLowerCase(); renderOverview(); const q = document.getElementById("q"); q.focus(); q.setSelectionRange(q.value.length, q.value.length); });
   document.getElementById("catsel").addEventListener("change", e => { catSel = e.target.value; renderOverview(); });
   document.getElementById("filtsel").addEventListener("change", e => { filtSel = e.target.value; renderOverview(); });
@@ -204,6 +211,7 @@ function renderDetail() {
     const gsort = detail.sorts[rig] || { key: "date", desc: true };
     const sorted = [...nights].sort((a, b) => (gsort.desc ? -1 : 1) * NIGHT_SORTS[gsort.key](a, b));
     const gh = nights.reduce((a, n) => a + n.h, 0);
+    const ghw = nights.reduce((a, n) => a + (n.wh ?? n.h), 0);
     const rows = sorted.map(n => `
       <div class="row cols nightcols night">
         <button class="markbtn" data-sid="${n.sid}" title="${STATE_LABEL[n.state]} — click to cycle">${markSVG(n.state, n.sid)}</button>
@@ -211,25 +219,27 @@ function renderDetail() {
         <span class="fchip"><i style="background:${fcolor(n.filter || "None")}"></i>${fname(n.filter || "None")}</span>
         <span class="exp">${n.frames || "?"} × ${n.exp ? n.exp.toFixed(0) + "s" : "?"}${n.gain ? " · gain" + n.gain : ""}</span>
         <span class="statelabel ${n.state}">${STATE_LABEL[n.state]}</span>
+        <span class="sitecell"><span class="sitechip">${n.site || ""}</span>${n.w !== undefined && n.w !== 1 ? `<span class="wbadge">×${n.w}</span>` : ""}</span>
         <span class="h">${n.h.toFixed(1)}h</span>
       </div>`).join("");
     const gs = (key, label, extra="") => {
       const on = gsort.key === key;
       return `<button class="colhead sortable ${on ? "sorted" : ""} ${extra}" data-rig="${rig}" data-key="${key}">${label} ${on ? `<span class="dir">${gsort.desc ? "▼" : "▲"}</span>` : ""}</button>`;
     };
+    const weighted = Math.abs(gh - ghw) > 0.05;
     return `<details class="rig" data-rig="${rig}" ${detail.closed.has(rig) ? "" : "open"}>
       <summary class="rigsum">
         <svg class="tri" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2.5 1 L8 5 L2.5 9 Z" fill="currentColor"/></svg>
         <span class="rigname display">${rig}</span>
-        ${gaugeHTML(gh)}
+        ${gaugeHTML(ghw, true, gh)}
         ${stripHTML(hoursOf(nights), null)}
-        <span class="hnum num"><b>${gh.toFixed(1)}</b>h</span>
+        <span class="hnum num"><b>${gh.toFixed(1)}</b>h${weighted ? ` ≈ ${ghw.toFixed(1)}h @home` : ""}</span>
         <span class="n">${nights.length} sessions</span>
       </summary>
       <div class="rigbody">
         <div class="cols nightcols headrow">
           <span class="colhead"></span>${gs("date", "Night")}<span class="colhead">Filter</span>
-          <span class="colhead">Exposure</span>${gs("state", "State")}${gs("h", "Hours", "num")}
+          <span class="colhead">Exposure</span>${gs("state", "State")}<span class="colhead">Site</span>${gs("h", "Hours", "num")}
         </div>
         ${rows}
       </div>
@@ -246,7 +256,8 @@ function renderDetail() {
     ${groups}
     <p class="footnote">grease-pencil marks: <span class="lamp">○</span> processed · half-circle in progress · strike skipped · dotted = open.
       click a mark to cycle state — updates the catalog.
-      gauge = integration banked per rig: &lt;2h needs data · 5–10h workable · 20h+ deep.</p>`;
+      gauge = integration banked per rig: &lt;2h needs data · 5–10h workable · 20h+ deep, weighted by site sky quality.
+      Site column: named observing site the session's coordinates matched, if any; a ×badge shows its SQM weight relative to home when it isn't 1×.</p>`;
   document.querySelectorAll("details.rig").forEach(d => d.addEventListener("toggle", () => {
     if (d.open) detail.closed.delete(d.dataset.rig); else detail.closed.add(d.dataset.rig);
   }));

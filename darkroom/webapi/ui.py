@@ -28,6 +28,7 @@ from fastapi.templating import Jinja2Templates
 
 from darkroom import catalog_db
 from darkroom.names import KNOWN_FILTERS, _normalize_target
+from darkroom.sites import home_sqm, resolve_site, session_weight
 from darkroom.webapi import auth
 from darkroom.webapi.common_names import common_name
 
@@ -99,14 +100,24 @@ def _safe_next(next_: str | None) -> str:
     return "/"
 
 
-def _build_aggregate(rows: list[dict]) -> list[dict]:
+def _build_aggregate(rows: list[dict], sites: list[dict] | None = None) -> list[dict]:
     """Group session rows by target into the shape the safelight JS expects.
 
     Mirrors the mock's `catalog_agg` structure: one entry per target with
     integration hours broken down by filter, processed-state counts, the most
     recent obs_date, and a `nights` list (one per session) that the client-side
     renderer groups by rig (OTA + camera) and sorts/filters interactively.
+
+    `sites` (from `catalog_db.list_sites`) drives SQM-based weighting: each
+    night's raw hours `h` are scaled by `session_weight(site, home)` into
+    `wh` ("home-equivalent hours"), where `site` is resolved from the
+    session's site_lat/site_lon and `home` is the is_home site's sqm. With no
+    sites, no home sqm, or NULL session coords, weight is always 1.0 and
+    `wh`/`total_wh` equal `h`/`total_h` exactly — this keeps the aggregate
+    unchanged for callers/fixtures that don't pass `sites`.
     """
+    home = home_sqm(sites) if sites else None
+
     groups: dict[str, list[dict]] = {}
     for row in rows:
         groups.setdefault(row["target"], []).append(row)
@@ -116,12 +127,20 @@ def _build_aggregate(rows: list[dict]) -> list[dict]:
         nights = []
         hours: dict[str, float] = {}
         states: dict[str, int] = {}
+        total_wh = 0.0
         for s in sessions:
             h = (s["total_integration_sec"] or 0) / 3600.0
             filt = s["filter"] or "None"
             hours[filt] = hours.get(filt, 0.0) + h
             state = s["processed_state"] or "unprocessed"
             states[state] = states.get(state, 0) + 1
+            site = (
+                resolve_site(s.get("site_lat"), s.get("site_lon"), sites)
+                if sites else None
+            )
+            w = session_weight(site, home)
+            wh = h * w
+            total_wh += wh
             nights.append({
                 "date": s["obs_date"],
                 "ota": s["ota"],
@@ -133,6 +152,9 @@ def _build_aggregate(rows: list[dict]) -> list[dict]:
                 "h": h,
                 "state": state,
                 "sid": s["session_id"],
+                "site": site["name"] if site else None,
+                "w": round(w, 3),
+                "wh": wh,
             })
         total_h = sum(hours.values())
         last = max((s["obs_date"] for s in sessions if s["obs_date"]), default=None)
@@ -142,6 +164,7 @@ def _build_aggregate(rows: list[dict]) -> list[dict]:
             "n": len(sessions),
             "hours": hours,
             "total_h": total_h,
+            "total_wh": total_wh,
             "states": states,
             "last": last,
             "nights": nights,
@@ -418,13 +441,14 @@ def build_ui_router(db_path: Path, ui_password_hash: str) -> APIRouter:
         conn = _get_conn()
         try:
             rows = catalog_db.query_sessions(conn)
+            sites = catalog_db.list_sites(conn)
         finally:
             conn.close()
 
         return templates.TemplateResponse(
             request,
             "index.html",
-            {"data": _build_aggregate(rows)},
+            {"data": _build_aggregate(rows, sites)},
         )
 
     @router.get("/targets/{target}", response_class=HTMLResponse)
@@ -440,12 +464,13 @@ def build_ui_router(db_path: Path, ui_password_hash: str) -> APIRouter:
         conn = _get_conn()
         try:
             rows = catalog_db.query_sessions(conn, target=target)
+            sites = catalog_db.list_sites(conn)
         finally:
             conn.close()
         if not rows:
             raise HTTPException(status_code=404, detail="target not found")
 
-        aggregate = _build_aggregate(rows)
+        aggregate = _build_aggregate(rows, sites)
         # query_sessions normalises `target` case/spacing-insensitively, so
         # aggregate[0]["target"] is the canonical form even if the URL segment
         # wasn't (e.g. "m81" -> "M 81") — scope strictly to that one entry.

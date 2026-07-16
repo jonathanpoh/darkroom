@@ -12,7 +12,7 @@ from darkroom.cataloger import upsert_calibration_set, upsert_session
 from darkroom.webapi import auth
 from darkroom.webapi.app import create_app
 from darkroom.webapi.auth import hash_password
-from darkroom.webapi.ui import reset_login_rate_limit, _target_suggestions
+from darkroom.webapi.ui import _build_aggregate, reset_login_rate_limit, _target_suggestions
 
 TOKEN = "testtoken"
 UI_PASSWORD = "test-password"
@@ -810,6 +810,165 @@ def test_queue_pending_renames_banner_shown_when_nonempty(tmp_path):
     resp = client.get("/queue")
     assert "<b>1</b> folder rename" in resp.text
     assert "darkroom catalog apply-renames" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# SQM site weighting (_build_aggregate, sites) — Phase 4
+# ---------------------------------------------------------------------------
+
+HOME_SITE = {
+    "name": "Home",
+    "lat": 0.0,
+    "lon": 0.0,
+    "radius_m": 1000.0,
+    "bortle": 6,
+    "sqm": 19.5,
+    "is_home": True,
+}
+AWAY_SITE = {
+    "name": "Dark Site",
+    "lat": 10.0,
+    "lon": 10.0,
+    "radius_m": 1000.0,
+    "bortle": 3,
+    "sqm": 22.0,
+    "is_home": False,
+}
+
+
+def test_build_aggregate_no_sites_arg_all_weight_one():
+    rows = [_session("sid1", site_lat=10.0, site_lon=10.0, processed_state="unprocessed")]
+    agg = _build_aggregate(rows)
+    night = agg[0]["nights"][0]
+    assert night["w"] == 1.0
+    assert night["wh"] == pytest.approx(night["h"])
+    assert agg[0]["total_wh"] == pytest.approx(agg[0]["total_h"])
+
+
+def test_build_aggregate_home_and_away_sites_weight_by_sqm_ratio():
+    home_sid = "sidHome"
+    away_sid = "sidAway"
+    rows = [
+        _session(home_sid, obs_date="2026-02-19", site_lat=0.0001, site_lon=0.0001, processed_state="unprocessed"),
+        _session(away_sid, obs_date="2026-02-20", site_lat=10.0001, site_lon=10.0001, processed_state="unprocessed"),
+    ]
+    sites = [HOME_SITE, AWAY_SITE]
+    agg = _build_aggregate(rows, sites)
+    nights = {n["sid"]: n for n in agg[0]["nights"]}
+
+    home_night = nights[home_sid]
+    assert home_night["site"] == "Home"
+    assert home_night["w"] == pytest.approx(1.0)
+    assert home_night["wh"] == pytest.approx(home_night["h"])
+
+    away_night = nights[away_sid]
+    assert away_night["site"] == "Dark Site"
+    assert away_night["w"] == pytest.approx(10.0)
+    assert away_night["wh"] == pytest.approx(10.0 * away_night["h"])
+
+    expected_total_wh = home_night["wh"] + away_night["wh"]
+    assert agg[0]["total_wh"] == pytest.approx(expected_total_wh)
+    assert agg[0]["total_h"] == pytest.approx(home_night["h"] + away_night["h"])
+
+
+def test_build_aggregate_away_site_missing_sqm_weight_one():
+    away_no_sqm = dict(AWAY_SITE, sqm=None)
+    rows = [_session("sid1", site_lat=10.0001, site_lon=10.0001, processed_state="unprocessed")]
+    agg = _build_aggregate(rows, [HOME_SITE, away_no_sqm])
+    night = agg[0]["nights"][0]
+    assert night["site"] == "Dark Site"
+    assert night["w"] == 1.0
+    assert night["wh"] == pytest.approx(night["h"])
+
+
+def test_build_aggregate_no_home_site_weight_one():
+    rows = [_session("sid1", site_lat=10.0001, site_lon=10.0001, processed_state="unprocessed")]
+    agg = _build_aggregate(rows, [AWAY_SITE])  # no is_home site at all
+    night = agg[0]["nights"][0]
+    assert night["site"] == "Dark Site"
+    assert night["w"] == 1.0
+    assert night["wh"] == pytest.approx(night["h"])
+    assert agg[0]["total_wh"] == pytest.approx(agg[0]["total_h"])
+
+
+def test_build_aggregate_null_coords_no_site_weight_one():
+    rows = [_session("sid1", site_lat=None, site_lon=None, processed_state="unprocessed")]
+    agg = _build_aggregate(rows, [HOME_SITE, AWAY_SITE])
+    night = agg[0]["nights"][0]
+    assert night["site"] is None
+    assert night["w"] == 1.0
+    assert night["wh"] == pytest.approx(night["h"])
+
+
+def test_index_page_embeds_weighted_hours_and_site_name(tmp_path):
+    client, db_path = make_client(tmp_path)
+    sid = "M81_20260220_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(
+        db_path,
+        _session(sid, obs_date="2026-02-20", site_lat=10.0001, site_lon=10.0001),
+    )
+    conn = catalog_db.open_db(db_path)
+    try:
+        catalog_db.add_site(conn, **HOME_SITE)
+        catalog_db.add_site(conn, **AWAY_SITE)
+    finally:
+        conn.close()
+    login(client)
+
+    resp = client.get("/")
+    assert resp.status_code == 200
+    data = _embedded_data(resp.text)
+    m81 = next(t for t in data if t["target"] == "M 81")
+    night = m81["nights"][0]
+    assert "wh" in night
+    assert night["site"] == "Dark Site"
+    assert "total_wh" in m81
+    assert m81["total_wh"] == pytest.approx(10.0 * m81["total_h"])
+    assert "Dark Site" in resp.text
+
+
+def test_target_page_embeds_weighted_hours_and_site_name(tmp_path):
+    client, db_path = make_client(tmp_path)
+    sid = "M81_20260220_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(
+        db_path,
+        _session(sid, obs_date="2026-02-20", site_lat=10.0001, site_lon=10.0001),
+    )
+    conn = catalog_db.open_db(db_path)
+    try:
+        catalog_db.add_site(conn, **HOME_SITE)
+        catalog_db.add_site(conn, **AWAY_SITE)
+    finally:
+        conn.close()
+    login(client)
+
+    resp = client.get("/targets/M%2081")
+    assert resp.status_code == 200
+    data = _embedded_data(resp.text)
+    night = data[0]["nights"][0]
+    assert night["wh"] == pytest.approx(10.0 * night["h"])
+    assert night["site"] == "Dark Site"
+    assert data[0]["total_wh"] == pytest.approx(10.0 * data[0]["total_h"])
+
+
+def test_index_page_renders_200_with_sites_present_no_matching_session(tmp_path):
+    client, db_path = make_client(tmp_path)
+    upsert_session(db_path, _session("M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"))
+    conn = catalog_db.open_db(db_path)
+    try:
+        catalog_db.add_site(conn, **HOME_SITE)
+        catalog_db.add_site(conn, **AWAY_SITE)
+    finally:
+        conn.close()
+    login(client)
+
+    resp = client.get("/")
+    assert resp.status_code == 200
+    data = _embedded_data(resp.text)
+    m81 = next(t for t in data if t["target"] == "M 81")
+    # session has no site_lat/site_lon -> no site match -> weight 1.0
+    assert m81["nights"][0]["site"] is None
+    assert m81["total_wh"] == pytest.approx(m81["total_h"])
 
 
 # ---------------------------------------------------------------------------
