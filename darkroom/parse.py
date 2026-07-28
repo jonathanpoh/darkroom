@@ -40,6 +40,30 @@ _FILTER_ALIASES: dict[str, str] = {
 
 SESSION_GAP = timedelta(hours=4)
 
+# ASIAir stores flat darks in the same folder as science darks with no
+# distinguishing IMAGETYP/header field. Exposure time is the only reliable
+# separator: science darks run 120s+, flat darks are sub-second to
+# low-single-digit seconds. Single source of truth for the reclassification —
+# shared by darkroom.cataloger.CalibrationCataloger.scan,
+# darkroom.scanner._scan_calibration, and darkroom.triage.suggest — do not
+# redefine this threshold locally; import it (and reclassify_flat_dark below)
+# instead.
+FLAT_DARK_THRESHOLD_SEC = 10.0
+
+
+def reclassify_flat_dark(frame_type: str, exposure_sec: float | None) -> str:
+    """Reclassify a "Dark" as "FlatDark" when its exposure is below threshold.
+
+    No-op for any other frame_type (including one already "FlatDark"). Each
+    caller resolves frame_type from its own source (FITS IMAGETYP header,
+    archive folder name, or ASIAir source folder name) before calling this —
+    that resolution step is intentionally NOT shared, since the three callers
+    genuinely differ in how much they trust folder names vs. header data.
+    """
+    if frame_type == "Dark" and exposure_sec is not None and exposure_sec < FLAT_DARK_THRESHOLD_SEC:
+        return "FlatDark"
+    return frame_type
+
 
 def normalize_filter(raw: str) -> str:
     """Apply canonical filter aliases (e.g. 'LPro' → 'L-Pro')."""

@@ -22,7 +22,13 @@ from zoneinfo import ZoneInfo
 from astropy.io import fits
 from astropy.time import Time
 
-from darkroom.parse import fits_files, normalize_filter, parse_filter, parse_ota
+from darkroom.parse import (
+    fits_files,
+    normalize_filter,
+    parse_filter,
+    parse_ota,
+    reclassify_flat_dark,
+)
 from darkroom.names import (
     _format_gain,
     _normalize_camera,
@@ -730,10 +736,9 @@ _FRAME_TYPE_KEYWORDS = {
     "flatdark": "FlatDark",
 }
 
-# ASIAir stores flat darks in the same folder as science darks with no distinguishing
-# IMAGETYP. Exposure time is the only reliable separator: science darks are 120s+,
-# flat darks are sub-second to low-single-digit seconds.
-_FLAT_DARK_THRESHOLD_SEC = 10.0
+# Dark-vs-FlatDark threshold + reclassification lives in darkroom.parse
+# (FLAT_DARK_THRESHOLD_SEC / reclassify_flat_dark) — the single source of
+# truth shared with scanner.py and triage/suggest.py.
 
 
 def _infer_frame_type(fits_path: Path, imagetyp: str | None) -> str:
@@ -850,8 +855,7 @@ class CalibrationCataloger:
 
                 # ASIAir mixes flat darks and science darks in the same Dark/ folder.
                 # Reclassify by exposure: anything under the threshold is a flat dark.
-                if frame_type == "Dark" and exposure < _FLAT_DARK_THRESHOLD_SEC:
-                    frame_type = "FlatDark"
+                frame_type = reclassify_flat_dark(frame_type, exposure)
 
                 # Filter: only meaningful for flats and flat darks; extract from filename.
                 filter_ = None

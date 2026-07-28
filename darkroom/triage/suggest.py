@@ -20,10 +20,9 @@ from astropy.time import Time
 from darkroom.cataloger import FITSHeaderExtractor
 from darkroom.names import _normalize_camera
 from darkroom.ingest import cal_dest_rel
-from darkroom.parse import parse_filter, parse_ota
+from darkroom.parse import parse_filter, parse_ota, reclassify_flat_dark
 
 _FITS_SUFFIXES = {".fit", ".fits"}
-_FLAT_DARK_THRESHOLD_SEC = 10.0
 _PLACEHOLDER_RE = re.compile(r"\{[A-Z]+\?\}")
 
 # Folder name (lowercased) → canonical frame type used by cal_dest_rel.
@@ -113,8 +112,7 @@ def suggest_calibration_dest(calib_dir: Path, archive_root: Path) -> tuple[str |
         return None, ["frames"]
 
     # A short "Dark" is actually a flat dark, matching the ingest reclassification.
-    if frame_type == "Dark" and meta.get("exposure", 0.0) < _FLAT_DARK_THRESHOLD_SEC:
-        frame_type = "FlatDark"
+    frame_type = reclassify_flat_dark(frame_type, meta.get("exposure", 0.0))
 
     missing: list[str] = []
 

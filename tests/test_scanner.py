@@ -177,6 +177,39 @@ def test_scan_calibration_flatdark_reclassified():
     assert result.calibration[0].frame_type == "FlatDark"
 
 
+def test_scan_calibration_dark_at_exact_threshold_stays_dark():
+    # Boundary: reclassify_flat_dark uses strict "<", so exactly 10.0s stays Dark.
+    with tempfile.TemporaryDirectory() as tmpdir:
+        source = Path(tmpdir)
+        dark_dir = source / "Dark"
+        dark_dir.mkdir(parents=True)
+        f = dark_dir / "Dark_10.0s_Bin1_585MC_gain200_20260220-094000_-20.0C_0001.fit"
+        f.touch()
+
+        with patch("darkroom.scanner.FITSHeaderExtractor.extract_metadata",
+                   return_value={**dark_meta(f.stem, 10.0), "file_path": str(f)}):
+            result = scan_source(source)
+
+    assert len(result.calibration) == 1
+    assert result.calibration[0].frame_type == "Dark"
+
+
+def test_scan_calibration_dark_just_over_threshold_stays_dark():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        source = Path(tmpdir)
+        dark_dir = source / "Dark"
+        dark_dir.mkdir(parents=True)
+        f = dark_dir / "Dark_10.01s_Bin1_585MC_gain200_20260220-095000_-20.0C_0001.fit"
+        f.touch()
+
+        with patch("darkroom.scanner.FITSHeaderExtractor.extract_metadata",
+                   return_value={**dark_meta(f.stem, 10.01), "file_path": str(f)}):
+            result = scan_source(source)
+
+    assert len(result.calibration) == 1
+    assert result.calibration[0].frame_type == "Dark"
+
+
 def test_scan_calibration_flat_with_filter():
     with tempfile.TemporaryDirectory() as tmpdir:
         source = Path(tmpdir)
