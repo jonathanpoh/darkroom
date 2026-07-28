@@ -548,29 +548,6 @@ def upsert_calibration_set(db_path: Path, cal_set: dict) -> None:
         )
 
 
-def mark_processed(db_path: Path, session_id: str, status: str) -> bool:
-    """Update the legacy free-text processed_status column. Returns True if found.
-
-    Legacy: kept for backward compat. New code should use `set_processed_state`,
-    which writes the structured processed_state / processed_path /
-    processed_date columns instead.
-
-    Args:
-        db_path: Path to SQLite database file
-        session_id: Session ID to update
-        status: New processed_status value (e.g., "2026-03-01", "/path/to/output", "skipped - tracking stars")
-
-    Returns:
-        True if the session was found and updated, False otherwise
-    """
-    with sqlite3.connect(db_path) as conn:
-        cursor = conn.execute(
-            "UPDATE sessions SET processed_status = ? WHERE session_id = ?",
-            (status, session_id),
-        )
-    return cursor.rowcount > 0
-
-
 def set_processed_state(
     db_path: Path,
     session_id: str,
@@ -649,60 +626,6 @@ def mark_processed_command(args):
         print(f"Error: Session not found: {args.session_id}", file=sys.stderr)
         sys.exit(1)
     print(f"Updated: {args.session_id} → processed_state = {args.state!r}")
-
-
-def _find_latest_processed_date(processed_root: Path) -> str:
-    """Return the most recent YYYY-MM-DD subdir name inside processed_root.
-
-    Scans processed_root for subdirectories whose names match the YYYY-MM-DD
-    pattern. Exits with an error message if the root doesn't exist or no dated
-    subdirectories are found. Prints a notice if multiple dates are present and
-    returns the most recent one (alphabetical sort is correct for ISO dates).
-
-    Args:
-        processed_root: Path to the _Processed/ directory.
-
-    Returns:
-        Most recent date string in YYYY-MM-DD format.
-    """
-    if not processed_root.exists():
-        sys.exit(f"Error: _Processed directory not found: {processed_root}")
-    date_dirs = sorted(
-        d.name
-        for d in processed_root.iterdir()
-        if d.is_dir() and re.fullmatch(r"\d{4}-\d{2}-\d{2}", d.name)
-    )
-    if not date_dirs:
-        sys.exit(f"Error: No dated subdirectory (YYYY-MM-DD) found in {processed_root}")
-    if len(date_dirs) > 1:
-        print(f"Multiple processed dates found: {date_dirs}; using most recent: {date_dirs[-1]}")
-    return date_dirs[-1]
-
-
-def mark_processed_by_target(db_path: Path, target: str, status: str) -> int:
-    """Mark all sessions matching target (case-insensitive) as processed.
-
-    Writes the structured columns (W1) rather than the legacy processed_status:
-    sets processed_state='processed' and processed_date=status (status here is
-    always a YYYY-MM-DD).
-
-    Args:
-        db_path: Path to SQLite database file.
-        target: Target name to match (e.g. "M 81"). Spacing is canonicalised
-            ('M81' → 'M 81') and the comparison is case-insensitive.
-        status: Processed date, YYYY-MM-DD (e.g. "2026-05-15").
-
-    Returns:
-        Number of rows updated.
-    """
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-    with sqlite3.connect(db_path) as conn:
-        cursor = conn.execute(
-            "UPDATE sessions SET processed_state = 'processed', processed_date = ?, "
-            "updated_at = ? WHERE target = ? COLLATE NOCASE",
-            (status, now, _normalize_target(target)),
-        )
-        return cursor.rowcount
 
 
 class FITSHeaderExtractor:
