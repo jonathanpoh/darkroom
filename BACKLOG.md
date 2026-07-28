@@ -3,7 +3,8 @@
 Captured 2026-06-30 from a whole-codebase review + a web-UI readiness assessment.
 Line numbers are accurate as of commit `5c8936d`; re-grep before editing if the
 tree has moved on. Severity: **P1** = correctness, act first · **P2** = minor /
-docs · **R** = refactor · **W** = web-UI prep.
+docs · **R** = refactor · **W** = web-UI prep · **U** = CLI UX · **F** =
+features · **S** = observation sites / conditions.
 
 ---
 
@@ -154,7 +155,17 @@ docs · **R** = refactor · **W** = web-UI prep.
   all, which would make this moot for solar specifically but the underlying
   formatting bug is real for any short-sub target).
 
-### B9. Should solar imaging live under `01_Deep Sky Objects` / this catalog?
+### B9. Should solar imaging live under `01_Deep Sky Objects` / this catalog? — ✅ DONE
+> Decided and executed 2026-07-09: solar carved out to a top-level `07_Sun`
+> folder on the archive (confirmed present on the live archive
+> `/Volumes/Photography 4TB/Astrophotography/07_Sun`), matching the
+> Moon/Milky Way/Comets precedent, and left **out of `astro_catalog.db`
+> entirely**. The miscategorized `Sun_20260708_FRA400-07x_ZWOASI585MCPro_
+> AstronomikL2` row was deleted from the catalog (by hand at the time — the
+> motivating case for W10's delete path); verified 2026-07-29 that no Sun
+> sessions remain. No code change was needed: `ingest`/`catalog` only ever
+> look under `01_Deep Sky Objects`, so `07_Sun` is simply never scanned.
+> B8's unit-scaling bug is still real for any short-sub target and stays open.
 - The archive already has separate top-level categories for non-DSO capture —
   `02_Milky Way`, `03_Moon`, `04_Meteors`, `05_Star Trails`, `06_Comets` — none
   of which are cataloged by `darkroom` (catalog is scoped to DSO per
@@ -172,16 +183,17 @@ docs · **R** = refactor · **W** = web-UI prep.
   under `01_Deep Sky Objects` for DSO, so nothing needs to explicitly reject
   Sun, it would just stop getting scanned/ingested there.
 
-### B10. Repo hygiene — untracked leftovers in the repo root
-Captured 2026-07-12 (whole-app review). Mostly resolved 2026-07-13:
-`ingest.yaml` (stale manifest) and `tmp/` (loose IC 1848 frames) deleted;
-`check_missing_object.py` kept deliberately as a standalone tool (already
-tracked, with `tests/test_check_missing_object.py`). Remaining:
-- `datto-d-din/` — the D-DIN font files the safelight UI uses. Decide: commit
-  them (they're the design's designation/wordmark face) or gitignore if the
-  needed weights are already embedded under `darkroom/webapi/static/`.
-- Gitignore manifest filenames and `tmp/` so future working artifacts don't
-  land in the tree again.
+### B10. Repo hygiene — untracked leftovers in the repo root — ✅ DONE
+> Captured 2026-07-12 (whole-app review). `ingest.yaml` (stale manifest) and
+> `tmp/` (loose IC 1848 frames) deleted 2026-07-13; `check_missing_object.py`
+> kept deliberately as a standalone tool (already tracked, with
+> `tests/test_check_missing_object.py`). Closed out 2026-07-29:
+> `datto-d-din/` is gone from the working tree — the UI serves the two weights
+> it actually needs from `darkroom/webapi/static/fonts/` (`D-DIN.woff2`,
+> `D-DIN-Bold.woff2`, alongside Fira Mono + `OFL.txt`), so the loose source
+> folder was redundant rather than something to commit. `.gitignore` now
+> covers `tmp/` and manifest filenames (`ingest.yaml`, `manifest.yaml`,
+> `*.manifest.yaml`) so future working artifacts don't land in the tree again.
 
 ---
 
@@ -865,6 +877,89 @@ table), and whether to compute stats at scan time or store raw logs.
 
 ---
 
+## S — Observation sites & conditions
+
+### S1. Observation-site tracking + SQM-weighted depth — ✅ DONE
+
+> Shipped 2026-07-16 (`0e96718`, `2a94cb1`, `51f9e72`, `281a1f0`, plus UI
+> follow-ups `495279b`/`571ce4a`/`699acbe`/`4ff649e`/`8550c03`); deployed to
+> the LXC and seeded the same day. Hardened 2026-07-29 (`26ba335`, `40162ce`,
+> `0211bce`, `3ea2c5c`).
+>
+> **Why:** integration hours aren't fungible across sites. Four hours from
+> Bortle 2 on Pico is worth far more than four from the Bortle 7 back garden,
+> so a raw hours gauge over-reports how deep a target actually is.
+>
+> **Phase 1 — schema (`0e96718`):** `sessions` gained nullable
+> `site_lat`/`site_lon` (from the ASIAir's `SITELAT`/`SITELONG` headers;
+> `COALESCE`d on rescan so a rescan never blanks a known position). New
+> `sites` table (name/lat/lon/radius_m/bortle/sqm/is_home, partial unique
+> index enforcing a single home). New `darkroom/sites.py` — stdlib-only:
+> `haversine_m`, `resolve_site` (nearest site within its `radius_m`),
+> `home_sqm`, and `session_weight` = flux ratio `10^((sqm − sqm_home)/2.5)`.
+> **Sites resolve at query time from coordinates — no stored `site_id`** — so
+> moving a site or fixing its radius reclassifies history for free.
+> **Phase 2 — API (`2a94cb1`):** `GET`/`POST`/`PATCH /api/sites` + matching
+> `CatalogBackend` methods on both Local and Http impls.
+> **Phase 3 — CLI (`51f9e72`):** `darkroom catalog sites add/list/set`
+> (`list` doubles as a resolve debugger — shows which sessions land where) and
+> `darkroom catalog backfill-sites --archive PATH [--apply]` (dry-run default,
+> idempotent).
+> **Phase 4 — UI (`281a1f0` + follow-ups):** the depth gauge now reads in
+> **home-equivalent hours** with the raw figure shown alongside; per-night
+> site chips with `×weight` badges; a site filter on the overview sorted by
+> distance from home; editable `site_lat`/`site_lon` on the session edit
+> screen; a missing-site-coordinates section on `/queue` linked from the
+> overview's cleanup teaser.
+>
+> **Live state (verified 2026-07-29):** 8 sites seeded with SQM/Bortle from
+> deepskysites.com — Home (Palmela) 19.19 · Quinta do Lago (Azeitão) 19.38 ·
+> Santa Susana 21.06 · Santa Susana (SE) 21.6 (added 07-28) · Sorte Verde ·
+> São Cristóvão · Mount Pico 21.75 · Cais do Pico 20.96. 230 sessions, 169
+> with coordinates. Telescopius' API carries no SQM (checked against a live
+> payload) — the numbers are entered by hand via `sites set NAME --sqm X
+> --bortle N`.
+>
+> **Hardening 2026-07-29 — one bad frame decided a whole night.** Both the
+> ingest path and `backfill-sites` took the **first** FITS frame's
+> `SITELAT`/`SITELONG` as the session's position. The ASIAir sources its fix
+> from the phone, which sometimes opens a session with a stale or
+> WiFi-geolocated position (see the standing caveat below), so a single
+> unrepresentative frame mislabelled the night. Real damage in the live
+> catalog: the 2026-07-26 NGC 281 session was filed as home when 43 of its 44
+> frames were 43 km away, and four sessions overall were wrong — two dark-site
+> nights filed as home (silently losing their SQM weighting, the exact thing
+> S1 exists to provide) and two home nights filed as a dark site.
+> Fixed by taking the **modal** position across every frame:
+> `sites.modal_site` + `sites.describe_disagreement` (`26ba335`), wired into
+> ingest scan → manifest → commit (`40162ce`, so new sessions land with their
+> site already set instead of needing a later backfill pass) and into
+> `backfill-sites` (`0211bce`, which also now skips unreadable frames
+> per-frame rather than letting one bad file cost a session its coordinates).
+> Disagreement is reported on stderr and surfaced at scan time.
+> `scripts/fix_site_headers.py` (`3ea2c5c`) repairs the underlying headers on
+> disk: overwrites `SITELAT`/`SITELONG` under a directory with a known-correct
+> position, recording the original in a `HISTORY` card so the edit stays
+> auditable; dry-run by default, `--apply` to write, idempotent (frames
+> already within `--tolerance` are skipped).
+>
+> **Standing caveat (not a bug to fix):** the ASIAir takes its coordinates
+> from the connected phone, and WiFi geolocation returns *confidently wrong*
+> positions. Verify the fix before a field session — a wrong position is
+> indistinguishable from a right one in the header.
+
+**Remaining / open:**
+- 61 sessions still have no coordinates — mostly Canon-era nights predating
+  the ASIAir's `SITELAT`/`SITELONG` headers. They resolve to no site and get
+  weight 1.0 (home), which is right for most of them, but any that were
+  actually dark-site trips are silently under-credited. Worth a manual pass
+  through the `/queue` missing-coordinates section, entering positions from
+  memory where the trip is recognisable.
+- Site radius is a flat `radius_m` per site (default 1000 m). Fine so far;
+  revisit only if two genuinely distinct sites ever fall inside one radius.
+
+---
+
 ## Suggested order for a future session
 1. **B1 + B2** (finish + flat-darks) — silent data-pipeline failures, with tests. ✅ DONE
 2. **R6 + W5/W6/W7** schema+helper groundwork (move name helpers, WAL, indexes,
@@ -878,15 +973,23 @@ table), and whether to compute stats at scan time or store raw logs.
    (`catalog scan-processed`; 4-state enum; date-bound + dry-run). **F2** exact
    attribution from WBPP logs — ✅ DONE. Live catalog migrated to W1/W2/W3 schema
    + `scan-processed --apply` reconcile run — ✅ DONE 2026-07-05.
-7. **W9** ← **IN PROGRESS.** Phases 1+3 deployed 2026-07-05; phase 2 (edit UI)
-   built 2026-07-06 pending commit/deploy. Remaining: nightly NAS backup +
-   dev-snapshot helper (one task), then phase 4 (remove datasette). See the
-   W9 item for the full sketch.
+7. **W9** — ✅ DONE. All four phases shipped and deployed 2026-07-05→07-07
+   (API + client/server split, edit UI, LXC deploy, datasette removed), plus
+   the nightly NAS backup, `scripts/dev-snapshot.sh`, the safelight front-end,
+   and the 2026-07-13 password-login auth review. **W10** ✅ DONE 2026-07-13.
 8. **U2/U3** filter cleanup queue + interactive ingest review (U2 is a natural
    second UI view on the W9 app; U3 benefits from U1's picker helpers).
-   U2 ✅ DONE 2026-07-15 (ledger + apply-renames + /queue + target merge;
-   pending LXC deploy). U3 remains.
-9. **R1–R5, B7** cleanup as capacity allows. Litestream (continuous DB
-   replication) also lands here as an optional upgrade over the nightly backup.
+   U2 ✅ DONE 2026-07-15 (ledger + apply-renames + /queue + target merge),
+   deployed same day. **U3 remains** — the highest-value open item, and the
+   "close the tap" counterpart to U2's backlog cleanup.
+9. **S1** observation sites + SQM-weighted depth — ✅ DONE 2026-07-16,
+   hardened 2026-07-29 (modal-across-frames site attribution). Only the
+   61 coordinate-less legacy sessions are left as a manual pass.
+10. **F3** (calibration-match indicator — matchers already exist, so it's a
+    server-side aggregate + a night-row badge) then **F4** (guide-log stats,
+    which first needs `ingest` to archive the logs at all).
+11. **B8** (integration time hardcoded to hours — short subs render `0.0h`),
+    then **R1–R5, B7** cleanup as capacity allows. Litestream (continuous DB
+    replication) also lands here as an optional upgrade over the nightly backup.
 </content>
 </invoke>
