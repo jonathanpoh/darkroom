@@ -127,6 +127,16 @@ def session_dest_rel(
     return Path("01_Deep Sky Objects") / target / folder / "Lights" / f
 
 
+def target_slug(target: str) -> str:
+    """Strip spaces from a target name for use as an archive/WBPP folder name.
+
+    Single source of truth shared by `darkroom.wbpp` (which creates
+    `<wbpp_root>/<slug>/`) and `darkroom.finish` (which looks it up) — the
+    wbpp -> finish handoff depends on these staying identical.
+    """
+    return target.replace(" ", "")
+
+
 def _round_exposure(x):
     """Round an exposure value to 4 decimals. Safe on None."""
     return None if x is None else round(float(x), 4)

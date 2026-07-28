@@ -10,10 +10,7 @@ from pathlib import Path
 
 from darkroom.catalog_client import CatalogBackend, resolve_backend
 from darkroom.config import resolve_path
-
-
-def _target_slug(target: str) -> str:
-    return target.replace(" ", "")
+from darkroom.names import target_slug as _target_slug
 
 
 # ── core helpers ──────────────────────────────────────────────────────────────

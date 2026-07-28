@@ -16,6 +16,7 @@ from darkroom.catalog import (
 )
 from darkroom.catalog_client import CatalogBackend, resolve_backend
 from darkroom.config import resolve_path
+from darkroom.names import target_slug as _target_slug
 from darkroom.parse import fits_files
 from darkroom.picker import group_nights, pick_sessions, picker_style
 from darkroom.wbpp import (
@@ -53,10 +54,6 @@ def cmd_list(backend: CatalogBackend, target: str | None) -> None:
 
 
 # ── prep helpers ─────────────────────────────────────────────────────────────
-
-def _target_slug(target: str) -> str:
-    return target.replace(" ", "")
-
 
 def _overwrite_target_dir(target_dir: Path) -> None:
     """Safely clear SESSION_N dirs in target_dir before regeneration.
