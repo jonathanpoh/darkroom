@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo
 from astropy.io import fits
 from astropy.time import Time
 
-from darkroom.parse import normalize_filter, parse_filter, parse_ota
+from darkroom.parse import fits_files, normalize_filter, parse_filter, parse_ota
 from darkroom.names import (
     _format_gain,
     _normalize_camera,
@@ -182,6 +182,13 @@ def find_lights_folders(root: Path) -> list[Path]:
     Returns:
         List of Path objects for directories containing FITS files
     """
+    # Not routed through parse.fits_files() (R5, BACKLOG.md): this just needs
+    # a per-directory boolean off os.walk's own `filenames` list, not a file
+    # collection — calling fits_files() here would re-stat/re-iterdir() each
+    # directory os.walk already gave us for free. It also doesn't exclude
+    # "_thn" thumbnails, but that's harmless: a thumbnail-only directory would
+    # still end up with an empty metadata_list in scan_all_command (which does
+    # exclude thumbnails) and get skipped there — same end result either way.
     result = []
     for dirpath, dirnames, filenames in os.walk(root):
         # Prune directories we never want to descend into or collect from
@@ -1061,11 +1068,13 @@ def scan_all_command(args):
     added = 0
     skipped = 0
     for lights_path in sorted(lights_folders):
-        fits_files = sorted(
-            f for f in lights_path.iterdir()
-            if f.is_file() and f.suffix.lower() in (".fit", ".fits")
-        )
-        metadata_list = [FITSHeaderExtractor.extract_metadata(f) for f in fits_files]
+        # Non-recursive: lights_path is already a leaf dir (find_lights_folders
+        # only returns directories that directly contain FITS files). Routing
+        # through fits_files() also now excludes ASIAir "_thn" thumbnail .fit
+        # files from frame_count/total_integration_sec — previously these were
+        # hand-rolled without that exclusion (see R5 in BACKLOG.md).
+        frame_paths = fits_files(lights_path)
+        metadata_list = [FITSHeaderExtractor.extract_metadata(f) for f in frame_paths]
         metadata_list = [m for m in metadata_list if m]
 
         if not metadata_list:
@@ -1139,18 +1148,24 @@ def migrate_archive_command(args) -> None:
             skipped += 1
             continue
 
-        fits_files = sorted(
+        # Deliberately NOT routed through parse.fits_files(): this moves every
+        # .fit/.fits file out of old_abs (including "_thn" thumbnails) so that
+        # old_abs.rmdir() below can succeed. fits_files() excludes thumbnails,
+        # which would leave them behind, breaking the clean-sweep removal and
+        # spuriously firing the "Could not remove" warning on every migrated
+        # session. See R5 in BACKLOG.md — kept as hand-rolled on purpose.
+        moved_paths = sorted(
             f for f in old_abs.iterdir()
             if f.is_file() and f.suffix.lower() in (".fit", ".fits")
         )
 
         if dry_run:
             print(f"  MOVE  {old_abs}")
-            print(f"     -> {new_abs}  ({len(fits_files)} file(s))")
+            print(f"     -> {new_abs}  ({len(moved_paths)} file(s))")
             print(f"        UPDATE lights_path WHERE session_id='{row['session_id']}'")
         else:
             new_abs.mkdir(parents=True, exist_ok=True)
-            for f in fits_files:
+            for f in moved_paths:
                 f.rename(new_abs / f.name)
             try:
                 old_abs.rmdir()
