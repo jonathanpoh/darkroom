@@ -208,7 +208,14 @@ features · **S** = observation sites / conditions.
 - Extract one shared grouping helper + one threshold constant so the two ingest
   paths can't drift.
 
-### R2. Delete the legacy `cataloger.finish_command`
+### R2. Delete the legacy `cataloger.finish_command` — ✅ FIXED
+> Removed `finish_command`, its argparse subparser (`finish`) + dispatch
+> branch, and the `TestFinishCommand` tests that only exercised it.
+> `mark_processed`, `mark_processed_by_target`, and `_find_latest_processed_date`
+> were left in place (still directly unit-tested, not part of this ask) but
+> their docstrings no longer reference the deleted function. The live command
+> is `finish.py:cmd_finish`.
+
 - `cataloger.py:497-542` (`finish_command`) + its argparse wiring
   (`cataloger.py:1070-1095`, dispatch at `:1109-1110`). The live command is
   `finish.py:cmd_finish`; the cataloger one is reachable only via
@@ -229,7 +236,18 @@ features · **S** = observation sites / conditions.
   handoff depends on them staying identical — co-locate (e.g. in `config.py` or
   a small `names.py`) to remove silent-drift risk.
 
-### R5. Dedup FITS-file collection
+### R5. Dedup FITS-file collection — ✅ FIXED
+> `scan_all_command`'s per-`lights_path` collection now calls `parse.fits_files()`
+> (non-recursive — `find_lights_folders` already returns leaf dirs). This also
+> excludes ASIAir "_thn" thumbnail `.fit` files from frame_count/
+> total_integration_sec, which the old hand-rolled iterdir() didn't — a real
+> bug fix, not just a dedup (see `tests/test_cataloger.py::TestScanAllCommandFitsCollection`).
+> Two call sites were deliberately left hand-rolled: `find_lights_folders`'s
+> per-directory "has any FITS" check (needs a bool off os.walk's own
+> `filenames`, not a file collection — see comment at its top), and
+> `migrate_archive_command`'s file-move loop (must move `_thn` thumbnails too,
+> or they're left behind and `old_abs.rmdir()` fails — see comment there).
+
 - `cataloger.find_lights_folders` / `scan_all_command` (`cataloger.py:905-909`)
   hand-roll `.fit/.fits` filtering with non-recursive `iterdir`, while `scanner`
   uses `parse.fits_files` (recursive option). Route both through
