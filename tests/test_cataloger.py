@@ -16,6 +16,7 @@ from darkroom.cataloger import (
     compute_imaging_night,
     SessionAnalyzer,
     FITSHeaderExtractor,
+    CalibrationCataloger,
     _parse_site_deg,
     init_db,
     upsert_session,
@@ -1313,3 +1314,51 @@ class TestScanAllCommandFitsCollection:
                 for r in conn.execute("SELECT target, frame_count FROM sessions").fetchall()
             }
         assert rows == {"M 81": 1, "M 51": 1}
+
+
+# ── R1: Dark vs FlatDark threshold, shared via darkroom.parse.reclassify_flat_dark
+# (see tests/test_parse.py for the helper's own boundary tests, and
+# tests/test_scanner.py + tests/triage/test_suggest.py for the other two call
+# paths). Pin the boundary here too so a future change to the shared constant
+# can't silently alter CalibrationCataloger.scan without this test catching it. ──
+
+class TestCalibrationCatalogerFlatDarkThreshold:
+    def _write_dark(self, path: Path, *, exposure: float) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        hdu = fits.PrimaryHDU()
+        hdu.header["IMAGETYP"] = "Dark Frame"
+        hdu.header["DATE-OBS"] = "2026-02-20T09:20:00"
+        hdu.header["EXPOSURE"] = exposure
+        hdu.header["INSTRUME"] = "ZWO ASI585MC Pro"
+        hdu.header["CCD-TEMP"] = -20.0
+        hdu.header["GAIN"] = 200
+        hdu.writeto(path, overwrite=True)
+
+    def test_just_under_threshold_becomes_flatdark(self, tmp_path):
+        darks = tmp_path / "Darks" / "ZWOASI585MCPro"
+        self._write_dark(darks / "dark_9.99s_0001.fit", exposure=9.99)
+
+        cal_sets = CalibrationCataloger.scan(tmp_path)
+
+        assert len(cal_sets) == 1
+        assert cal_sets[0]["frame_type"] == "FlatDark"
+
+    def test_exactly_at_threshold_stays_dark(self, tmp_path):
+        # Boundary: reclassify_flat_dark uses strict "<", so 10.0s exactly
+        # is still a science dark.
+        darks = tmp_path / "Darks" / "ZWOASI585MCPro"
+        self._write_dark(darks / "dark_10.0s_0001.fit", exposure=10.0)
+
+        cal_sets = CalibrationCataloger.scan(tmp_path)
+
+        assert len(cal_sets) == 1
+        assert cal_sets[0]["frame_type"] == "Dark"
+
+    def test_just_over_threshold_stays_dark(self, tmp_path):
+        darks = tmp_path / "Darks" / "ZWOASI585MCPro"
+        self._write_dark(darks / "dark_10.01s_0001.fit", exposure=10.01)
+
+        cal_sets = CalibrationCataloger.scan(tmp_path)
+
+        assert len(cal_sets) == 1
+        assert cal_sets[0]["frame_type"] == "Dark"

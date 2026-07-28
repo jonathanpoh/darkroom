@@ -120,6 +120,24 @@ class TestSuggestCalibrationDest:
         proposed, missing = suggest_calibration_dest(darks, archive)
         assert proposed.endswith("00_Calibration/FlatDarks/Canon6D")
 
+    def test_dark_at_exact_threshold_stays_dark(self, tmp_path):
+        # Boundary: reclassify_flat_dark uses strict "<", so 10.0s exactly
+        # is still a science dark, not a flat dark.
+        archive = tmp_path / "staging"
+        darks = archive / "04_Deep Sky Objects" / "M 42" / "2023-11-23" / "Darks"
+        make_fits(darks / "dark.fit",
+                  **{"INSTRUME": "Canon EOS 6D", "EXPOSURE": 10.0})
+        proposed, missing = suggest_calibration_dest(darks, archive)
+        assert proposed.endswith("00_Calibration/Darks/Canon6D")
+
+    def test_dark_just_over_threshold_stays_dark(self, tmp_path):
+        archive = tmp_path / "staging"
+        darks = archive / "04_Deep Sky Objects" / "M 42" / "2023-11-23" / "Darks"
+        make_fits(darks / "dark.fit",
+                  **{"INSTRUME": "Canon EOS 6D", "EXPOSURE": 10.01})
+        proposed, missing = suggest_calibration_dest(darks, archive)
+        assert proposed.endswith("00_Calibration/Darks/Canon6D")
+
     def test_bias_dest(self, tmp_path):
         archive = tmp_path / "staging"
         bias = archive / "04_Deep Sky Objects" / "M 42" / "2023-11-23" / "bias"

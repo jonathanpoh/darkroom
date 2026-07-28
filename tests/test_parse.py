@@ -5,6 +5,8 @@ from darkroom.parse import (
     parse_exposure,
     parse_datetime,
     flat_morning_date,
+    reclassify_flat_dark,
+    FLAT_DARK_THRESHOLD_SEC,
 )
 from datetime import datetime, date
 
@@ -94,3 +96,39 @@ def test_flat_morning_date_evening():
     # Session ends at 22:00 → flats taken next morning
     end_dt = datetime(2026, 2, 19, 22, 0, 0)
     assert flat_morning_date(end_dt) == date(2026, 2, 20)
+
+
+# ── R1: single source of truth for the Dark/FlatDark boundary, shared by
+# cataloger.CalibrationCataloger.scan, scanner._scan_calibration, and
+# triage/suggest.suggest_calibration_dest. Pin the exact boundary here so a
+# future change to the constant or the comparison can't silently drift one
+# call path away from the others (each path also has its own boundary test
+# exercising its full code path — see test_cataloger.py, test_scanner.py,
+# and tests/triage/test_suggest.py).
+
+def test_flat_dark_threshold_is_ten_seconds():
+    assert FLAT_DARK_THRESHOLD_SEC == 10.0
+
+
+def test_reclassify_just_under_threshold_becomes_flatdark():
+    assert reclassify_flat_dark("Dark", 9.99) == "FlatDark"
+
+
+def test_reclassify_exactly_at_threshold_stays_dark():
+    # Comparison is strict "<", so a dark timed exactly at the threshold is
+    # still a science dark, not a flat dark.
+    assert reclassify_flat_dark("Dark", FLAT_DARK_THRESHOLD_SEC) == "Dark"
+
+
+def test_reclassify_just_over_threshold_stays_dark():
+    assert reclassify_flat_dark("Dark", 10.01) == "Dark"
+
+
+def test_reclassify_non_dark_frame_types_untouched():
+    assert reclassify_flat_dark("Flat", 1.5) == "Flat"
+    assert reclassify_flat_dark("Bias", 0.0) == "Bias"
+    assert reclassify_flat_dark("FlatDark", 1.5) == "FlatDark"
+
+
+def test_reclassify_none_exposure_is_safe():
+    assert reclassify_flat_dark("Dark", None) == "Dark"
