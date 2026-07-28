@@ -257,6 +257,8 @@ def build_session_entry(
         "frame_count": len(session.files),
         "ra_deg": session.ra_deg,
         "dec_deg": session.dec_deg,
+        "site_lat": session.site_lat,
+        "site_lon": session.site_lon,
         "needs_review": needs_review,
         "status": status,
         "lights_rel_path": str(dest_rel),
@@ -576,6 +578,8 @@ def cmd_commit(args: argparse.Namespace) -> None:
             "total_integration_sec": int(entry["frame_count"] * entry["exposure_sec"]),
             "ra_deg": entry.get("ra_deg"),
             "dec_deg": entry.get("dec_deg"),
+            "site_lat": entry.get("site_lat"),
+            "site_lon": entry.get("site_lon"),
             "lights_path": entry["lights_rel_path"],
             "notes": "",
         })

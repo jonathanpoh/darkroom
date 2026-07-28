@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -7,6 +8,7 @@ from astropy.time import Time
 from darkroom.cataloger import FITSHeaderExtractor, compute_imaging_night
 from darkroom.names import _normalize_camera, _round_exposure
 from darkroom.parse import fits_files, parse_filter, parse_ota
+from darkroom.sites import describe_disagreement, modal_site
 
 
 @dataclass
@@ -22,6 +24,8 @@ class Session:
     focal_length: float | None
     ra_deg: float | None
     dec_deg: float | None
+    site_lat: float | None = None
+    site_lon: float | None = None
     files: list[Path] = field(default_factory=list)
 
 
@@ -70,6 +74,22 @@ def _resolve_scan_roots(source: Path) -> list[Path]:
     return roots or [source]
 
 
+def _session_site(
+    metas: list[dict], label: str
+) -> tuple[float | None, float | None]:
+    """Modal SITELAT/SITELONG across a session's frames, warning on disagreement.
+
+    See sites.modal_site for why the first frame's value can't be trusted.
+    """
+    positions = [(m.get("site_lat"), m.get("site_lon")) for m in metas]
+    lat, lon, outliers = modal_site(positions)
+    if outliers:
+        usable = sum(1 for la, lo in positions if la is not None and lo is not None)
+        for line in describe_disagreement(label, lat, lon, outliers, usable):
+            print(line, file=sys.stderr)
+    return lat, lon
+
+
 def _scan_lights(light_root: Path) -> list[Session]:
     if not light_root.is_dir():
         return []
@@ -103,6 +123,10 @@ def _scan_lights(light_root: Path) -> list[Session]:
             first_meta = frames[0][0]
 
             focallen = first_meta.get("focallen")
+            site_lat, site_lon = _session_site(
+                [meta for meta, _ in frames],
+                f"{target_dir.name} {night} {filter_ or 'no-filter'}",
+            )
             sessions.append(Session(
                 target=target_dir.name,
                 obs_date=night,
@@ -115,6 +139,8 @@ def _scan_lights(light_root: Path) -> list[Session]:
                 focal_length=float(focallen) if focallen is not None else None,
                 ra_deg=first_meta.get("ra_deg"),
                 dec_deg=first_meta.get("dec_deg"),
+                site_lat=site_lat,
+                site_lon=site_lon,
                 files=[path for _, path in frames],
             ))
 
