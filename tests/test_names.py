@@ -1,4 +1,4 @@
-from darkroom.names import _normalize_target, _normalize_camera, make_session_id
+from darkroom.names import _normalize_target, _normalize_camera, make_session_id, target_slug
 
 
 class TestNormalizeTarget:
@@ -71,3 +71,20 @@ class TestMakeSessionId:
     def test_target_with_multiple_spaces(self):
         assert make_session_id("IC 1805", "2025-11-01", "FMA180", "ASI585MC", "L-Extreme") == \
             "IC1805_20251101_FMA180_ASI585MC_L-Extreme"
+
+
+class TestTargetSlug:
+    """Shared by darkroom.wbpp (creates <wbpp_root>/<slug>/) and darkroom.finish
+    (looks it up) — R4: was duplicated identically in prep.py and finish.py."""
+
+    def test_strips_single_space(self):
+        assert target_slug("M 81") == "M81"
+
+    def test_no_spaces_unchanged(self):
+        assert target_slug("NGC7380") == "NGC7380"
+
+    def test_strips_multiple_spaces(self):
+        assert target_slug("IC 1805") == "IC1805"
+
+    def test_strips_all_spaces(self):
+        assert target_slug("Sh 2 103") == "Sh2103"
