@@ -218,13 +218,19 @@ features · **S** = observation sites / conditions.
 > their docstrings no longer reference the deleted function. The live command
 > is `finish.py:cmd_finish`.
 >
-> **Follow-up (R2b, open):** with `finish_command` gone, those three helpers
-> have **no production caller left** — verified 2026-07-29, the only remaining
-> references are their own defs plus `tests/test_cataloger.py`. `finish.py`
-> writes state via `backend.set_processed_state`, so `mark_processed` (which
-> writes the legacy free-text `processed_status` column W1 retired) is dead
-> too. Deleting all three plus their tests is a clean follow-up; left out of
-> R2 deliberately to keep that commit to exactly what was asked.
+> **Follow-up R2b — ✅ FIXED 2026-07-29:** with `finish_command` gone, those
+> three helpers had **no production caller left** — the only references were
+> their own defs plus `tests/test_cataloger.py`. `finish.py` writes state via
+> `backend.set_processed_state`, so `mark_processed` (which wrote the legacy
+> free-text `processed_status` column W1 retired) was dead too. All three
+> deleted along with `TestMarkProcessed`, `TestFindLatestProcessedDate` and
+> `TestMarkProcessedByTarget` (14 tests, 220 lines; suite 754 → 740).
+> `mark_processed_command` — the live `catalog mark` CLI handler, a
+> confusingly similar name — is untouched. `re`/`sys` remain in use, so no
+> imports were dropped. Verified clean before deleting: `catalog_client.py`,
+> `webapi/`, `scripts/`, `deploy/` contain no reference to any of the three.
+> The `processed_status` **column** itself still exists on the live DB (W1
+> kept it deliberately for migration safety); only the writers are gone.
 
 - `cataloger.py:497-542` (`finish_command`) + its argparse wiring
   (`cataloger.py:1070-1095`, dispatch at `:1109-1110`). The live command is
