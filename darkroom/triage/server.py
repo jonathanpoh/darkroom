@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+import io
 import json
 from pathlib import Path
 
@@ -275,14 +277,25 @@ def create_app(*, db_path: Path, archive_root: Path) -> FastAPI:
     def export_csv():
         conn = _conn()
         entries = triage_db.list_audit(conn, limit=10000)
-        lines = ["id,triage_item_id,action_type,source_path,dest_path,result,applied_at,reverted_at"]
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(
+            ["id", "triage_item_id", "action_type", "source_path", "dest_path", "result", "applied_at", "reverted_at"]
+        )
         for e in entries:
-            lines.append(
-                f"{e['id']},{e['triage_item_id']},{e['action_type']},"
-                f"\"{e['source_path']}\",\"{e['dest_path']}\","
-                f"{e['result'] or ''},{e['applied_at']},{e['reverted_at'] or ''}"
+            writer.writerow(
+                [
+                    e["id"],
+                    e["triage_item_id"],
+                    e["action_type"],
+                    e["source_path"],
+                    e["dest_path"],
+                    e["result"] or "",
+                    e["applied_at"],
+                    e["reverted_at"] or "",
+                ]
             )
-        csv_text = "\n".join(lines)
+        csv_text = buf.getvalue()
         return StreamingResponse(
             iter([csv_text]),
             media_type="text/csv",
