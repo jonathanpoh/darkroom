@@ -7,7 +7,7 @@ from pathlib import Path
 from astropy.time import Time
 from darkroom.cataloger import FITSHeaderExtractor, compute_imaging_night
 from darkroom.names import _normalize_camera, _round_exposure
-from darkroom.parse import fits_files, parse_filter, parse_ota
+from darkroom.parse import fits_files, parse_filter, parse_ota, reclassify_flat_dark
 from darkroom.sites import describe_disagreement, modal_site
 
 
@@ -148,9 +148,6 @@ def _scan_lights(light_root: Path) -> list[Session]:
 
 
 def _scan_calibration(source: Path) -> list[CalibrationGroup]:
-    # Darks with exposure_sec below this threshold are flat darks
-    FLAT_DARK_THRESHOLD_SEC = 10.0
-
     groups: dict[tuple, CalibrationGroup] = {}
 
     for folder_name in ("Flat", "Dark", "Bias"):
@@ -164,9 +161,7 @@ def _scan_calibration(source: Path) -> list[CalibrationGroup]:
                 continue
 
             # Frame type from source folder name; reclassify short darks as flat darks
-            frame_type = folder_name
-            if frame_type == "Dark" and meta["exposure"] < FLAT_DARK_THRESHOLD_SEC:
-                frame_type = "FlatDark"
+            frame_type = reclassify_flat_dark(folder_name, meta["exposure"])
 
             # DATE-OBS → YYYY-MM-DD
             capture_date = ""
