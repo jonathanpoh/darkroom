@@ -203,8 +203,10 @@ features · **S** = observation sites / conditions.
 - `cataloger.CalibrationCataloger.scan` (`cataloger.py:715-838`) and
   `scanner._scan_calibration` (`scanner.py:128-188`) independently re-implement
   frame-type inference, the flat-dark threshold, temp rounding, filter-from-
-  filename, and group keying. `_FLAT_DARK_THRESHOLD_SEC` is defined **three
-  times**: `cataloger.py:647`, `scanner.py:130`, `suggest.py:25`.
+  filename, and group keying. `_FLAT_DARK_THRESHOLD_SEC` was defined three
+  times when this was captured; as of 2026-07-29 it's **two** —
+  `cataloger.py:856` and `triage/suggest.py:26` (the `scanner.py` copy is
+  already gone). Re-grep before starting.
 - Extract one shared grouping helper + one threshold constant so the two ingest
   paths can't drift.
 
@@ -215,6 +217,14 @@ features · **S** = observation sites / conditions.
 > were left in place (still directly unit-tested, not part of this ask) but
 > their docstrings no longer reference the deleted function. The live command
 > is `finish.py:cmd_finish`.
+>
+> **Follow-up (R2b, open):** with `finish_command` gone, those three helpers
+> have **no production caller left** — verified 2026-07-29, the only remaining
+> references are their own defs plus `tests/test_cataloger.py`. `finish.py`
+> writes state via `backend.set_processed_state`, so `mark_processed` (which
+> writes the legacy free-text `processed_status` column W1 retired) is dead
+> too. Deleting all three plus their tests is a clean follow-up; left out of
+> R2 deliberately to keep that commit to exactly what was asked.
 
 - `cataloger.py:497-542` (`finish_command`) + its argparse wiring
   (`cataloger.py:1070-1095`, dispatch at `:1109-1110`). The live command is

@@ -265,7 +265,7 @@ darkroom/
 > **`finish.py` is the finish implementation.** `darkroom finish` dispatches
 > (via `cli.py` → `finish.add_subparser`) to **`finish.py:cmd_finish`**: it
 > copies WBPP `master/`+`processed/` to the archive and marks each resolved
-> session processed (folder name via `_target_slug`). The legacy
+> session processed (folder name via `names.target_slug`). The legacy
 > `cataloger.py:finish_command` (reachable only via `python -m darkroom.cataloger
 > finish`, and which built archive paths differently via `_normalize_target`)
 > has been removed — `finish.py` is the only finish surface now.
@@ -293,5 +293,6 @@ package. Treat it as a historical reference only.
 
 `darkroom ingest commit` calls `upsert_session`/`upsert_calibration_set` from
 `darkroom.cataloger` directly — no shell-out, no manual SQL. `darkroom finish`
-calls `mark_processed` for every session_id resolved from the WBPP target's
-SESSION_N symlinks. The catalog is the single source of truth.
+calls `set_processed_state` (via the resolved backend) for every session_id
+resolved from the WBPP target's SESSION_N symlinks. The catalog is the single
+source of truth.
