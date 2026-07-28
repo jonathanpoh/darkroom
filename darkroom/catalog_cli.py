@@ -17,7 +17,7 @@ from darkroom.cataloger import (
     scan_calibration_command,
 )
 from darkroom.config import resolve_catalog, resolve_path
-from darkroom.sites import resolve_site
+from darkroom.sites import describe_disagreement, modal_site, resolve_site
 
 
 def _resolve_db(args: argparse.Namespace) -> None:
@@ -274,6 +274,11 @@ def _sites_set_run(args: argparse.Namespace) -> None:
 def _backfill_sites_run(args: argparse.Namespace) -> None:
     """Backfill site_lat/site_lon on sessions from archive FITS SITELAT/SITELONG.
 
+    Each session's position is the modal value across all its frames, and any
+    frame disagreeing by more than a kilometre is reported on stderr — the
+    ASIAir's phone-derived GPS can go stale or resolve by WiFi, so a single
+    frame is not trustworthy (see sites.modal_site).
+
     Dry run (default) is pure-read: it never writes to the catalog. --apply
     writes via update_session_fields, through the catalog backend (local
     file or webapi, per catalog_url — W9). Only sessions with a NULL
@@ -303,26 +308,49 @@ def _backfill_sites_run(args: argparse.Namespace) -> None:
             missing += 1
             continue
 
-        frame = None
-        for p in sorted(folder.rglob("*")):
-            if p.suffix.lower() in (".fit", ".fits") and "thumbnail" not in p.name.lower():
-                frame = p
-                break
-        if frame is None:
+        frames = [
+            p
+            for p in sorted(folder.rglob("*"))
+            if p.suffix.lower() in (".fit", ".fits") and "thumbnail" not in p.name.lower()
+        ]
+        if not frames:
             no_headers += 1
             continue
 
-        try:
-            header = fits.getheader(frame)
-        except Exception:
+        # Every frame, not just the first: a stale or WiFi-geolocated fix on
+        # one frame would otherwise decide the whole session (see
+        # sites.modal_site). Read errors are skipped per-frame so one bad file
+        # doesn't cost the session its coordinates.
+        positions = []
+        unreadable = 0
+        for frame in frames:
+            try:
+                header = fits.getheader(frame)
+            except Exception:
+                unreadable += 1
+                continue
+            positions.append(
+                (
+                    _parse_site_deg(header.get("SITELAT")),
+                    _parse_site_deg(header.get("SITELONG")),
+                )
+            )
+
+        if unreadable:
             read_errors += 1
+        if not positions:
             continue
 
-        lat = _parse_site_deg(header.get("SITELAT"))
-        lon = _parse_site_deg(header.get("SITELONG"))
-        if lat is None or lon is None:
+        lat, lon, outliers = modal_site(positions)
+        if lat is None:
             no_headers += 1
             continue
+        if outliers:
+            usable = sum(1 for la, lo in positions if la is not None and lo is not None)
+            for line in describe_disagreement(
+                row["session_id"], lat, lon, outliers, usable
+            ):
+                print(line, file=sys.stderr)
         found.append((row, lat, lon))
 
     if not args.apply:
@@ -504,11 +532,12 @@ def add_subparser(subparsers) -> None:
     bf = sub.add_parser(
         "backfill-sites", parents=site_flags,
         help="Backfill site_lat/site_lon on sessions from archive FITS headers",
-        description="Scan each session with a NULL site_lat for its first FITS frame's "
-                    "SITELAT/SITELONG headers and propose setting site_lat/site_lon from "
-                    "them. Dry run by default (prints proposed changes, writes nothing); "
-                    "pass --apply to write them. Idempotent: only NULL site_lat sessions "
-                    "are ever candidates.",
+        description="Scan every FITS frame of each session with a NULL site_lat and "
+                    "propose setting site_lat/site_lon from the modal SITELAT/SITELONG "
+                    "across those frames, warning when frames disagree by more than a "
+                    "kilometre. Dry run by default (prints proposed changes, writes "
+                    "nothing); pass --apply to write them. Idempotent: only NULL "
+                    "site_lat sessions are ever candidates.",
     )
     bf.add_argument("--archive", metavar="PATH", help="Archive root (env: DARKROOM_ARCHIVE)")
     bf.add_argument("--apply", action="store_true",

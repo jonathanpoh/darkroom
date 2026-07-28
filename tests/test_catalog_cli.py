@@ -276,6 +276,50 @@ def test_backfill_apply_writes_coords_then_second_dry_run_reports_nothing(tmp_pa
     assert "0 would be set, 0 no site headers, 0 missing on disk; run with --apply to write" in out2
 
 
+def test_backfill_uses_modal_position_not_first_frame(tmp_path, capsys):
+    """A stale fix on the first frame must not decide the whole session.
+
+    Regression: the ASIAir's phone-derived GPS reported the previous site on
+    frame 1 of a 2026-07-26 session, and backfill read only that frame — so
+    every frame of a dark-site night was filed as home.
+    """
+    db = tmp_path / "cat.db"
+    archive = tmp_path / "archive"
+    init_db(db)
+
+    lights_path = "01_Deep Sky Objects/M 81/2026-07-26_FRA400_ZWOASI585MCPro/Lights/L-Pro"
+    upsert_session(db, _session("s1", lights_path=lights_path))
+    # Frame 1 stale at home; the remaining 5 at the real (dark) site.
+    _make_fits(archive / lights_path / "Light_0001.fit", sitelat=38.563, sitelong=-8.881)
+    for n in range(2, 7):
+        _make_fits(archive / lights_path / f"Light_{n:04d}.fit", sitelat=38.3946, sitelong=-8.31081)
+
+    _backfill_sites_run(_backfill_args(db, archive, apply=True))
+
+    captured = capsys.readouterr()
+    rows = LocalBackend(db).query_sessions(session_id="s1")
+    assert rows[0]["site_lat"] == pytest.approx(38.3946)
+    assert rows[0]["site_lon"] == pytest.approx(-8.31081)
+    # ...and the disagreement is surfaced rather than silently resolved.
+    assert "site coordinates disagree across frames" in captured.err
+    assert "1 frame(s) at 38.563, -8.881" in captured.err
+
+
+def test_backfill_silent_when_frames_agree(tmp_path, capsys):
+    db = tmp_path / "cat.db"
+    archive = tmp_path / "archive"
+    init_db(db)
+
+    lights_path = "01_Deep Sky Objects/M 81/2026-02-19_FRA400_ZWOASI585MCPro/Lights/L-Pro"
+    upsert_session(db, _session("s1", lights_path=lights_path))
+    for n in range(1, 4):
+        _make_fits(archive / lights_path / f"Light_{n:04d}.fit", sitelat=38.5245, sitelong=-8.8926)
+
+    _backfill_sites_run(_backfill_args(db, archive, apply=True))
+
+    assert "disagree" not in capsys.readouterr().err
+
+
 def test_backfill_skips_sessions_that_already_have_site_lat(tmp_path, capsys):
     db = tmp_path / "cat.db"
     archive = tmp_path / "archive"
