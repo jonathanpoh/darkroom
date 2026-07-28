@@ -16,7 +16,7 @@ from darkroom.catalog import (
 )
 from darkroom.catalog_client import CatalogBackend, resolve_backend
 from darkroom.config import resolve_path
-from darkroom.names import target_slug as _target_slug
+from darkroom.names import target_slug
 from darkroom.parse import fits_files
 from darkroom.picker import group_nights, pick_sessions, picker_style
 from darkroom.wbpp import (
@@ -268,7 +268,7 @@ def build_wbpp_sessions(
     flat_window: int = 3,
 ) -> None:
     """Build SESSION_N dirs under wbpp_root/<slug>/ for the given (resolved) rows."""
-    slug = _target_slug(target_name)
+    slug = target_slug(target_name)
     target_dir = wbpp_root / slug
     target_dir.mkdir(parents=True, exist_ok=True)
 
@@ -339,7 +339,7 @@ def _run_interactive(
         sys.exit("Nothing selected.")
 
     target_name = rows[0]["target"]
-    target_dir = wbpp_root / _target_slug(target_name)
+    target_dir = wbpp_root / target_slug(target_name)
 
     if next_session_num(target_dir) > 1:
         action = questionary.select(

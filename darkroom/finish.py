@@ -10,7 +10,7 @@ from pathlib import Path
 
 from darkroom.catalog_client import CatalogBackend, resolve_backend
 from darkroom.config import resolve_path
-from darkroom.names import target_slug as _target_slug
+from darkroom.names import target_slug
 
 
 # ── core helpers ──────────────────────────────────────────────────────────────
@@ -186,7 +186,7 @@ def cmd_finish(
     date_override: str | None,
     dry_run: bool,
 ) -> None:
-    slug = _target_slug(target)
+    slug = target_slug(target)
     wbpp_target = wbpp_root / slug
     wbpp_output = wbpp_target / "Output"
     master_dir = wbpp_output / "master"
