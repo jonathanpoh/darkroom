@@ -245,7 +245,6 @@ darkroom/
   cli.py            ← entry point (argparse dispatch)
   config.py         ← shared CLI/env/toml path resolution; resolve_catalog() defaults to ~/.config/darkroom/astro_catalog.db
   cataloger.py      ← FITS header extraction, scan-all/calibration logic, DB schema, upsert/mark fns
-                       (also a LEGACY finish_command — NOT the live finish; see note below)
   catalog.py        ← read-only query helpers (find_darks, find_flats, find_flat_darks, query_sessions)
   catalog_cli.py    ← subparser tree for `darkroom catalog ...`
   parse.py          ← filename parsing (parse_filter, parse_exposure, parse_datetime, fits_files)
@@ -263,15 +262,13 @@ darkroom/
   templates/triage/ ← Jinja2 templates for the triage UI
 ```
 
-> **Two `finish` implementations — don't edit the wrong one.** `darkroom finish`
-> dispatches (via `cli.py` → `finish.add_subparser`) to **`finish.py:cmd_finish`** —
-> this is the live command: it copies WBPP `master/`+`processed/` to the archive and
-> marks each resolved session processed (folder name via `_target_slug`).
-> `cataloger.py` *also* has a separate `finish_command` with its own argparse,
-> reachable only via `python -m darkroom.cataloger finish` — it is legacy and NOT what
-> users run (it builds the archive path via `_normalize_target` instead). Changing
-> `cataloger.py:finish_command` has **no effect** on `darkroom finish`. Default to
-> `finish.py` when touching finish behaviour.
+> **`finish.py` is the finish implementation.** `darkroom finish` dispatches
+> (via `cli.py` → `finish.add_subparser`) to **`finish.py:cmd_finish`**: it
+> copies WBPP `master/`+`processed/` to the archive and marks each resolved
+> session processed (folder name via `_target_slug`). The legacy
+> `cataloger.py:finish_command` (reachable only via `python -m darkroom.cataloger
+> finish`, and which built archive paths differently via `_normalize_target`)
+> has been removed — `finish.py` is the only finish surface now.
 
 ## `darkroom triage` (transient cleanup tool)
 

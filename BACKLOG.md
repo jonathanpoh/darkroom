@@ -196,7 +196,14 @@ tracked, with `tests/test_check_missing_object.py`). Remaining:
 - Extract one shared grouping helper + one threshold constant so the two ingest
   paths can't drift.
 
-### R2. Delete the legacy `cataloger.finish_command`
+### R2. Delete the legacy `cataloger.finish_command` — ✅ FIXED
+> Removed `finish_command`, its argparse subparser (`finish`) + dispatch
+> branch, and the `TestFinishCommand` tests that only exercised it.
+> `mark_processed`, `mark_processed_by_target`, and `_find_latest_processed_date`
+> were left in place (still directly unit-tested, not part of this ask) but
+> their docstrings no longer reference the deleted function. The live command
+> is `finish.py:cmd_finish`.
+
 - `cataloger.py:497-542` (`finish_command`) + its argparse wiring
   (`cataloger.py:1070-1095`, dispatch at `:1109-1110`). The live command is
   `finish.py:cmd_finish`; the cataloger one is reachable only via

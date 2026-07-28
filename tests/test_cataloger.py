@@ -25,7 +25,6 @@ from darkroom.cataloger import (
     set_processed_state,
     _find_latest_processed_date,
     mark_processed_by_target,
-    finish_command,
 )
 from darkroom.catalog_db import add_site
 
@@ -669,93 +668,6 @@ class TestMarkProcessedByTarget:
         self._populate(db)
         count = mark_processed_by_target(db, "Unknown Target", "2026-05-15")
         assert count == 0
-
-
-class TestFinishCommand:
-    def _populate(self, db):
-        init_db(db)
-
-        def row(sid, target, obs_date, filt):
-            return {
-                "session_id": sid, "target": target, "obs_date": obs_date,
-                "ota": "FRA400", "camera": "ZWO ASI585MC", "filter": filt,
-                "gain": 200, "temperature_c": -10.0, "exposure_sec": 180.0,
-                "focal_length": 400.0,
-                "frame_count": 10, "total_integration_sec": 1800,
-                "ra_deg": None, "dec_deg": None, "lights_path": "/fake",
-                "processed_status": "", "notes": "",
-            }
-
-        upsert_session(db, row("M81_20260219_FRA400_ASI585MC_L-Pro", "M 81", "2026-02-19", "L-Pro"))
-        upsert_session(db, row("M81_20260220_FRA400_ASI585MC_L-Pro", "M 81", "2026-02-20", "L-Pro"))
-
-    def _args(self, **kwargs):
-        defaults = {"db": None, "target": "M 81", "archive": None, "date": None, "session": None}
-        defaults.update(kwargs)
-        return types.SimpleNamespace(**defaults)
-
-    def test_date_flag_marks_all_sessions_for_target(self, tmp_path):
-        db = tmp_path / "test.db"
-        self._populate(db)
-        finish_command(self._args(db=str(db), date="2026-05-15"))
-        with sqlite3.connect(db) as conn:
-            rows = conn.execute(
-                "SELECT processed_state, processed_date FROM sessions WHERE target = 'M 81'"
-            ).fetchall()
-        assert all(r == ("processed", "2026-05-15") for r in rows)
-
-    def test_archive_flag_detects_date_from_processed_dir(self, tmp_path):
-        db = tmp_path / "test.db"
-        self._populate(db)
-        processed_dir = tmp_path / "01_Deep Sky Objects" / "M 81" / "_Processed" / "2026-05-15"
-        processed_dir.mkdir(parents=True)
-        finish_command(self._args(db=str(db), archive=str(tmp_path)))
-        with sqlite3.connect(db) as conn:
-            rows = conn.execute(
-                "SELECT processed_state, processed_date FROM sessions WHERE target = 'M 81'"
-            ).fetchall()
-        assert all(r == ("processed", "2026-05-15") for r in rows)
-
-    def test_session_flag_only_updates_specified_sessions(self, tmp_path):
-        db = tmp_path / "test.db"
-        self._populate(db)
-        finish_command(self._args(
-            db=str(db),
-            date="2026-05-15",
-            session=["M81_20260219_FRA400_ASI585MC_L-Pro"],
-        ))
-        with sqlite3.connect(db) as conn:
-            conn.row_factory = sqlite3.Row
-            rows = {
-                r["session_id"]: r["processed_status"]
-                for r in conn.execute(
-                    "SELECT session_id, processed_status FROM sessions WHERE target = 'M 81'"
-                ).fetchall()
-            }
-        assert rows["M81_20260219_FRA400_ASI585MC_L-Pro"] == "2026-05-15"
-        assert rows["M81_20260220_FRA400_ASI585MC_L-Pro"] == ""
-
-    def test_unknown_session_id_warns(self, tmp_path, capsys):
-        db = tmp_path / "test.db"
-        self._populate(db)
-        with pytest.raises(SystemExit) as exc_info:
-            finish_command(self._args(
-                db=str(db),
-                date="2026-05-15",
-                session=["NoSuchSession_ID"],
-            ))
-        assert exc_info.value.code == 1
-        assert "not found" in capsys.readouterr().err
-
-    def test_missing_db_exits(self, tmp_path):
-        with pytest.raises(SystemExit):
-            finish_command(self._args(db=str(tmp_path / "missing.db"), date="2026-05-15"))
-
-    def test_target_not_found_warns(self, tmp_path, capsys):
-        db = tmp_path / "test.db"
-        self._populate(db)
-        finish_command(self._args(db=str(db), date="2026-05-15", target="Unknown Target"))
-        assert "no sessions found" in capsys.readouterr().err
 
 
 # ── W1/W2/W3: structured processed status, filter NULL sentinel, id PK ──────

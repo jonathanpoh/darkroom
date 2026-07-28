@@ -544,11 +544,9 @@ def upsert_calibration_set(db_path: Path, cal_set: dict) -> None:
 def mark_processed(db_path: Path, session_id: str, status: str) -> bool:
     """Update the legacy free-text processed_status column. Returns True if found.
 
-    Legacy: kept for backward compat (only `cataloger.py:finish_command`'s
-    per-session path — reachable via `python -m darkroom.cataloger finish`,
-    not the live `darkroom finish` — still calls this). New code should use
-    `set_processed_state`, which writes the structured processed_state /
-    processed_path / processed_date columns instead.
+    Legacy: kept for backward compat. New code should use `set_processed_state`,
+    which writes the structured processed_state / processed_path /
+    processed_date columns instead.
 
     Args:
         db_path: Path to SQLite database file
@@ -679,7 +677,7 @@ def mark_processed_by_target(db_path: Path, target: str, status: str) -> int:
 
     Writes the structured columns (W1) rather than the legacy processed_status:
     sets processed_state='processed' and processed_date=status (status here is
-    always a YYYY-MM-DD, per the finish_command caller).
+    always a YYYY-MM-DD).
 
     Args:
         db_path: Path to SQLite database file.
@@ -698,54 +696,6 @@ def mark_processed_by_target(db_path: Path, target: str, status: str) -> int:
             (status, now, _normalize_target(target)),
         )
         return cursor.rowcount
-
-
-def finish_command(args) -> None:
-    """Handle finish command — mark target or sessions as processed."""
-    db_path = Path(args.db)
-    if not db_path.exists():
-        print(f"Error: Database not found: {db_path}", file=sys.stderr)
-        sys.exit(1)
-
-    if args.date and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", args.date):
-        print(f"Error: --date must be YYYY-MM-DD, got {args.date!r}", file=sys.stderr)
-        sys.exit(1)
-
-    # Canonicalise the user-supplied target so the archive folder path and the
-    # catalog lookup both use the stored form (e.g. 'M81' → 'M 81').
-    target = _normalize_target(args.target) if args.target else args.target
-
-    if args.date:
-        date_str = args.date
-    else:
-        processed_root = (
-            Path(args.archive) / "01_Deep Sky Objects" / target / "_Processed"
-        )
-        date_str = _find_latest_processed_date(processed_root)
-
-    if args.session:
-        updated = 0
-        for sid in args.session:
-            if mark_processed(db_path, sid, date_str):
-                print(f"Updated: {sid} → processed_status = {date_str!r}")
-                updated += 1
-            else:
-                print(f"Warning: session not found: {sid}", file=sys.stderr)
-        if updated == 0:
-            sys.exit(1)
-        print(f"\nDone: {updated}/{len(args.session)} session(s) updated")
-    else:
-        count = mark_processed_by_target(db_path, target, date_str)
-        if count == 0:
-            print(
-                f"Warning: no sessions found for target {target!r}",
-                file=sys.stderr,
-            )
-        else:
-            print(
-                f"Updated {count} session(s) for target {target!r}"
-                f" → processed_status = {date_str!r}"
-            )
 
 
 class FITSHeaderExtractor:
@@ -1239,16 +1189,6 @@ Examples:
 
   # Mark a session's structured processed_state
   %(prog)s mark-processed M81_20260219_FRA400_ASI585MC_L-Pro processed --date 2026-03-01
-
-  # Mark all sessions for a target as processed (date auto-detected from archive)
-  %(prog)s finish --target "M 81" --archive /Volumes/Astrophotography
-
-  # Mark specific sessions only
-  %(prog)s finish --target "M 81" --archive /Volumes/Astrophotography \\
-      --session M81_20260219_FRA400_ZWOASI585MCPro_L-Pro
-
-  # Fallback when _Processed/ is already cleaned up
-  %(prog)s finish --target "M 81" --date 2026-05-15
         """,
     )
     parser.add_argument(
@@ -1275,33 +1215,6 @@ Examples:
     p_mark.add_argument("--path", metavar="PATH", help="processed_path (archive-relative _Processed path)")
     p_mark.add_argument("--notes", metavar="TEXT", help="Notes (only overwrites existing notes when passed)")
 
-    # finish
-    p_finish = subparsers.add_parser(
-        "finish",
-        help="Mark a target or sessions as processed after WBPP + PixInsight",
-    )
-    p_finish.add_argument(
-        "--target", required=True, metavar="NAME",
-        help='Target name as stored in the catalog (e.g. "M 81")',
-    )
-    p_finish_date = p_finish.add_mutually_exclusive_group(required=True)
-    p_finish_date.add_argument(
-        "--archive", metavar="PATH",
-        help=(
-            "NAS archive root — navigates to "
-            "<archive>/01_Deep Sky Objects/<target>/_Processed/ to detect the date "
-            "(targets outside 01_Deep Sky Objects/ should use --date instead)"
-        ),
-    )
-    p_finish_date.add_argument(
-        "--date", metavar="YYYY-MM-DD",
-        help="Processed date override (use when _Processed/ has already been cleaned up)",
-    )
-    p_finish.add_argument(
-        "--session", nargs="+", metavar="SESSION_ID",
-        help="Specific session IDs to update (default: all sessions for --target)",
-    )
-
     args = parser.parse_args()
 
     if not args.command:
@@ -1314,8 +1227,6 @@ Examples:
         scan_calibration_command(args)
     elif args.command == "mark-processed":
         mark_processed_command(args)
-    elif args.command == "finish":
-        finish_command(args)
 
 
 if __name__ == "__main__":
