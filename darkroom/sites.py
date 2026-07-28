@@ -10,8 +10,14 @@ else with a heavy/optional dependency.
 from __future__ import annotations
 
 import math
+from collections import Counter
+from typing import Iterable
 
 EARTH_RADIUS_M = 6371000.0
+
+# Frames further than this from a session's modal position are treated as a bad
+# fix worth reporting rather than ordinary GPS jitter.
+SITE_DISAGREEMENT_M = 1000.0
 
 
 def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -43,6 +49,61 @@ def resolve_site(lat: float | None, lon: float | None, sites: list[dict]) -> dic
             best = site
             best_dist = dist
     return best
+
+
+def modal_site(
+    positions: Iterable[tuple[float | None, float | None]],
+) -> tuple[float | None, float | None, dict[tuple[float, float], int]]:
+    """Most common (lat, lon) among *positions*, plus any that materially disagree.
+
+    The ASIAir takes its position from the phone running the app, and only
+    re-reads it at autorun start. A stale fix — or a WiFi-geolocated one, when
+    the phone has no cellular signal and resolves to wherever the access point
+    is registered rather than where you are — can therefore contaminate part or
+    all of a session. Picking any single frame lets one bad frame decide the
+    whole night, so take the most common position instead.
+
+    Returns (lat, lon, outliers), where outliers maps each distinct position
+    further than SITE_DISAGREEMENT_M from the modal one to its frame count.
+    A session never genuinely moves, so a non-empty outliers means the
+    coordinates need a human look. Returns (None, None, {}) when no position
+    is usable.
+    """
+    counts: Counter = Counter(
+        (lat, lon) for lat, lon in positions if lat is not None and lon is not None
+    )
+    if not counts:
+        return None, None, {}
+
+    (lat, lon), _ = counts.most_common(1)[0]
+    outliers = {
+        pos: n
+        for pos, n in counts.items()
+        if haversine_m(lat, lon, *pos) > SITE_DISAGREEMENT_M
+    }
+    return lat, lon, outliers
+
+
+def describe_disagreement(
+    label: str,
+    lat: float,
+    lon: float,
+    outliers: dict[tuple[float, float], int],
+    total: int,
+) -> list[str]:
+    """Human-readable warning lines for a session whose frames disagree on position.
+
+    Returned rather than printed so callers control the stream and prefix.
+    """
+    kept = total - sum(outliers.values())
+    lines = [
+        f"Warning: {label}: site coordinates disagree across frames — "
+        f"using {lat}, {lon} ({kept}/{total} frames)"
+    ]
+    for (o_lat, o_lon), n in sorted(outliers.items(), key=lambda kv: -kv[1]):
+        km = haversine_m(lat, lon, o_lat, o_lon) / 1000
+        lines.append(f"         {n} frame(s) at {o_lat}, {o_lon} ({km:.1f} km away)")
+    return lines
 
 
 def home_sqm(sites: list[dict]) -> float | None:

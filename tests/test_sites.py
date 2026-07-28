@@ -1,6 +1,13 @@
 import pytest
 
-from darkroom.sites import haversine_m, resolve_site, home_sqm, session_weight
+from darkroom.sites import (
+    describe_disagreement,
+    haversine_m,
+    home_sqm,
+    modal_site,
+    resolve_site,
+    session_weight,
+)
 
 
 # Setúbal-area reference points used across the imaging-targets tests.
@@ -93,3 +100,53 @@ class TestSessionWeight:
     def test_home_none_is_neutral(self):
         site = {"name": "Home", "sqm": 21.0}
         assert session_weight(site, None) == 1.0
+
+
+class TestModalSite:
+    def test_unanimous_frames(self):
+        lat, lon, outliers = modal_site([SANTA_SUSANA] * 5)
+        assert (lat, lon) == SANTA_SUSANA
+        assert outliers == {}
+
+    def test_single_stale_frame_does_not_win(self):
+        # The NGC 281 2026-07-26 case: frame 1 carried a stale home fix while
+        # the remaining 43 were at the real site. Taking the first frame
+        # mislabelled the whole session.
+        positions = [PALMELA] + [SANTA_SUSANA] * 43
+        lat, lon, outliers = modal_site(positions)
+        assert (lat, lon) == SANTA_SUSANA
+        assert outliers == {PALMELA: 1}
+
+    def test_jitter_within_threshold_is_not_an_outlier(self):
+        nearby = (SANTA_SUSANA[0] + 0.0005, SANTA_SUSANA[1])  # ~55 m
+        lat, lon, outliers = modal_site([SANTA_SUSANA] * 3 + [nearby])
+        assert (lat, lon) == SANTA_SUSANA
+        assert outliers == {}
+
+    def test_none_positions_ignored(self):
+        lat, lon, outliers = modal_site([(None, None), SANTA_SUSANA, (None, None)])
+        assert (lat, lon) == SANTA_SUSANA
+        assert outliers == {}
+
+    def test_no_usable_positions(self):
+        assert modal_site([(None, None), (38.5, None)]) == (None, None, {})
+
+    def test_empty(self):
+        assert modal_site([]) == (None, None, {})
+
+
+class TestDescribeDisagreement:
+    def test_reports_counts_and_distance(self):
+        lines = describe_disagreement("sess", *SANTA_SUSANA, {PALMELA: 1}, 44)
+        assert "sess" in lines[0]
+        assert "43/44 frames" in lines[0]
+        assert "1 frame(s)" in lines[1]
+        # Palmela -> Santa Susana is ~45 km
+        assert "45." in lines[1] or "44." in lines[1]
+
+    def test_one_line_per_outlier_position(self):
+        other = (38.3938, -8.43112)
+        lines = describe_disagreement("s", *SANTA_SUSANA, {PALMELA: 1, other: 3}, 10)
+        assert len(lines) == 3
+        # Busiest outlier listed first
+        assert "3 frame(s)" in lines[1]
