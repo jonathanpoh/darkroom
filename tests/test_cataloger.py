@@ -20,11 +20,8 @@ from darkroom.cataloger import (
     init_db,
     upsert_session,
     upsert_calibration_set,
-    mark_processed,
     mark_processed_command,
     set_processed_state,
-    _find_latest_processed_date,
-    mark_processed_by_target,
     scan_all_command,
 )
 from darkroom.catalog_db import add_site
@@ -348,54 +345,6 @@ class TestAnalyzeSessions:
 import sqlite3
 
 
-class TestMarkProcessed:
-    def _insert_session(self, db):
-        init_db(db)
-        upsert_session(db, {
-            "session_id": "M81_20260219_FRA400_ASI585MC_L-Pro",
-            "target": "M 81",
-            "obs_date": "2026-02-19",
-            "ota": "FRA400",
-            "camera": "ZWO ASI585MC",
-            "filter": "L-Pro",
-            "gain": 200,
-            "temperature_c": -10.0,
-            "exposure_sec": 180.0,
-            "focal_length": 400.0,
-            "frame_count": 10,
-            "total_integration_sec": 1800,
-            "ra_deg": None,
-            "dec_deg": None,
-            "lights_path": "/Volumes/test",
-            "processed_status": "",
-            "notes": "",
-        })
-
-    def test_mark_processed_updates_status(self, tmp_path):
-        db = tmp_path / "test.db"
-        self._insert_session(db)
-        mark_processed(db, "M81_20260219_FRA400_ASI585MC_L-Pro", "2026-03-01")
-        with sqlite3.connect(db) as conn:
-            conn.row_factory = sqlite3.Row
-            row = conn.execute(
-                "SELECT processed_status FROM sessions WHERE session_id = ?",
-                ("M81_20260219_FRA400_ASI585MC_L-Pro",)
-            ).fetchone()
-        assert row["processed_status"] == "2026-03-01"
-
-    def test_mark_processed_unknown_id_returns_false(self, tmp_path):
-        db = tmp_path / "test.db"
-        self._insert_session(db)
-        result = mark_processed(db, "NonExistent_ID", "2026-03-01")
-        assert result is False
-
-    def test_mark_processed_known_id_returns_true(self, tmp_path):
-        db = tmp_path / "test.db"
-        self._insert_session(db)
-        result = mark_processed(db, "M81_20260219_FRA400_ASI585MC_L-Pro", "2026-03-01")
-        assert result is True
-
-
 class TestSQLiteCatalog:
     def _sample_session(self):
         return {
@@ -577,98 +526,6 @@ class TestSQLiteCatalog:
                 (session["session_id"],),
             ).fetchone()
         assert created2 == created1
-
-
-class TestFindLatestProcessedDate:
-    def test_single_date_dir_returned(self, tmp_path):
-        (tmp_path / "2026-05-15").mkdir()
-        assert _find_latest_processed_date(tmp_path) == "2026-05-15"
-
-    def test_multiple_dirs_returns_most_recent(self, tmp_path):
-        (tmp_path / "2026-03-01").mkdir()
-        (tmp_path / "2026-05-15").mkdir()
-        assert _find_latest_processed_date(tmp_path) == "2026-05-15"
-
-    def test_multiple_dirs_prints_notice(self, tmp_path, capsys):
-        (tmp_path / "2026-03-01").mkdir()
-        (tmp_path / "2026-05-15").mkdir()
-        _find_latest_processed_date(tmp_path)
-        assert "Multiple processed dates" in capsys.readouterr().out
-
-    def test_non_date_dirs_ignored(self, tmp_path):
-        (tmp_path / "2026-05-15").mkdir()
-        (tmp_path / "master").mkdir()
-        (tmp_path / "processed").mkdir()
-        assert _find_latest_processed_date(tmp_path) == "2026-05-15"
-
-    def test_missing_root_exits(self, tmp_path):
-        with pytest.raises(SystemExit):
-            _find_latest_processed_date(tmp_path / "nonexistent")
-
-    def test_no_date_dirs_exits(self, tmp_path):
-        (tmp_path / "master").mkdir()
-        with pytest.raises(SystemExit):
-            _find_latest_processed_date(tmp_path)
-
-
-class TestMarkProcessedByTarget:
-    def _populate(self, db):
-        init_db(db)
-
-        def row(sid, target, obs_date, filt):
-            return {
-                "session_id": sid, "target": target, "obs_date": obs_date,
-                "ota": "FRA400", "camera": "ZWO ASI585MC", "filter": filt,
-                "gain": 200, "temperature_c": -10.0, "exposure_sec": 180.0,
-                "focal_length": 400.0,
-                "frame_count": 10, "total_integration_sec": 1800,
-                "ra_deg": None, "dec_deg": None, "lights_path": "/fake",
-                "processed_status": "", "notes": "",
-            }
-
-        upsert_session(db, row("M81_20260219_FRA400_ASI585MC_L-Pro", "M 81", "2026-02-19", "L-Pro"))
-        upsert_session(db, row("M81_20260220_FRA400_ASI585MC_L-Pro", "M 81", "2026-02-20", "L-Pro"))
-        upsert_session(db, row("NGC7380_20251001_FRA400_ASI585MC_L-Extreme", "NGC 7380", "2025-10-01", "L-Extreme"))
-
-    def test_marks_all_sessions_for_target(self, tmp_path):
-        db = tmp_path / "test.db"
-        self._populate(db)
-        count = mark_processed_by_target(db, "M 81", "2026-05-15")
-        assert count == 2
-        with sqlite3.connect(db) as conn:
-            rows = conn.execute(
-                "SELECT processed_state, processed_date FROM sessions WHERE target = 'M 81'"
-            ).fetchall()
-        assert all(r == ("processed", "2026-05-15") for r in rows)
-
-    def test_case_insensitive_match(self, tmp_path):
-        db = tmp_path / "test.db"
-        self._populate(db)
-        count = mark_processed_by_target(db, "m 81", "2026-05-15")
-        assert count == 2
-
-    def test_missing_space_match(self, tmp_path):
-        # 'M81' (no space) should match the stored 'M 81'
-        db = tmp_path / "test.db"
-        self._populate(db)
-        count = mark_processed_by_target(db, "M81", "2026-05-15")
-        assert count == 2
-
-    def test_does_not_affect_other_targets(self, tmp_path):
-        db = tmp_path / "test.db"
-        self._populate(db)
-        mark_processed_by_target(db, "M 81", "2026-05-15")
-        with sqlite3.connect(db) as conn:
-            row = conn.execute(
-                "SELECT processed_state FROM sessions WHERE target = 'NGC 7380'"
-            ).fetchone()
-        assert row[0] == "unprocessed"
-
-    def test_no_match_returns_zero(self, tmp_path):
-        db = tmp_path / "test.db"
-        self._populate(db)
-        count = mark_processed_by_target(db, "Unknown Target", "2026-05-15")
-        assert count == 0
 
 
 # ── W1/W2/W3: structured processed status, filter NULL sentinel, id PK ──────
