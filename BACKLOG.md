@@ -199,14 +199,57 @@ features · **S** = observation sites / conditions.
 
 ## R — Refactors
 
-### R1. Consolidate the two calibration-scan implementations
-- `cataloger.CalibrationCataloger.scan` (`cataloger.py:715-838`) and
-  `scanner._scan_calibration` (`scanner.py:128-188`) independently re-implement
-  frame-type inference, the flat-dark threshold, temp rounding, filter-from-
-  filename, and group keying. `_FLAT_DARK_THRESHOLD_SEC` was defined three
-  times when this was captured; as of 2026-07-29 it's **two** —
-  `cataloger.py:856` and `triage/suggest.py:26` (the `scanner.py` copy is
-  already gone). Re-grep before starting.
+### R1. Consolidate the two calibration-scan implementations — ✅ FIXED
+> Shipped 2026-07-29. The threshold really was defined **three** times — an
+> earlier note in this file claiming it was down to two was wrong: `scanner.py`
+> declared `FLAT_DARK_THRESHOLD_SEC` (no leading underscore) as a *local*
+> inside `_scan_calibration`, so an underscore-prefixed grep missed it.
+>
+> Shared, in `darkroom/parse.py`: `FLAT_DARK_THRESHOLD_SEC = 10.0` and
+> `reclassify_flat_dark(frame_type, exposure_sec)`. All three call sites
+> (`cataloger.CalibrationCataloger.scan`, `scanner._scan_calibration`,
+> `triage/suggest.suggest_calibration_dest`) now import both. `parse.py` was
+> chosen over `names.py` because it already hosts `parse_ota`, the same kind of
+> classify-a-derived-value work, and it keeps the astropy-free constraint.
+>
+> **Deliberately NOT shared** — the three paths differ for real reasons, and
+> merging them would have silently imposed one side's trust model:
+> - *Frame-type inference* (resolving the type before reclassification):
+>   `cataloger` checks the `IMAGETYP` header first, then falls back to a
+>   folder-name substring (the archive tree's structure varies);
+>   `scanner` trusts the literal top-level ASIAir folder (`Flat`/`Dark`/`Bias`)
+>   with no header check, because the SD-card layout is fixed; `suggest` does a
+>   dict lookup on the folder basename supporting singular+plural. Different
+>   amounts of trust in folder names vs headers — this is the step that decides
+>   Dark vs FlatDark, so a wrong merge here mis-files calibration and poisons
+>   WBPP matching downstream.
+> - *Group keying*: `cataloger`'s key includes `folder_path` and always
+>   includes temperature (the archive segments flats by `OTA_Camera_Filter/date/`,
+>   so the folder proxies for OTA+filter); `scanner`'s includes `ota`/`filter`
+>   explicitly and drops temperature for temperature-insensitive types
+>   (Flat/FlatDark/Bias). Merging would either lose the archive's folder-based
+>   dedup or add meaningless temperature splits to the SD-card scan.
+> - *Temperature rounding*: both call bare `round()`; wrapping a stdlib builtin
+>   buys no drift protection. (`suggest` doesn't round at all — doesn't need to.)
+> - *Filter-from-filename*: was never actually duplicated — all three already
+>   called `parse.parse_filter()` with the same header fallback.
+>
+> **One behavioural change worth knowing:** the shared helper guards
+> `exposure_sec is not None`. Previously a Dark with a missing exposure raised
+> `TypeError` and aborted the scan; it now stays classified as a science Dark.
+> Loud crash → quiet conservative default. Such a frame can't be matched by
+> WBPP anyway (dark matching keys on exposure), so it's an improvement, but
+> it is a change, not a pure refactor.
+>
+> Tests: threshold-boundary cases (exactly 10.0s / 9.99s / 10.01s) pinned for
+> **all three** paths — `tests/test_parse.py`, `tests/test_cataloger.py`
+> (new `TestCalibrationCatalogerFlatDarkThreshold`; there had been no direct
+> unit test of `CalibrationCataloger.scan` at all), `tests/test_scanner.py`,
+> `tests/triage/test_suggest.py`. Suite 740 → 753.
+
+- `cataloger.CalibrationCataloger.scan` and `scanner._scan_calibration`
+  independently re-implement frame-type inference, the flat-dark threshold,
+  temp rounding, filter-from-filename, and group keying.
 - Extract one shared grouping helper + one threshold constant so the two ingest
   paths can't drift.
 
