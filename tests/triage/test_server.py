@@ -1,10 +1,12 @@
+import csv
+import io
 import sqlite3
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
-from darkroom.triage.db import open_db, upsert_item, update_status
+from darkroom.triage.db import log_action, open_db, upsert_item, update_status
 from darkroom.triage.server import create_app
 
 
@@ -184,6 +186,48 @@ class TestAuditPage:
         c, conn = client
         resp = c.get("/audit")
         assert resp.status_code == 200
+
+
+class TestAuditExport:
+    def test_quoted_paths_round_trip(self, client):
+        # Paths containing a double quote and a comma used to break the
+        # hand-rolled CSV quoting; verify csv.writer escapes them correctly
+        # by round-tripping the export through csv.reader.
+        c, conn = client
+        item_id = upsert_item(
+            conn, category="flat_restructure", source_path="/s/x", proposed_path="/s/y"
+        )
+        source_path = '/archive/M 81, "weird" session/Lights/foo.fit'
+        dest_path = "/archive/M 81/Lights/foo.fit"
+        log_action(
+            conn,
+            triage_item_id=item_id,
+            action_type="move",
+            source_path=source_path,
+            dest_path=dest_path,
+        )
+
+        resp = c.get("/audit/export.csv")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/csv")
+        assert resp.headers["content-disposition"] == "attachment; filename=audit_log.csv"
+
+        rows = list(csv.reader(io.StringIO(resp.text)))
+        header, data_row = rows[0], rows[1]
+        assert header == [
+            "id",
+            "triage_item_id",
+            "action_type",
+            "source_path",
+            "dest_path",
+            "result",
+            "applied_at",
+            "reverted_at",
+        ]
+        record = dict(zip(header, data_row))
+        assert record["source_path"] == source_path
+        assert record["dest_path"] == dest_path
+        assert record["action_type"] == "move"
 
 
 class TestCommitExecute:
