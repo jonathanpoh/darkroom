@@ -1,48 +1,12 @@
 # darkroom — Development Brief
 
-## Superpowers skills (opt-in on Opus 4.8)
-
-When running **Opus 4.8**, do NOT auto-invoke `test-driven-development`,
-`systematic-debugging`, or `verification-before-completion` — 4.8 already does
-root-cause investigation, test-first discipline, and verify-before-claiming well
-enough on its own, and the gates add friction to exploratory work in this repo.
-Invoke them only when I explicitly ask, or when the change is risky enough to
-warrant the rigor (e.g. catalog/ingest logic where a silent regression corrupts
-the archive). On **Sonnet 4.6** (or any non-4.8 model), treat them as normally
-auto-triggering. Orchestration skills (brainstorming, writing/executing-plans,
-worktrees, subagent-driven-development) are unaffected.
-
 ## What This Project Is
 
 The full darkroom suite — unified into a single `darkroom` CLI as of May 2026.
 Previously two repos (`darkroom-catalog` read-only, `darkroom-ingest` write
-pipeline); now one package with subcommands:
-
-| Subcommand | Purpose |
-|---|---|
-| `darkroom catalog scan-lights <path>` | Recursively catalog all light sessions on the NAS |
-| `darkroom catalog scan-calibration <path>` | Catalog calibration frames |
-| `darkroom catalog mark <id> <state> [--date/--path/--notes]` | Set processed_state (unprocessed/in_progress/processed/skipped) for one session |
-| `darkroom catalog scan-processed --archive <path> [--apply]` | Reconcile processed_state from on-disk output artifacts (dry-run by default) |
-| `darkroom catalog list [--target X]` | Browse the catalog |
-| `darkroom catalog migrate-archive --archive <path> [--dry-run]` | Migrate archive from old filter-in-folder layout to `Lights/<filter>/` |
-| `darkroom catalog apply-renames --archive <path> [--apply]` | Execute archive folder moves owed by catalog identity edits (pending_renames ledger; dry-run by default) |
-| `darkroom ingest scan --asiair <path> [--manifest F]` / `ingest review F` / `ingest commit [F]` | Archive an ASIAir session (scan → review → commit) |
-| `darkroom wbpp --target X [--date Y \| --session ID] [--flat-window DAYS]` | Build SESSION_N symlink dirs for PixInsight |
-| `darkroom finish --target X [--date Y]` | Copy WBPP stacks back to archive and mark sessions processed |
-| `darkroom triage scan --archive <path>` | Scan archive for issues, populate triage.db |
-| `darkroom triage serve --archive <path>` | Review/fix flagged items in a web UI (port 8002) |
-
-Shared flags and config resolution (CLI → env → `darkroom.toml`, see `darkroom/config.py`):
-
-| Flag | Env var | toml key | Default |
-|---|---|---|---|
-| `--catalog` | `DARKROOM_CATALOG` | `catalog_path` | `~/.config/darkroom/astro_catalog.db` |
-| `--archive` | `DARKROOM_ARCHIVE` | `archive_path` | — (required) |
-| `--wbpp` | `DARKROOM_WBPP` | `wbpp_path` | `./WBPP` |
-| `--asiair` | — | — | — (required for ingest) |
-
-The toml accepts flat keys or a `[darkroom]` section.
+pipeline); now one package. Run `darkroom --help` for the subcommand tree, and
+see `darkroom/config.py` for shared path resolution (CLI → env → `darkroom.toml`,
+which accepts flat keys or a `[darkroom]` section).
 
 ## Pipeline Context
 
@@ -134,26 +98,11 @@ Mounted on Mac via SMB (confirm mount path — likely `/Volumes/Astrophotography
 
 ## Shared Utilities (`darkroom/parse.py`)
 
-Ported from `asiair-ingestion/scripts/create_wbpp_input.py`. Use these everywhere:
-
-- `parse_filter(stem)` — filter from filename (None if absent)
-- `parse_exposure(stem)` — exposure string (e.g. `'180.0s'`)
-- `parse_datetime(stem)` — capture datetime
-- `flat_morning_date(end_dt)` — date flats were taken (same morning if session ended
-  before noon; next morning otherwise)
-- `ota_from_focallen(focal_length)` — OTA name from FOCALLEN header value
-- `fits_files(directory)` — sorted FITS list, thumbnails excluded
+Ported from `asiair-ingestion/scripts/create_wbpp_input.py`. Use these helpers
+everywhere — never re-implement filename parsing, filter/exposure extraction, or
+the flat-morning date rule inline.
 
 ## `darkroom ingest` (was `archive_ingest.py`)
-
-### Verbs (subcommands, not mode flags)
-- `ingest scan --asiair <path> [--manifest <yaml>]`: scan + emit manifest.
-  No `--manifest` prints to stdout (a dry run); `--manifest FILE` writes it.
-- `ingest review <yaml>`: interactively resolve `needs_review` (missing-filter) items.
-- `ingest commit [<yaml>]`: execute a manifest. With no FILE, scans `--asiair` and
-  commits in one step.
-- Shared: `--archive <path>` (env `DARKROOM_ARCHIVE`), `--catalog <path>` on
-  `scan`/`commit`.
 
 ### Workflow
 1. Scan source for FITS files; extract metadata from filenames + headers.
@@ -166,30 +115,6 @@ Ported from `asiair-ingestion/scripts/create_wbpp_input.py`. Use these everywher
 5. Write YAML manifest listing every source→destination move.
 6. In `--dry-run` or first pass: print/save manifest, stop.
 7. In `--commit` pass: execute copies, then register in `astro_catalog.db`.
-
-### Manifest YAML structure
-
-```yaml
-meta:
-  asiair: /Volumes/ASIAIR/Autorun/
-  archive: ~/02_Astrophotography/02_Archive
-  catalog: ~/.config/darkroom/astro_catalog.db
-  generated: 2026-02-19T21:00:00
-sessions:
-  - session_id: M81_20260219_FRA400_ZWOASI585MCPro_L-Pro
-    target: M 81
-    obs_date: 2026-02-19
-    ota: FRA400
-    camera: ZWOASI585MCPro
-    filter: L-Pro
-    gain: 200
-    exposure_sec: 180.0
-    frame_count: 132
-
-calibration:
-  - frame_type: Flat
-    ...
-```
 
 ## `darkroom wbpp` (was `wbpp_prep.py`)
 
@@ -210,57 +135,7 @@ Generalised from `asiair-ingestion/scripts/create_wbpp_input.py`. Key difference
 | Flats | OTA + Camera + Filter + nearest date within ±N days (N = `--flat-window`, default 3) |
 | Flat darks | Flat exposure + flat date (or flat_date + 1 fallback) |
 
-### Inputs
-- `--target "M 81"` + `--date 2026-02-19` (looks up session in catalog)
-- `--session M81_20260219_FRA400_ZWOASI585MCPro_L-Pro` (direct session ID)
-- `--wbpp <path>`: where to create SESSION_N dirs (env: `DARKROOM_WBPP`, default: `./WBPP`)
-- `--archive <path>`: NAS/local archive root (env: `DARKROOM_ARCHIVE`)
-
-### Output structure
-```
-<wbpp>/<TargetSlug>/
-  SESSION_N/        ← symlinks into archive
-    Lights/
-    Darks/
-    Flats/
-    FlatDarks/
-  Output/           ← set this as WBPP output dir in PixInsight
-    processed/      ← pre-created
-```
-
-## Running
-
-```bash
-cd /Users/jpoh/Projects/darkroom
-uv sync --extra dev
-uv run darkroom --help
-uv run darkroom catalog list
-uv run pytest                            # run the suite
-```
-
-## Package Layout
-
-```
-darkroom/
-  cli.py            ← entry point (argparse dispatch)
-  config.py         ← shared CLI/env/toml path resolution; resolve_catalog() defaults to ~/.config/darkroom/astro_catalog.db
-  cataloger.py      ← FITS header extraction, scan-all/calibration logic, DB schema, upsert/mark fns
-  catalog.py        ← read-only query helpers (find_darks, find_flats, find_flat_darks, query_sessions)
-  catalog_cli.py    ← subparser tree for `darkroom catalog ...`
-  parse.py          ← filename parsing (parse_filter, parse_exposure, parse_datetime, fits_files)
-  scanner.py        ← scan_source — produces Session/CalibrationGroup dataclasses from ASIAir source folder
-  ingest.py         ← `darkroom ingest`
-  prep.py           ← `darkroom wbpp`
-  finish.py         ← `darkroom finish` (THE live finish — edit here)
-  wbpp.py           ← symlink helpers used by prep/finish
-  triage/           ← `darkroom triage` — archive-cleanup web UI
-    scanner.py      ← walk archive, flag issues (checks.py: OBJECT, RA/DEC)
-    suggest.py      ← propose corrected paths/values
-    actions.py      ← move/rename/copy_corrected/trash/revert
-    db.py           ← triage_items table (separate triage.db, NOT the catalog)
-    server.py       ← FastAPI app; cli.py registers `triage scan|serve`
-  templates/triage/ ← Jinja2 templates for the triage UI
-```
+## `darkroom finish`
 
 > **`finish.py` is the finish implementation.** `darkroom finish` dispatches
 > (via `cli.py` → `finish.add_subparser`) to **`finish.py:cmd_finish`**: it
@@ -269,19 +144,6 @@ darkroom/
 > `cataloger.py:finish_command` (reachable only via `python -m darkroom.cataloger
 > finish`, and which built archive paths differently via `_normalize_target`)
 > has been removed — `finish.py` is the only finish surface now.
-
-## `darkroom triage` (transient cleanup tool)
-
-A web UI for cleaning up the **existing** NAS archive — not part of the steady-state
-ingest pipeline. `triage scan` walks the archive, flags problems (placeholder FITS
-`OBJECT`, RA/DEC mismatches, mis-filed calibration, legacy session naming), and
-proposes corrections; `triage serve` (port 8002) lets you review each item and
-apply move/rename/copy-corrected/trash, or revert a prior action.
-
-State lives in a **separate `triage.db`** (default `<archive>/triage.db`), distinct
-from `astro_catalog.db` — triage does not write to the catalog, so the "catalog is
-the single source of truth" rule still holds. This tool is expected to be removed
-once the archive backlog is cleaned up; treat it as scaffolding, not core.
 
 ## Relationship to `asiair-ingestion`
 
