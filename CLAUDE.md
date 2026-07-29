@@ -139,8 +139,24 @@ Generalised from `asiair-ingestion/scripts/create_wbpp_input.py`. Key difference
 | Frame type | Match key |
 |---|---|
 | Science darks | Camera + Gain + Exposure (all dates usable) |
-| Flats | OTA + Camera + Filter + nearest date within ±N days (N = `--flat-window`, default 3) |
+| Flats | OTA + Camera + Filter, within ±N days (N = `--flat-window`, default 3), ranked by the **flat-morning rule** — see below |
 | Flat darks | Flat exposure + flat date (or flat_date + 1 fallback) |
+
+#### The flat-morning rule (directional, not proximity)
+
+Flats are shot the morning **after** a session, so a flat set's relationship to
+a night is directional: offset `+1` (following morning, the normal workflow) and
+`0` (that evening — happens when filters are changed mid-session) are both *this
+run*; anything else is a different occasion. `catalog.flat_sort_key` ranks in-run
+sets first (`+1` ahead of `0`), then falls back to proximity, preferring the
+later date on a tie.
+
+Do not rank flats by absolute date distance. That makes `-1` and `+1` a tie
+broken by backend row order, which routinely handed a session the *previous*
+night's flats — a different sky, often a very different flat exposure
+(0.31s vs 0.05s was observed on real NGC 281 data). `parse.py`'s flat-morning
+helpers and `catalog.find_flat_darks` already encoded the directional `0..+1`
+window; `find_flats` was the outlier.
 
 ## `darkroom finish`
 

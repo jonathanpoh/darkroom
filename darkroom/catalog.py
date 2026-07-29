@@ -36,14 +36,51 @@ def find_bias(backend: CatalogBackend, *, camera: str, gain: int) -> list[dict]:
     return backend.query_calibration_sets(frame_type="Bias", camera=camera, gain=gain)
 
 
+def flat_offset_days(capture_date: str, obs_date: str) -> int:
+    """Signed days from a session's night to a flat set's capture date.
+
+    0 = shot the same evening (before midnight), +1 = the following morning.
+    Both are "this run"; see flat_sort_key.
+    """
+    return (date.fromisoformat(capture_date) - date.fromisoformat(obs_date)).days
+
+
+def flat_sort_key(capture_date: str, obs_date: str) -> tuple[int, int, int]:
+    """Rank a flat set for a session night — the flat-morning rule, directional.
+
+    Flats belonging to the session's own run come first: offset 0 (shot that
+    evening, e.g. either side of a mid-session filter change) or +1 (the usual
+    case, shot the morning after). Within that group the morning-after set wins,
+    since that is the habitual workflow.
+
+    Everything else in the window is a fallback — flats from a different
+    occasion entirely — ranked by proximity, preferring later over earlier on a
+    tie for the same reason.
+
+    Plain proximity used to rank these, which made ±1 a tie broken by whatever
+    order the backend happened to return: a session on night N would routinely
+    be handed the *previous* night's flats over the ones shot the morning after.
+    The two sets can differ a lot (sky brightness changes the flat exposure), so
+    this is not cosmetic. `infer_flat_filter` and `find_flat_darks` already
+    encoded the same directional 0..+1 rule; this brings find_flats in line.
+    """
+    delta = flat_offset_days(capture_date, obs_date)
+    in_run = 0 if 0 <= delta <= 1 else 1
+    # Third element prefers the later date; second is inert for in-run rows so
+    # the tuple stays comparable across both groups.
+    return (in_run, abs(delta) if in_run else 0, -delta)
+
+
 def find_flats(
     backend: CatalogBackend, *, camera: str, ota: str, filter_: str | None,
     obs_date: str, window_days: int = 3,
 ) -> list[dict]:
-    """Return Flat calibration sets within ±window_days, ordered by date proximity.
+    """Return Flat calibration sets within ±window_days, best match first.
 
     Archived flats may have been taken on a different occasion than the session,
-    so matching is by date proximity (default ±3 days) rather than exact date.
+    so the window is date proximity (default ±3 days) rather than an exact date
+    — but ordering within it follows the flat-morning rule (see flat_sort_key),
+    not raw proximity.
     """
     d = date.fromisoformat(obs_date)
     lo = d - timedelta(days=window_days)
@@ -53,7 +90,7 @@ def find_flats(
     # NULL capture_date never matches, same as the old SQL BETWEEN.
     rows = [r for r in rows if r["capture_date"] is not None]
     rows = [r for r in rows if lo <= date.fromisoformat(r["capture_date"]) <= hi]
-    rows.sort(key=lambda r: abs((date.fromisoformat(r["capture_date"]) - d).days))
+    rows.sort(key=lambda r: flat_sort_key(r["capture_date"], obs_date))
     return rows
 
 

@@ -12,6 +12,7 @@ from darkroom.catalog import (
     find_darks,
     find_flat_darks,
     find_flats,
+    flat_offset_days,
     query_all_sessions,
 )
 from darkroom.catalog_client import CatalogBackend, resolve_backend
@@ -76,6 +77,20 @@ def _overwrite_target_dir(target_dir: Path) -> None:
     clear_sessions(target_dir)
 
 
+def _flat_offset_label(capture_date: str, obs_date: str) -> str:
+    """e.g. '+1 day (morning after)', 'same evening', '-2 days'.
+
+    Makes the ranking checkable at a glance: the whole point of the flat-morning
+    rule is that ±1 day are *not* equivalent, which a bare date doesn't show.
+    """
+    delta = flat_offset_days(capture_date, obs_date)
+    if delta == 0:
+        return "same evening"
+    if delta == 1:
+        return "+1 day (morning after)"
+    return f"{delta:+d} days"
+
+
 def _resolve_flat(
     cal_rows: list[dict], filter_name: str, obs_date: str, window_days: int
 ) -> dict | None:
@@ -91,13 +106,14 @@ def _resolve_flat(
         return None
     if len(cal_rows) == 1:
         return cal_rows[0]
-    # 2+ matches — prompt or auto-select closest
+    # 2+ matches — prompt or auto-select the best-ranked (see catalog.flat_sort_key)
     print(f"  Multiple flat sets found for {filter_name} near {obs_date}:")
     for i, row in enumerate(cal_rows, 1):
-        tag = " ← closest" if i == 1 else ""
-        print(f"    {i}) {row['capture_date']} ({row['frame_count']} frames){tag}")
+        print(f"    {i}) {row['capture_date']} ({row['frame_count']} frames)"
+              f"  {_flat_offset_label(row['capture_date'], obs_date)}"
+              f"{' ← default' if i == 1 else ''}")
     if not interactive:
-        print("  Non-interactive: auto-selecting closest.")
+        print("  Non-interactive: auto-selecting the best match.")
         return cal_rows[0]
     raw = input("  [1]> ").strip()
     idx = int(raw) - 1 if raw.isdigit() else 0

@@ -354,3 +354,38 @@ darkroom catalog list --target "M 81"
   *not* recomputed at commit. Use `darkroom ingest review`. See the ⚠️ above.
 - **Quote targets with spaces:** `--target "M 81"`. Spacing/case are normalised either way.
 - **Flat matching defaults to ±3 days** — bump `--flat-window` if archived flats are older.
+- **Flats are ranked by the flat-morning rule, not raw proximity** — the set shot
+  the morning after a session (`+1 day`) beats one from the previous night, even
+  though both are 1 day away. `wbpp` shows each candidate's offset so you can
+  override; a different night's flats mean a different sky and often a very
+  different flat exposure.
+- **`ModuleNotFoundError` only when a prompt appears** → the bare `darkroom` on
+  PATH is a `uv tool` install whose dependencies are stale. Fix:
+  `uv tool install --force --editable .` from the repo. See below.
+
+## Bare `darkroom` vs `uv run darkroom`
+
+If `darkroom` is on your PATH via `uv tool install --editable .`, it runs your
+current source but keeps its **own** venv, with dependencies pinned at install
+time. Add a dependency to `pyproject.toml` and the two diverge silently.
+
+Because optional deps are imported lazily (deliberately — `questionary` is
+imported inside the prompt functions so `picker`/`ingest_review` stay importable
+without a TTY), the break is invisible until a prompt actually renders:
+
+| | bare `darkroom`, stale tool venv |
+|---|---|
+| `ingest scan` / `commit` | fine — never prompts |
+| `ingest review` | `ModuleNotFoundError: questionary` at the first menu |
+| `wbpp` picker (bare `wbpp`) | same |
+| `wbpp --target X --date Y` | fine — skips the picker |
+
+```bash
+which -a darkroom                                      # which one am I running?
+~/.local/share/uv/tools/darkroom/bin/python -c "import questionary"   # is it stale?
+uv tool install --force --editable .                   # re-resolve (run in the repo)
+```
+
+Re-run that after **every** dependency change. Scripts should call the venv
+binary by absolute path (`/path/to/darkroom/.venv/bin/darkroom`) instead of
+relying on PATH — that's why the CCC postflight never hits this.
