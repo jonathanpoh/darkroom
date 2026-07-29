@@ -1217,6 +1217,54 @@ table), and whether to compute stats at scan time or store raw logs.
 - Site radius is a flat `radius_m` per site (default 1000 m). Fine so far;
   revisit only if two genuinely distinct sites ever fall inside one radius.
 
+### S2. Expose SQM/dark-site weighting on the JSON API, not just the HTML dashboard
+Queued 2026-07-29. Checked against the live code: `session_weight`/`resolve_site`
+(`darkroom/sites.py`) are only ever called from `_build_aggregate`
+(`darkroom/webapi/ui.py:105-169`), which feeds the server-rendered dashboard
+(`GET /`, `GET /targets/{target}`) and its embedded JS blob
+(`darkroom/webapi/static/app.js`). `GET /api/sessions`
+(`darkroom/webapi/app.py:182-210`) calls `catalog_db.query_sessions` and
+returns raw DB rows (`site_lat`/`site_lon` only) straight through — no
+`site`/`w`/`wh` fields, confirmed by `tests/test_webapi.py:632-668` which only
+asserts the raw lat/lon columns. Anything consuming `/api/sessions` directly
+(scripts, the `HttpCatalogBackend`, future tooling) sees unweighted hours only.
+Fix: either resolve site + weight per row inside `query_sessions`/the handler
+and add `site`, `weight`, `home_equivalent_hours` (naming TBD) to the response,
+or add a dedicated `GET /api/sessions/{id}/weight`-style aggregate endpoint if
+folding it into the main payload is too heavy for list views. Prefer the
+former — it's the same shape other JSON consumers will want, and it keeps
+`_build_aggregate` from being the only place this math runs.
+
+### S3. Show moon phase in the session list; open question on moon/elevation weighting
+Queued 2026-07-29. Checked: there is no moon-phase, moon-separation, or
+altitude/elevation-tracking code anywhere in the repo today (no `skyfield`/
+`ephem`/`astral` dependency, no `moon`/`lunar` hits under `darkroom/`) — this
+is new, not a wiring gap like S2. `astropy` is already a dependency
+(`pyproject.toml:7`) and has `astropy.coordinates.get_body("moon", time,
+location)` available for phase/illumination and, given the session's RA/Dec +
+site lat/lon, angular separation.
+- **Display scope:** compute moon phase (illumination %, or simple
+  new/crescent/quarter/gibbous/full label) for each session's date/site and
+  show it on the night row in the target detail view (`ui.py` aggregate +
+  `app.js` render), similar to how the site chip is shown today. Needs a
+  timestamp per session to feed the ephemeris — check whether `sessions` has
+  a usable session-start time or just a date (imaging night is a calendar
+  date per `cataloger.py:compute_imaging_night`; moon phase is only stable to
+  ~half a day of precision either way, so date-level granularity is probably
+  fine).
+- **Open question (not decided — needs a call before scoping further):**
+  should moon phase and moon elevation/separation *during* the session also
+  feed into the integration weighting (`session_weight` in `sites.py`) the
+  same way SQM does, on the theory that a full moon or low moon-separation
+  degrades a night regardless of site darkness? This would need per-session
+  moon altitude/separation at imaging time (not just phase), which pushes
+  toward needing a real session-start timestamp rather than a date, and
+  raises the same "avoid double-counting" question SQM already answers for
+  site — a bright moon and a bad site are correlated in some ways but not
+  others. Recommend: ship phase-as-display first (S3 core), decide the
+  weighting question separately once real moon-phase data exists to look at
+  and judge whether it's actually moving the needle on real sessions.
+
 ---
 
 ## Suggested order for a future session
