@@ -120,7 +120,53 @@ features · **S** = observation sites / conditions.
   (rows are already `ORDER BY is_master DESC`). **Verify first** how the 585 /
   Canon calibration is actually stored before changing — this is design-ambiguous.
 
-### B11. `wbpp` symlinks every dark master at every temperature
+### B11. `wbpp` symlinks every dark master at every temperature — ✅ FIXED
+
+> Fixed 2026-07-29. `find_darks` now takes `temperature_c` + `temp_tolerance`
+> and returns only sets within ±`temp_tolerance` (default 3.0C,
+> `catalog.DEFAULT_DARK_TEMP_TOLERANCE`), ranked nearest-first via
+> `dark_temp_sort_key`; `_build_night` symlinks exactly one master instead of
+> looping the whole ladder. Exposed as `--dark-temp-tolerance DEGREES`.
+> Passing `temperature_c=None` keeps the pre-B11 behaviour, so callers that
+> just want "what darks exist at this gain/exposure" are unaffected.
+>
+> **The two-regime plan below (exact match for the cooled camera, nearest for
+> the uncooled one) was dropped after checking the data.** Session
+> `temperature_c` is the raw `CCD-TEMP` of the session's *first* frame
+> (`cataloger.py`), captured while the sensor may still be settling, whereas
+> calibration sets round to the nearest degree (`scanner.py`). That leaves 13
+> of 111 ZWOASI585MCPro sessions on values like `-19.5`, `-16.5`, `-15.0` that
+> match no master exactly — so exact matching would have silently dropped them
+> to zero darks. One nearest-within-tolerance rule covers both cameras and
+> needs no cooled/uncooled camera registry, which the codebase doesn't have.
+>
+> Equidistant picks (`dark_temp_ties`) print a warning naming both candidates
+> rather than taking backend row order — the failure mode B12 had. Empty
+> `Darks/` now explains itself: "nearest master is 15C, 5C away; use
+> --dark-temp-tolerance 5 to accept it" vs. "no darks found at this
+> gain/exposure" — different problems with different fixes.
+>
+> `find_bias` was deliberately left alone: all 6 live bias masters have
+> `temperature_c` NULL and there is exactly one per (camera, gain), so the
+> multi-symlink bug cannot fire and adding temperature matching would only
+> risk breaking a working path.
+>
+> Verified on live data, not just tests: M 42 2023-11-22 (Canon6D, 17.0C)
+> previously drew all five masters from the 15/20/25/30/35C ladder and now
+> links only `masterDark_180s_ISO1600_15C.xisf`.
+> Tests: `tests/test_catalog.py` (+11), `tests/test_wbpp_finish.py` (+4),
+> `tests/test_client_server.py` (+1 HTTP-parity, since the filter is
+> client-side and would `KeyError` if the API stopped serialising
+> `temperature_c`). Suite 861 → 877.
+>
+> **Coverage at ±3 on the live catalog** — of the 201 sessions that have any
+> master at their gain/exposure, 146 now match one and 55 fall outside the
+> window (Canon6D 44/94, ZWOASI585MCPro 102/107). That residue is a *darks
+> library* gap, not a matching bug: most Canon combos are single-rung
+> (`ISO800` at 5/60/120/180s has only a 25C master; `ISO1600` at 2s/5s only
+> 10C). Jonathan is shooting a −15C ZWO set, which takes that camera from
+> 102/107 to 105/107 and creates the first real equidistant tie (a −17.5C
+> session between −20C and −15C), exercising the new warning.
 
 Reported by Jonathan 2026-07-29: when multiple science-dark masters exist, all
 of them get symlinked into the WBPP working folder instead of the one matching
@@ -173,6 +219,30 @@ the session.
   (assert only the matching one is symlinked) and an uncooled ladder where the
   session temperature falls between rungs (assert nearest wins, and that a
   session outside the tolerance gets none rather than all).
+
+### B13. `wbpp` takes a whole night's dark params from `sessions[0]`
+
+Found 2026-07-29 while verifying **B11** against live data, not reported.
+
+- **Where:** `darkroom/prep.py:_build_night` — `s0 = sessions[0]`, then camera,
+  gain, exposure *and now temperature* for both Darks and Bias come from that
+  one row. The comment claims "all sessions same night share params".
+- **They don't.** IC 1805 2023-12-14 has three sessions in one SESSION_N:
+  L-Extreme at ISO3200/6.0C, L-Pro at **ISO1600**/5.0C, and an unfiltered one
+  at ISO3200/8.0C. The night gets ISO3200 darks; the L-Pro lights are
+  calibrated with darks from a different ISO.
+- **Scale (live catalog):** 10 of 220 nights have >1 session; of those, 1 has
+  mixed gain, 2 have mixed exposure, and **0 have a temperature spread >3C**.
+  So B11's temperature dimension is safe under this assumption — it's gain and
+  exposure that actually diverge.
+- **Why it's still open:** the fix isn't just "use each session's params" —
+  WBPP's `Darks/` folder is per-SESSION_N, shared by every filter in that
+  night, so supporting mixed gain means either splitting the night into
+  separate SESSION_N dirs per (gain, exposure) or symlinking multiple dark
+  sets and letting WBPP's own frame matching sort it out. That's a design call,
+  not a patch. Low frequency (1 night in 220), so it can wait — but it should
+  at minimum *warn* when a night's sessions disagree, rather than silently
+  using row zero.
 
 ### B12. `wbpp` prefers the previous night's flats over the morning-after set — ✅ FIXED
 
@@ -1083,6 +1153,61 @@ logs live long-term (they are not currently archived by `ingest` — may need an
 ingest extension to copy them), schema (new `guiding` columns vs a side
 table), and whether to compute stats at scan time or store raw logs.
 
+### F5. Model session temperature as a *range*, and bracket darks for uncooled cameras
+
+Queued 2026-07-29, out of Jonathan's question while reviewing **B11**: what
+happens when an uncooled sensor drifts over the course of a night?
+
+**Builds on B11, does not undo it.** B11 replaced "symlink every master in the
+ladder" with "symlink the single nearest". That is unambiguously right for a
+cooled camera and right for the pathological case it fixed (five masters
+spanning 15–35C, some 18C from the session). This item is about the case B11
+does not model: an uncooled session is not *at* a temperature, it spans one.
+
+- **Measured drift on real Canon6D sessions** (CCD-TEMP across every light,
+  2026-07-29):
+
+  | Session | catalog temp | first→last | min–max | drift |
+  |---|---|---|---|---|
+  | SH2-103 2025-07-23 (250f) | 22C | 22→23 | 19–24 | **5C** |
+  | SH2-103 2025-07-24 (239f) | 26C | 26→26 | 23–28 | **5C** |
+  | M 42 2023-11-22 (194f) | 17C | 13→16 | 12–18 | **6C** |
+
+  Drift exceeds the ±3C default tolerance. One master cannot be correct for the
+  whole session.
+
+- **Second, separate defect found while measuring:** `sessions.temperature_c` is
+  `frames[0]["temperature"]` (`scanner.py:137`, `cataloger.py:726`), where
+  `frames[0]` is first in *file-iteration* order, **not** sorted by `DATE-OBS`.
+  On M 42 the catalog stores 17C while the chronologically-first frame is 13C
+  (range 12–18). So the stored value is not reliably "the first light" — it is
+  an arbitrary frame. This is worth fixing on its own even if the range work is
+  never done, because every temperature-keyed decision reads that one scalar.
+
+- **Why bracketing rather than a better scalar:** WBPP does its own per-frame
+  dark matching when handed multiple masters. Symlinking the masters that
+  *bracket* the session's measured range (e.g. 20C and 25C for a 19–24C night)
+  lets WBPP calibrate each frame against the nearer one — strictly better than
+  any single choice. The pre-B11 behaviour accidentally resembled this but was
+  unbounded and included masters nowhere near the session; a bounded bracket is
+  a different thing.
+
+- **Shape of the work:** ingest-side, not matcher-side. Store `temperature_min`
+  /`temperature_max` (or percentiles — the tails are single frames while the
+  sensor settles, so p05/p95 may match better than raw min/max) alongside the
+  existing scalar, which stays as the representative value. `find_darks` then
+  grows a range-aware mode returning the bracketing set; `_build_night` keeps
+  B11's single-master path when the range is narrow or the camera is cooled.
+  Needs a rescan/backfill to populate the new columns for existing sessions.
+
+- **Decide first, before building:** whether this earns its complexity. It only
+  matters for the Canon (the ZWO is cooled and its drift is a settling artifact,
+  not a trend), and the Canon's coverage is currently limited far more by the
+  **darks library** than by the matcher — 44 of 94 Canon sessions match a master
+  at ±3C, and most Canon gain/exposure combos have a single-rung ladder. Shoot
+  the missing darks first; the bracketing question only becomes interesting once
+  there are enough rungs to bracket *between*.
+
 ### F1. Derive processing state by scanning the archive for output artifacts (original spec)
 - **Why:** A read-only audit of the live catalog on 2026-07-04 found **all 205
   sessions with a blank `processed_status`** (now `processed_state =
@@ -1300,14 +1425,17 @@ site lat/lon, angular separation.
 10. **F3** (calibration-match indicator — matchers already exist, so it's a
     server-side aggregate + a night-row badge) then **F4** (guide-log stats,
     which first needs `ingest` to archive the logs at all).
-11. **B11** (`wbpp` symlinks every dark master at every temperature) — a live
-    correctness bug in the daily pipeline, hit 2026-07-29. Arguably belongs
-    above F3/F4: it silently hands WBPP the wrong calibration.
+11. **B11** (`wbpp` symlinks every dark master at every temperature) — ✅ DONE
+    2026-07-29. The last of the B1/B2/B12 family of calibration matchers that
+    looked right and quietly picked the wrong set. Two follow-ups came out of
+    verifying it: **B13** (night-level dark params taken from `sessions[0]`)
+    and **F5** (session temperature is a range, not a scalar, on uncooled
+    cameras — 5–6C measured drift vs a ±3C window). Neither is urgent; F5 in
+    particular should wait until the Canon darks library has enough rungs to
+    bracket between, since that is the binding constraint today.
 12. **B8** (integration time hardcoded to hours — short subs render `0.0h`),
     then **R3** (the `set_id` builders, the last open refactor — it can create
     duplicate calibration rows, so it needs care rather than a quick pass) and
     **B7**/**R1–R5** leftovers. R1, R2, R4, R5 and B7 all landed 2026-07-29;
     only R3 remains from that block. Litestream (continuous DB replication)
     also lands here as an optional upgrade over the nightly backup.
-</content>
-</invoke>
