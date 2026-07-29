@@ -133,8 +133,9 @@ echo "=== $(date '+%F %T') postflight ==="
 STAGING=/Users/jpoh/staging/Autorun          # CCC's destination, not the SD card
 ARCHIVE="/Volumes/Photography 4TB/Astrophotography"
 
-export DARKROOM_CATALOG_URL=http://192.168.2.217:8000
+export DARKROOM_CATALOG_URL=https://darkroom.jpoh.net
 export DARKROOM_API_TOKEN=...                # same value as darkroom.toml api_token
+                                             # keep this script chmod 600
 
 /Users/jpoh/Projects/darkroom/.venv/bin/darkroom ingest scan \
     --asiair  "$STAGING" \
