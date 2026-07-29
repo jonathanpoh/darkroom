@@ -120,6 +120,60 @@ features · **S** = observation sites / conditions.
   (rows are already `ORDER BY is_master DESC`). **Verify first** how the 585 /
   Canon calibration is actually stored before changing — this is design-ambiguous.
 
+### B11. `wbpp` symlinks every dark master at every temperature
+
+Reported by Jonathan 2026-07-29: when multiple science-dark masters exist, all
+of them get symlinked into the WBPP working folder instead of the one matching
+the session.
+
+- **Where:** `darkroom/catalog.py:25` (`find_darks`), `darkroom/prep.py:131-145`
+  (the Darks loop in `_build_night`). Same shape in `find_bias` /
+  `catalog.py:34` and the Bias loop at `prep.py:149-163`.
+- **Problem:** `find_darks` matches on **camera + gain + exposure only** — it
+  never looks at temperature, even though `calibration_sets.temperature_c`
+  exists and is populated. `_build_night` then loops over *every* returned
+  master row and symlinks each one. This is the direct consequence of the
+  **B5** fix: that deliberately chose partition-then-fallback over
+  break-after-first precisely so it wouldn't drop legitimate masters at other
+  temperatures — correct at the time, but it means WBPP is handed the whole
+  temperature ladder.
+- **Live data confirms it** (queried 2026-07-29, 581 dark sets / 60 masters):
+
+  | Camera | (exp, gain) | masters that all get symlinked together |
+  |---|---|---|
+  | ZWOASI585MCPro | 180s, gain200 | 2 — `-10C`, `-20C` |
+  | ZWOASI585MCPro | 120s / 300s, gain200 | 2 each — `-10C`, `-20C` |
+  | Canon6D | 180s, ISO1600 | **5** — `15C`, `20C`, `25C`, `30C`, `35C` |
+  | Canon6D | 120s / 300s, ISO3200 | 4 each |
+
+- **The fix is not one rule — the two cameras need different matching:**
+  - **ZWOASI585MCPro is cooled**: `-10C`/`-20C` are deliberate set-points.
+    Exact temperature match is right; a session cooled to −10C must never get
+    the −20C master.
+  - **Canon6D is uncooled**: the `15/20/25/30/35C` ladder brackets ambient
+    temperature, which varies continuously. Exact match will usually find
+    nothing — this needs **nearest temperature within a tolerance**, the
+    standard DSLR dark-matching approach. Pick the tolerance so a session at
+    22C lands on the 20C master, not on nothing.
+- **Both sides have the data:** all 230 catalog sessions have a non-NULL
+  `temperature_c`, and 55 of 60 dark masters do. Handle the 5 NULL-temperature
+  masters explicitly — suggest treating NULL as "matches anything, lowest
+  priority" so an untemperatured master is a fallback rather than a silent
+  miss.
+- **Do:** add a `temperature_c` parameter to `find_darks` (and `find_bias`)
+  with nearest-within-tolerance semantics, then have `_build_night` symlink
+  only the single best-matching master. Keep B5's multi-row fallback for the
+  raw-subs path. Mirror the tolerance parameter on the CLI the way
+  `--flat-window` already exposes flat date proximity, so it's tunable without
+  a code change.
+- **Related:** `find_flat_darks` (`catalog.py:60`) matches camera + exposure
+  ±10% + date and likewise ignores temperature — same latent issue, lower
+  impact since flat darks are short and less temperature-sensitive.
+- **Tests:** cover both regimes — a cooled camera with two exact set-points
+  (assert only the matching one is symlinked) and an uncooled ladder where the
+  session temperature falls between rungs (assert nearest wins, and that a
+  session outside the tolerance gets none rather than all).
+
 ---
 
 ## P2 — Minor / docs
@@ -1065,8 +1119,14 @@ table), and whether to compute stats at scan time or store raw logs.
 10. **F3** (calibration-match indicator — matchers already exist, so it's a
     server-side aggregate + a night-row badge) then **F4** (guide-log stats,
     which first needs `ingest` to archive the logs at all).
-11. **B8** (integration time hardcoded to hours — short subs render `0.0h`),
-    then **R1–R5, B7** cleanup as capacity allows. Litestream (continuous DB
-    replication) also lands here as an optional upgrade over the nightly backup.
+11. **B11** (`wbpp` symlinks every dark master at every temperature) — a live
+    correctness bug in the daily pipeline, hit 2026-07-29. Arguably belongs
+    above F3/F4: it silently hands WBPP the wrong calibration.
+12. **B8** (integration time hardcoded to hours — short subs render `0.0h`),
+    then **R3** (the `set_id` builders, the last open refactor — it can create
+    duplicate calibration rows, so it needs care rather than a quick pass) and
+    **B7**/**R1–R5** leftovers. R1, R2, R4, R5 and B7 all landed 2026-07-29;
+    only R3 remains from that block. Litestream (continuous DB replication)
+    also lands here as an optional upgrade over the nightly backup.
 </content>
 </invoke>
