@@ -204,7 +204,11 @@ def test_build_session_entry_existing_same_count():
     entry = build_session_entry(session, output, catalog_sessions=catalog, interactive=False)
 
     assert entry["status"] == "existing"
-    assert entry["files"] == []
+    # Every frame is listed even when nothing is due to be copied, so that
+    # `ingest review` can rebuild the copy plan if an identity edit changes the
+    # session_id. `cmd_commit` skips "existing" entries wholesale regardless.
+    assert len(entry["files"]) == 3
+    assert all(f["copy"] is False for f in entry["files"])
 
 
 def test_build_session_entry_no_filter_non_interactive():
@@ -401,3 +405,177 @@ def test_build_cal_entry_flat_ambiguous_non_interactive(tmp_path):
     ]
     entry = build_cal_entry(group, output=tmp_path, interactive=False, sessions=sessions)
     assert entry["needs_review"] is True
+
+
+# ── plan_session_files ───────────────────────────────────────────────────────
+
+from darkroom.ingest import plan_session_files
+
+
+def test_plan_session_files_new_copies_everything(tmp_path):
+    srcs = [Path("/card/b.fit"), Path("/card/a.fit")]
+    status, files = plan_session_files(
+        srcs, Path("dest"), tmp_path / "dest", "SID", catalog_sessions={},
+    )
+    assert status == "new"
+    assert [f["dst"] for f in files] == ["dest/a.fit", "dest/b.fit"]  # sorted by src
+    assert all(f["copy"] is True for f in files)
+
+
+def test_plan_session_files_existing_lists_without_copying(tmp_path):
+    srcs = [Path("/card/a.fit"), Path("/card/b.fit")]
+    status, files = plan_session_files(
+        srcs, Path("dest"), tmp_path / "dest", "SID", catalog_sessions={"SID": 2},
+    )
+    assert status == "existing"
+    assert len(files) == 2
+    assert all(f["copy"] is False for f in files)
+
+
+def test_plan_session_files_topup_flags_only_missing_frames(tmp_path):
+    dest_abs = tmp_path / "dest"
+    dest_abs.mkdir()
+    (dest_abs / "a.fit").write_text("")
+    srcs = [Path("/card/a.fit"), Path("/card/b.fit")]
+
+    status, files = plan_session_files(
+        srcs, Path("dest"), dest_abs, "SID", catalog_sessions={"SID": 1},
+    )
+    assert status == "topup"
+    assert {Path(f["src"]).name: f["copy"] for f in files} == {"a.fit": False, "b.fit": True}
+
+
+def test_plan_session_files_topup_with_no_dest_dir_copies_all(tmp_path):
+    srcs = [Path("/card/a.fit"), Path("/card/b.fit")]
+    status, files = plan_session_files(
+        srcs, Path("dest"), tmp_path / "nope", "SID", catalog_sessions={"SID": 1},
+    )
+    assert status == "topup"
+    assert all(f["copy"] is True for f in files)
+
+
+# ── cmd_commit ───────────────────────────────────────────────────────────────
+
+import argparse
+
+import yaml as _yaml
+
+from darkroom.ingest import cmd_commit
+
+
+def _commit_manifest(tmp_path, entries, cal=()):
+    archive = tmp_path / "archive"
+    catalog = tmp_path / "cat.db"
+    path = tmp_path / "m.yaml"
+    path.write_text(_yaml.dump({
+        "meta": {"asiair": "/card", "archive": str(archive),
+                 "catalog": str(catalog), "generated": "x"},
+        "sessions": list(entries),
+        "calibration": list(cal),
+    }))
+    return path, archive, catalog
+
+
+def _committable_session(src_dir, names, *, status="new", copy=True):
+    src_dir.mkdir(parents=True, exist_ok=True)
+    for n in names:
+        (src_dir / n).write_text(n)
+    dest = "01_Deep Sky Objects/M 81/2026-06-21_FRA400_ZWOASI585MCPro/Lights/L-Pro"
+    return {
+        "session_id": "M81_20260621_FRA400_ZWOASI585MCPro_L-Pro",
+        "target": "M 81", "obs_date": "2026-06-21", "ota": "FRA400",
+        "camera": "ZWOASI585MCPro", "filter": "L-Pro", "gain": 200,
+        "temperature_c": -20.0, "exposure_sec": 180.0, "focal_length": 400.0,
+        "frame_count": len(names), "needs_review": False, "status": status,
+        "lights_rel_path": dest,
+        "files": [
+            {"src": str(src_dir / n), "dst": f"{dest}/{n}", "copy": copy} for n in names
+        ],
+    }
+
+
+def test_cmd_commit_copies_flagged_files(tmp_path, capsys):
+    entry = _committable_session(tmp_path / "card", ["a.fit", "b.fit"])
+    path, archive, _ = _commit_manifest(tmp_path, [entry])
+
+    cmd_commit(argparse.Namespace(manifest=str(path)))
+
+    assert (archive / entry["lights_rel_path"] / "a.fit").exists()
+    assert (archive / entry["lights_rel_path"] / "b.fit").exists()
+    assert "2 files copied" in capsys.readouterr().out
+
+
+def test_cmd_commit_skips_existing_entries_despite_listed_files(tmp_path, capsys):
+    """The U3 manifest lists every frame even for 'existing' sessions.
+
+    They carry copy: False and the entry is skipped wholesale, so listing them
+    must not cause a re-copy.
+    """
+    entry = _committable_session(
+        tmp_path / "card", ["a.fit", "b.fit"], status="existing", copy=False,
+    )
+    path, archive, _ = _commit_manifest(tmp_path, [entry])
+
+    cmd_commit(argparse.Namespace(manifest=str(path)))
+
+    assert not (archive / entry["lights_rel_path"]).exists()
+    assert "0 files copied" in capsys.readouterr().out
+
+
+def test_cmd_commit_topup_copies_only_flagged_frames(tmp_path):
+    entry = _committable_session(tmp_path / "card", ["a.fit", "b.fit"], status="topup")
+    entry["files"][0]["copy"] = False
+    path, archive, _ = _commit_manifest(tmp_path, [entry])
+
+    cmd_commit(argparse.Namespace(manifest=str(path)))
+
+    dest = archive / entry["lights_rel_path"]
+    assert not (dest / "a.fit").exists()
+    assert (dest / "b.fit").exists()
+
+
+def test_cmd_commit_refuses_unresolved_needs_review(tmp_path, capsys):
+    entry = _committable_session(tmp_path / "card", ["a.fit"])
+    entry["needs_review"] = True
+    entry["filter"] = None
+    path, _, _ = _commit_manifest(tmp_path, [entry])
+
+    with pytest.raises(SystemExit) as exc:
+        cmd_commit(argparse.Namespace(manifest=str(path)))
+
+    assert exc.value.code == 1
+    assert "unresolved needs_review" in capsys.readouterr().err
+
+
+def test_cmd_commit_registers_sessions_in_the_catalog(tmp_path):
+    from darkroom.catalog_client import LocalBackend
+
+    entry = _committable_session(tmp_path / "card", ["a.fit"])
+    path, _, catalog = _commit_manifest(tmp_path, [entry])
+
+    cmd_commit(argparse.Namespace(manifest=str(path)))
+
+    rows = LocalBackend(catalog).query_sessions()
+    assert [r["session_id"] for r in rows] == [entry["session_id"]]
+    assert rows[0]["lights_path"] == entry["lights_rel_path"]
+
+
+def test_existing_catalog_sessions_empty_db_file_has_no_schema(tmp_path):
+    """An existing-but-unmigrated db means 'nothing known', not a traceback.
+
+    sqlite creates an empty file on connect, so the catalog path can exist
+    without the schema. This runs on the unattended CCC postflight path.
+    """
+    import sqlite3 as _sqlite3
+
+    db = tmp_path / "empty.db"
+    _sqlite3.connect(db).close()
+    assert db.exists()
+
+    assert existing_catalog_sessions(db) == {}
+
+
+def test_existing_catalog_sessions_unreadable_file(tmp_path):
+    db = tmp_path / "not-a.db"
+    db.write_text("this is not a sqlite database")
+    assert existing_catalog_sessions(db) == {}

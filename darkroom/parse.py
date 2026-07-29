@@ -131,6 +131,12 @@ def ota_from_focallen(focal_length: int | float | None) -> str:
     return parse_ota(focal_length)
 
 
+# Every OTA name parse_ota can produce, excluding the "Unknown" fallback —
+# the pick-list offered when focal-length inference has to be corrected by hand
+# (darkroom.ingest_review). Keep in step with parse_ota's tolerance windows.
+KNOWN_OTAS = ("FMA180", "FRA400-07x", "FRA400")
+
+
 def fits_files(directory: Path, recursive: bool = False) -> list[Path]:
     """Return sorted FITS files in directory, excluding thumbnails."""
     if not directory.is_dir():

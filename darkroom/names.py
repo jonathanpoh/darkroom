@@ -16,10 +16,12 @@ _DSLR_RE = re.compile(r"canon|nikon|sony|pentax|fuji", re.IGNORECASE)
 # means confirmed shot bare — distinct from NULL/'UnknownFilter', which mean
 # the filter is simply unknown (see make_session_id below). Used by the U2
 # filter-assignment cleanup queue (darkroom.webapi.ui) to tell a real filter
-# value apart from a null/garbage one.
+# value apart from a null/garbage one, and by the U3 ingest review prompts
+# (darkroom.ingest_review) as the filter pick-list. Single source of truth —
+# darkroom.ingest re-exports this rather than keeping its own copy.
 KNOWN_FILTERS = (
-    "L-Pro", "L-Extreme", "L-Synergy", "L-Ultimate",
-    "BaaderNeodymium", "AstronomikL2", "NoFilter",
+    "L-Pro", "L-Extreme", "L-Synergy", "L-Enhance", "L-Ultimate",
+    "BaaderNeodymium", "AstronomikL2", "OmegonHelievo", "NoFilter",
 )
 
 

@@ -15,7 +15,7 @@ import yaml
 from darkroom.cataloger import make_session_id
 from darkroom.catalog_client import resolve_backend
 from darkroom.config import resolve_catalog, resolve_path
-from darkroom.names import _normalize_camera, session_dest_rel
+from darkroom.names import KNOWN_FILTERS, _normalize_camera, session_dest_rel
 from darkroom.scanner import CalibrationGroup, Session, ScanResult, scan_source
 
 
@@ -58,7 +58,10 @@ def cal_dest_rel(
 # Filter prompt
 # ---------------------------------------------------------------------------
 
-KNOWN_FILTERS = ["L-Pro", "L-Extreme", "L-Synergy", "L-Enhance", "L-Ultimate", "AstronomikL2", "BaaderNeodymium", "OmegonHelievo"]
+# KNOWN_FILTERS comes from darkroom.names — the single source of truth shared
+# with the webapi cleanup queue (U2) and the `ingest review` prompts (U3). It is
+# imported at the top of this module and re-exported here for the callers that
+# have always read it off `darkroom.ingest`.
 
 
 def resolve_filter(
@@ -167,11 +170,24 @@ def _prompt_flat_filter_candidates(
 # ---------------------------------------------------------------------------
 
 def existing_catalog_sessions(catalog_path: Path) -> dict[str, int]:
-    """Return {session_id: frame_count} for all sessions in the catalog."""
+    """Return {session_id: frame_count} for all sessions in the catalog.
+
+    A missing file, or one that exists without the schema yet, both mean "no
+    sessions known" — not an error. The file can exist un-migrated if anything
+    touched the path before the first commit (sqlite creates an empty database
+    on connect), and this runs on the unattended CCC postflight path, where an
+    OperationalError traceback would abort an otherwise fine ingest. The commit
+    itself creates the schema via LocalBackend.
+    """
     if not catalog_path.exists():
         return {}
-    with sqlite3.connect(catalog_path) as conn:
-        rows = conn.execute("SELECT session_id, frame_count FROM sessions").fetchall()
+    try:
+        with sqlite3.connect(catalog_path) as conn:
+            rows = conn.execute(
+                "SELECT session_id, frame_count FROM sessions"
+            ).fetchall()
+    except sqlite3.DatabaseError:
+        return {}
     return {r[0]: r[1] for r in rows}
 
 
@@ -192,6 +208,47 @@ def make_cal_set_id(
 # ---------------------------------------------------------------------------
 # Manifest entry builders
 # ---------------------------------------------------------------------------
+
+def plan_session_files(
+    srcs: list[Path],
+    dest_rel: Path,
+    dest_abs: Path,
+    session_id: str,
+    catalog_sessions: dict[str, int],
+) -> tuple[str, list[dict]]:
+    """Return (status, files[]) for a session's frames against the catalog.
+
+    Status is "new" (session_id unknown to the catalog), "existing" (known and
+    the frame count already matches) or "topup" (known but short some frames).
+
+    Every source frame is listed either way, carrying a per-file `copy` flag —
+    `cmd_commit` copies only the flagged ones, and skips "existing" entries
+    wholesale. Listing them all (rather than only the ones due to be copied) is
+    what lets `ingest review` re-derive this plan after an identity edit changes
+    the session_id: the file list survives the round-trip through the manifest.
+    """
+    existing = catalog_sessions.get(session_id)
+    if existing is None:
+        status = "new"
+        copy_flags = {f.name: True for f in srcs}
+    elif existing == len(srcs):
+        status = "existing"
+        copy_flags = {f.name: False for f in srcs}
+    else:
+        status = "topup"
+        on_disk = (
+            {p.name for p in dest_abs.iterdir() if p.is_file()}
+            if dest_abs.exists()
+            else set()
+        )
+        copy_flags = {f.name: f.name not in on_disk for f in srcs}
+
+    file_entries = [
+        {"src": str(f), "dst": str(dest_rel / f.name), "copy": copy_flags[f.name]}
+        for f in sorted(srcs)
+    ]
+    return status, file_entries
+
 
 def build_session_entry(
     session: Session,
@@ -220,28 +277,9 @@ def build_session_entry(
     )
     dest_abs = output / dest_rel
 
-    existing = catalog_sessions.get(session_id)
-    if existing is None:
-        status = "new"
-        file_entries = [
-            {"src": str(f), "dst": str(dest_rel / f.name), "copy": True}
-            for f in sorted(session.files)
-        ]
-    elif existing == len(session.files):
-        status = "existing"
-        file_entries = []
-    else:
-        status = "topup"
-        existing_names = (
-            {p.name for p in dest_abs.iterdir() if p.is_file()}
-            if dest_abs.exists()
-            else set()
-        )
-        file_entries = [
-            {"src": str(f), "dst": str(dest_rel / f.name), "copy": True}
-            for f in sorted(session.files)
-            if f.name not in existing_names
-        ]
+    status, file_entries = plan_session_files(
+        session.files, dest_rel, dest_abs, session_id, catalog_sessions,
+    )
 
     return {
         "session_id": session_id,
@@ -412,77 +450,27 @@ def cmd_scan(args: argparse.Namespace, *, write_file: bool) -> None:
         )
         print(f"Manifest written to {dest}")
         if needs_review:
-            print(f"  {needs_review} item(s) need filter review — run: darkroom ingest review {dest}")
+            print(f"  {needs_review} item(s) need a filter — run: darkroom ingest review {dest}")
+        else:
+            print(f"  Confirm the parsed values with: darkroom ingest review {dest}")
     else:
         print(yaml_str)
 
 
 # ---------------------------------------------------------------------------
-# Stubs for later tasks
+# Commit
 # ---------------------------------------------------------------------------
 
-def cmd_review(args: argparse.Namespace) -> None:
-    """Interactively resolve needs_review items in a saved manifest file."""
-    manifest_path = Path(args.manifest)
-    if not manifest_path.exists():
-        print(f"Error: manifest file not found: {manifest_path}", file=sys.stderr)
-        sys.exit(1)
+def _run_review(args: argparse.Namespace) -> None:
+    """`ingest review` — dispatch to darkroom.ingest_review.
 
-    manifest = yaml.safe_load(manifest_path.read_text())
-    changed = False
+    Imported lazily so `darkroom.ingest` (which the no-TTY commit path lives in)
+    doesn't drag in the interactive module, and so ingest_review is free to
+    import the manifest builders from here without a circular import.
+    """
+    from darkroom.ingest_review import cmd_review
 
-    for entry in manifest.get("sessions", []) + manifest.get("calibration", []):
-        if not entry.get("needs_review"):
-            continue
-
-        is_session = "lights_rel_path" in entry
-        context = (
-            f"{entry['target']} on {entry['obs_date']}"
-            if is_session
-            else f"{entry['frame_type']} on {entry['capture_date']}"
-        )
-        filter_, _ = resolve_filter(None, interactive=True, context=context)
-        entry["filter"] = filter_
-        entry["needs_review"] = False
-
-        if is_session:
-            # Recalculate session_id, lights_rel_path, and all file dst paths
-            new_session_id = make_session_id(
-                entry["target"], entry["obs_date"],
-                entry["ota"], entry["camera"], filter_,
-            )
-            new_dest_rel = session_dest_rel(
-                entry["target"], entry["obs_date"],
-                entry["ota"], entry["camera"], filter_,
-            )
-            entry["session_id"] = new_session_id
-            entry["lights_rel_path"] = str(new_dest_rel)
-            for f in entry.get("files", []):
-                f["dst"] = str(new_dest_rel / Path(f["dst"]).name)
-        else:
-            # Recalculate set_id, folder_rel_path, and all file dst paths
-            new_set_id = make_cal_set_id(
-                entry["frame_type"], entry["camera"], entry["gain"],
-                entry["exposure_sec"], entry["temperature_c"], entry["capture_date"],
-            )
-            new_dest_rel = cal_dest_rel(
-                entry["frame_type"], entry["camera"], entry["ota"],
-                filter_, entry["capture_date"],
-            )
-            entry["set_id"] = new_set_id
-            entry["folder_rel_path"] = str(new_dest_rel)
-            for f in entry.get("files", []):
-                f["dst"] = str(new_dest_rel / Path(f["dst"]).name)
-
-        changed = True
-
-    if changed:
-        manifest_path.write_text(
-            yaml.dump(manifest, default_flow_style=False, sort_keys=False, allow_unicode=True)
-        )
-        print(f"Updated: {manifest_path}")
-    else:
-        print("No items needed review.")
+    cmd_review(args)
 
 
 def cmd_commit(args: argparse.Namespace) -> None:
@@ -639,12 +627,19 @@ def add_subparser(subparsers) -> None:
     # ── review ────────────────────────────────────────────────────────────
     review = verbs.add_parser(
         "review",
-        help="Interactively resolve needs_review items in a manifest",
-        description="Interactively resolve needs_review (missing-filter) items in a saved manifest.",
+        help="Interactively confirm/correct a manifest before committing",
+        description="Walk a scanned manifest and confirm or correct the values parsed "
+                    "from ASIAir filenames — target, filter, OTA and camera — writing "
+                    "the corrections back in place. Needs an interactive terminal.",
     )
     review.add_argument("manifest", metavar="FILE",
                         help="Manifest file to review in place")
-    review.set_defaults(func=cmd_review)
+    review.add_argument("--flagged-only", action="store_true",
+                        help="Only visit entries marked needs_review (missing filter)")
+    review.add_argument("--catalog", metavar="PATH",
+                        help="astro_catalog.db to source pick-list suggestions from "
+                             "(env: DARKROOM_CATALOG)")
+    review.set_defaults(func=_run_review)
 
     # ── commit ────────────────────────────────────────────────────────────
     commit = verbs.add_parser(
