@@ -14,8 +14,8 @@ import yaml
 
 from darkroom.cataloger import make_session_id
 from darkroom.catalog_client import resolve_backend
-from darkroom.config import resolve_catalog, resolve_path
-from darkroom.names import _normalize_camera, session_dest_rel
+from darkroom.config import resolve_catalog, resolve_catalog_url, resolve_path
+from darkroom.names import KNOWN_FILTERS, _normalize_camera, session_dest_rel
 from darkroom.scanner import CalibrationGroup, Session, ScanResult, scan_source
 
 
@@ -58,7 +58,10 @@ def cal_dest_rel(
 # Filter prompt
 # ---------------------------------------------------------------------------
 
-KNOWN_FILTERS = ["L-Pro", "L-Extreme", "L-Synergy", "L-Enhance", "L-Ultimate", "AstronomikL2", "BaaderNeodymium", "OmegonHelievo"]
+# KNOWN_FILTERS comes from darkroom.names — the single source of truth shared
+# with the webapi cleanup queue (U2) and the `ingest review` prompts (U3). It is
+# imported at the top of this module and re-exported here for the callers that
+# have always read it off `darkroom.ingest`.
 
 
 def resolve_filter(
@@ -167,12 +170,90 @@ def _prompt_flat_filter_candidates(
 # ---------------------------------------------------------------------------
 
 def existing_catalog_sessions(catalog_path: Path) -> dict[str, int]:
-    """Return {session_id: frame_count} for all sessions in the catalog."""
+    """Return {session_id: frame_count} for all sessions in the catalog.
+
+    A missing file, or one that exists without the schema yet, both mean "no
+    sessions known" — not an error. The file can exist un-migrated if anything
+    touched the path before the first commit (sqlite creates an empty database
+    on connect), and this runs on the unattended CCC postflight path, where an
+    OperationalError traceback would abort an otherwise fine ingest. The commit
+    itself creates the schema via LocalBackend.
+    """
     if not catalog_path.exists():
         return {}
-    with sqlite3.connect(catalog_path) as conn:
-        rows = conn.execute("SELECT session_id, frame_count FROM sessions").fetchall()
+    try:
+        with sqlite3.connect(catalog_path) as conn:
+            rows = conn.execute(
+                "SELECT session_id, frame_count FROM sessions"
+            ).fetchall()
+    except sqlite3.DatabaseError:
+        return {}
     return {r[0]: r[1] for r in rows}
+
+
+def catalog_label(catalog: Path) -> str:
+    """Which catalog this run is using, for the provenance line.
+
+    A configured `catalog_url` wins for every verb, so the local path is only
+    ever in play when no server is set. Saying which one out loud is what makes
+    an accidental local run obvious: without it, a postflight that failed to
+    pick up `DARKROOM_CATALOG_URL` (a different HOME finds no darkroom.toml)
+    archives the frames and registers them in a stale local file, silently,
+    while the server never learns the session exists.
+    """
+    url = resolve_catalog_url()
+    return f"{url} (server)" if url else f"{catalog} (local file)"
+
+
+def report_catalog(catalog: Path) -> None:
+    """Print the provenance line.
+
+    Deliberately stderr: `ingest scan` with no --manifest writes the YAML to
+    stdout, which has to stay machine-readable. A CCC postflight redirects both
+    streams to its log, so it lands there either way.
+    """
+    print(f"Catalog: {catalog_label(catalog)}", file=sys.stderr)
+
+
+def catalog_frame_counts(rows: list[dict]) -> dict[str, int]:
+    """{session_id: frame_count} from catalog rows, backend-agnostic."""
+    return {
+        r["session_id"]: r.get("frame_count") or 0
+        for r in rows
+        if r.get("session_id")
+    }
+
+
+def resolve_catalog_sessions(catalog: Path) -> tuple[dict[str, int], bool]:
+    """Return ({session_id: frame_count}, verified) for the dedupe check.
+
+    The new/existing/topup verdict has to be computed against whichever catalog
+    `commit` will actually write to. When a `catalog_url` is configured that is
+    the server, so this goes through `resolve_backend` — reading the local
+    SQLite file instead would report every already-archived session as "new".
+
+    With no server configured it reads the file directly rather than via
+    LocalBackend, because LocalBackend ensures the schema on construction and a
+    scan must stay read-only on the catalog (same rule `procscan` follows).
+
+    `verified=False` means the server could not be reached: the manifest is
+    still written, since a scan is read-only and useful offline, but every
+    status in it is a guess and `meta.status_verified` says so.
+    """
+    if not resolve_catalog_url():
+        return existing_catalog_sessions(catalog), True
+    try:
+        backend = resolve_backend(str(catalog))
+        return catalog_frame_counts(backend.query_sessions()), True
+    except Exception as exc:  # noqa: BLE001 — any backend failure degrades alike
+        print(
+            f"Warning: catalog server unreachable ({exc}).\n"
+            "         Every session will be reported 'new' and the manifest is "
+            "flagged status_verified: false.\n"
+            "         Re-run the scan, or check the statuses before committing.",
+            file=sys.stderr,
+        )
+        return {}, False
 
 
 def make_cal_set_id(
@@ -192,6 +273,47 @@ def make_cal_set_id(
 # ---------------------------------------------------------------------------
 # Manifest entry builders
 # ---------------------------------------------------------------------------
+
+def plan_session_files(
+    srcs: list[Path],
+    dest_rel: Path,
+    dest_abs: Path,
+    session_id: str,
+    catalog_sessions: dict[str, int],
+) -> tuple[str, list[dict]]:
+    """Return (status, files[]) for a session's frames against the catalog.
+
+    Status is "new" (session_id unknown to the catalog), "existing" (known and
+    the frame count already matches) or "topup" (known but short some frames).
+
+    Every source frame is listed either way, carrying a per-file `copy` flag —
+    `cmd_commit` copies only the flagged ones, and skips "existing" entries
+    wholesale. Listing them all (rather than only the ones due to be copied) is
+    what lets `ingest review` re-derive this plan after an identity edit changes
+    the session_id: the file list survives the round-trip through the manifest.
+    """
+    existing = catalog_sessions.get(session_id)
+    if existing is None:
+        status = "new"
+        copy_flags = {f.name: True for f in srcs}
+    elif existing == len(srcs):
+        status = "existing"
+        copy_flags = {f.name: False for f in srcs}
+    else:
+        status = "topup"
+        on_disk = (
+            {p.name for p in dest_abs.iterdir() if p.is_file()}
+            if dest_abs.exists()
+            else set()
+        )
+        copy_flags = {f.name: f.name not in on_disk for f in srcs}
+
+    file_entries = [
+        {"src": str(f), "dst": str(dest_rel / f.name), "copy": copy_flags[f.name]}
+        for f in sorted(srcs)
+    ]
+    return status, file_entries
+
 
 def build_session_entry(
     session: Session,
@@ -220,28 +342,9 @@ def build_session_entry(
     )
     dest_abs = output / dest_rel
 
-    existing = catalog_sessions.get(session_id)
-    if existing is None:
-        status = "new"
-        file_entries = [
-            {"src": str(f), "dst": str(dest_rel / f.name), "copy": True}
-            for f in sorted(session.files)
-        ]
-    elif existing == len(session.files):
-        status = "existing"
-        file_entries = []
-    else:
-        status = "topup"
-        existing_names = (
-            {p.name for p in dest_abs.iterdir() if p.is_file()}
-            if dest_abs.exists()
-            else set()
-        )
-        file_entries = [
-            {"src": str(f), "dst": str(dest_rel / f.name), "copy": True}
-            for f in sorted(session.files)
-            if f.name not in existing_names
-        ]
+    status, file_entries = plan_session_files(
+        session.files, dest_rel, dest_abs, session_id, catalog_sessions,
+    )
 
     return {
         "session_id": session_id,
@@ -344,7 +447,7 @@ def build_manifest(
     interactive: bool,
 ) -> dict:
     """Build the full manifest dict from a ScanResult."""
-    catalog_sessions = existing_catalog_sessions(catalog)
+    catalog_sessions, status_verified = resolve_catalog_sessions(catalog)
 
     session_entries = [
         build_session_entry(s, output, catalog_sessions, interactive)
@@ -359,8 +462,15 @@ def build_manifest(
         "meta": {
             "asiair": str(source),
             "archive": str(output),
+            # Stays the local path: `cmd_commit` feeds it to resolve_backend as
+            # the offline fallback, so it must remain a usable filesystem path
+            # even when the server is what actually gets written.
             "catalog": str(catalog),
+            "catalog_url": resolve_catalog_url(),
             "generated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+            # False = the catalog was unreachable, so every `status` below is a
+            # guess ("new") rather than a verdict. See resolve_catalog_sessions.
+            "status_verified": status_verified,
         },
         "sessions": session_entries,
         "calibration": cal_entries,
@@ -396,6 +506,7 @@ def cmd_scan(args: argparse.Namespace, *, write_file: bool) -> None:
         print(f"Error: source path does not exist: {source}", file=sys.stderr)
         sys.exit(1)
 
+    report_catalog(catalog)
     scan = scan_source(source)
     manifest = build_manifest(scan, source, output, catalog, interactive)
 
@@ -412,77 +523,27 @@ def cmd_scan(args: argparse.Namespace, *, write_file: bool) -> None:
         )
         print(f"Manifest written to {dest}")
         if needs_review:
-            print(f"  {needs_review} item(s) need filter review — run: darkroom ingest review {dest}")
+            print(f"  {needs_review} item(s) need a filter — run: darkroom ingest review {dest}")
+        else:
+            print(f"  Confirm the parsed values with: darkroom ingest review {dest}")
     else:
         print(yaml_str)
 
 
 # ---------------------------------------------------------------------------
-# Stubs for later tasks
+# Commit
 # ---------------------------------------------------------------------------
 
-def cmd_review(args: argparse.Namespace) -> None:
-    """Interactively resolve needs_review items in a saved manifest file."""
-    manifest_path = Path(args.manifest)
-    if not manifest_path.exists():
-        print(f"Error: manifest file not found: {manifest_path}", file=sys.stderr)
-        sys.exit(1)
+def _run_review(args: argparse.Namespace) -> None:
+    """`ingest review` — dispatch to darkroom.ingest_review.
 
-    manifest = yaml.safe_load(manifest_path.read_text())
-    changed = False
+    Imported lazily so `darkroom.ingest` (which the no-TTY commit path lives in)
+    doesn't drag in the interactive module, and so ingest_review is free to
+    import the manifest builders from here without a circular import.
+    """
+    from darkroom.ingest_review import cmd_review
 
-    for entry in manifest.get("sessions", []) + manifest.get("calibration", []):
-        if not entry.get("needs_review"):
-            continue
-
-        is_session = "lights_rel_path" in entry
-        context = (
-            f"{entry['target']} on {entry['obs_date']}"
-            if is_session
-            else f"{entry['frame_type']} on {entry['capture_date']}"
-        )
-        filter_, _ = resolve_filter(None, interactive=True, context=context)
-        entry["filter"] = filter_
-        entry["needs_review"] = False
-
-        if is_session:
-            # Recalculate session_id, lights_rel_path, and all file dst paths
-            new_session_id = make_session_id(
-                entry["target"], entry["obs_date"],
-                entry["ota"], entry["camera"], filter_,
-            )
-            new_dest_rel = session_dest_rel(
-                entry["target"], entry["obs_date"],
-                entry["ota"], entry["camera"], filter_,
-            )
-            entry["session_id"] = new_session_id
-            entry["lights_rel_path"] = str(new_dest_rel)
-            for f in entry.get("files", []):
-                f["dst"] = str(new_dest_rel / Path(f["dst"]).name)
-        else:
-            # Recalculate set_id, folder_rel_path, and all file dst paths
-            new_set_id = make_cal_set_id(
-                entry["frame_type"], entry["camera"], entry["gain"],
-                entry["exposure_sec"], entry["temperature_c"], entry["capture_date"],
-            )
-            new_dest_rel = cal_dest_rel(
-                entry["frame_type"], entry["camera"], entry["ota"],
-                filter_, entry["capture_date"],
-            )
-            entry["set_id"] = new_set_id
-            entry["folder_rel_path"] = str(new_dest_rel)
-            for f in entry.get("files", []):
-                f["dst"] = str(new_dest_rel / Path(f["dst"]).name)
-
-        changed = True
-
-    if changed:
-        manifest_path.write_text(
-            yaml.dump(manifest, default_flow_style=False, sort_keys=False, allow_unicode=True)
-        )
-        print(f"Updated: {manifest_path}")
-    else:
-        print("No items needed review.")
+    cmd_review(args)
 
 
 def cmd_commit(args: argparse.Namespace) -> None:
@@ -496,6 +557,9 @@ def cmd_commit(args: argparse.Namespace) -> None:
         output = _require_path(args.archive, "DARKROOM_ARCHIVE", "archive_path", "archive")
         catalog = resolve_catalog(args.catalog)
         interactive = sys.stdin.isatty()
+        # Ahead of the scan, so the provenance line precedes anything
+        # build_manifest reports about reaching that catalog.
+        report_catalog(catalog)
         scan = scan_source(source)
         manifest = build_manifest(scan, source, output, catalog, interactive)
     else:
@@ -506,6 +570,20 @@ def cmd_commit(args: argparse.Namespace) -> None:
         manifest = yaml.safe_load(manifest_path.read_text())
         output = Path(manifest["meta"]["archive"])
         catalog = Path(manifest["meta"]["catalog"])
+        # Before any copying or upserting: say where this is about to land.
+        report_catalog(catalog)
+
+    # A manifest scanned while the catalog was unreachable carries guessed
+    # statuses. Worth saying out loud — the scan-time warning may only have
+    # reached a postflight log nobody read — but not worth refusing over: an
+    # over-eager "new" re-copies nothing (dst-exists check) and the upsert
+    # preserves processed_state and notes.
+    if manifest.get("meta", {}).get("status_verified") is False:
+        print(
+            "Warning: this manifest was scanned while the catalog was "
+            "unreachable — 'new'/'existing'/'topup' statuses are unverified.",
+            file=sys.stderr,
+        )
 
     # Hard-refuse if any needs_review items remain
     flagged = [
@@ -639,12 +717,19 @@ def add_subparser(subparsers) -> None:
     # ── review ────────────────────────────────────────────────────────────
     review = verbs.add_parser(
         "review",
-        help="Interactively resolve needs_review items in a manifest",
-        description="Interactively resolve needs_review (missing-filter) items in a saved manifest.",
+        help="Interactively confirm/correct a manifest before committing",
+        description="Walk a scanned manifest and confirm or correct the values parsed "
+                    "from ASIAir filenames — target, filter, OTA and camera — writing "
+                    "the corrections back in place. Needs an interactive terminal.",
     )
     review.add_argument("manifest", metavar="FILE",
                         help="Manifest file to review in place")
-    review.set_defaults(func=cmd_review)
+    review.add_argument("--flagged-only", action="store_true",
+                        help="Only visit entries marked needs_review (missing filter)")
+    review.add_argument("--catalog", metavar="PATH",
+                        help="astro_catalog.db to source pick-list suggestions from "
+                             "(env: DARKROOM_CATALOG)")
+    review.set_defaults(func=_run_review)
 
     # ── commit ────────────────────────────────────────────────────────────
     commit = verbs.add_parser(

@@ -871,7 +871,81 @@ bursty imaging runs, and mismatches fail with a shrug instead of showing what
   review-queue UI should offer merge/rename for targets alongside filter
   fixes — same both-sides constraint (folder name + catalog row).
 
-### U3. `darkroom ingest` interactive confirmation mode
+### U3. `darkroom ingest` interactive confirmation mode — ✅ DONE
+
+> Shipped 2026-07-29. New `darkroom/ingest_review.py` (pure helpers stdlib-only,
+> `questionary` imported lazily inside the `_prompt_*` functions — same shape as
+> `picker.py`); `ingest.py` keeps only a lazy `_run_review` dispatcher, which is
+> also what breaks the import cycle (ingest_review imports the manifest builders
+> from ingest).
+> **Flow**: `review` now walks *every* session and calibration group, not just
+> `needs_review` ones (`--flagged-only` restores the old behaviour). Per entry:
+> a summary block (optics / filter / frames / status / destination) plus ⚠ lines
+> from `entry_issues`, then an accept-or-edit menu that re-displays after each
+> edit so the recomputed destination is visible before accepting. Edits offered:
+> **target** (autocomplete over catalog targets, pre-filled with
+> `_normalize_target(current)` so Enter applies the normalization), **filter**
+> (select over `KNOWN_FILTERS`, Flats get their inferred candidates hoisted to
+> the top and annotated), **OTA + camera** (select over observed combos, with a
+> manual escape hatch). Pick-lists are seeded from the catalog via
+> `resolve_backend`, so this works against the remote webapi too; a dead catalog
+> degrades to known-kit-only suggestions rather than failing the command.
+> **`suggested_action`** lands the cursor on the fix rather than on *Accept*
+> when an entry has a problem (unknown filter > unknown OTA > target drift), so
+> a clean entry is one Enter and a broken one is harder to wave through than to
+> correct. `commit` stays fully non-interactive (CCC/no-TTY constraint intact);
+> `review` hard-refuses a non-TTY rather than hanging on `input()`.
+> **Two supporting changes**: (1) `KNOWN_FILTERS` consolidated onto
+> `names.py` — `ingest.py` had a second, divergent copy; the union adds
+> `L-Enhance`/`OmegonHelievo`, which also widens what the U2 web queue accepts.
+> (2) `ingest.plan_session_files` extracted from `build_session_entry`, and the
+> manifest now lists **every** frame with a per-file `copy` flag (previously
+> `existing` entries carried `files: []`). That's what lets review re-derive the
+> new/existing/topup verdict after an identity edit changes the session_id —
+> without it, retargeting a session off a colliding id left it marked `existing`
+> and commit silently skipped it. Manifests written before this change are
+> detected and warned about rather than guessed at.
+> Tests: `tests/test_ingest_review.py` (77) + `plan_session_files`/`cmd_commit`
+> coverage added to `tests/test_ingest.py` (commit had none). Suite 841. Prompts
+> themselves verified by pty (pexpect), not covered by the suite — same as U1.
+> **No-TTY regression check (2026-07-29)**: re-verified the CCC postflight path
+> end to end against synthetic FITS with stdin on `/dev/null` — `scan
+> --manifest` and `commit` (both manifest and one-shot `--asiair` forms) run
+> clean, midnight-crossing nights stay one session, short darks reclassify to
+> FlatDarks, re-run is idempotent, and `darkroom.ingest` imports no
+> questionary/prompt_toolkit. Two fixes fell out: `ingest review` under no TTY
+> now exits 1 instead of hitting `EOFError` inside `resolve_filter` and
+> **silently stamping every flagged entry `NoFilter` with `needs_review`
+> cleared** — the old loop treated EOF as a deliberate answer; and
+> `existing_catalog_sessions` no longer tracebacks on a catalog file that
+> exists without the schema (sqlite creates an empty db on connect, so a
+> touched path aborted an otherwise fine unattended ingest).
+> **Follow-up 2026-07-29 (server-backed catalog)**: two bugs found while working
+> out what the CCC postflight looks like now the catalog lives behind the HTTP
+> API. (1) `ingest scan` computed new/existing/topup by reading local SQLite
+> directly, never `resolve_backend` — proved by pointing `DARKROOM_CATALOG_URL`
+> at a dead port and watching scan succeed while commit failed — so on a
+> server-backed machine every already-archived session was reported `new`. New
+> `ingest.resolve_catalog_sessions` goes through the backend when a
+> `catalog_url` is configured, reads the file directly otherwise (LocalBackend
+> ensures the schema, and a scan must stay read-only on the catalog like
+> procscan), and on an unreachable server still writes the manifest but warns
+> and records `meta.status_verified: false`, which `commit` re-warns about.
+> `meta.catalog` deliberately stays a filesystem path (commit feeds it to
+> resolve_backend as the offline fallback); the URL goes in a new
+> `meta.catalog_url`. (2) The cost of that false `new` was **silent notes
+> loss**: commit sends `notes: ""` on every upsert and the ON CONFLICT clause
+> protected `processed_state` but not `notes`. Now
+> `COALESCE(NULLIF(excluded.notes, ''), sessions.notes)` — a real note still
+> wins, a blank one preserves — matching the convention `set_processed_state`
+> already followed. One fix covers both backends since `webapi/app.py` calls
+> the same `cataloger.upsert_session`. Verified against a live uvicorn: first
+> scan `new` → commit → note added over the API → re-scan reports `existing`
+> → re-commit leaves the note and processed_state intact, no local db created.
+> **Not done**: `scan` still writes the raw ASIAir target name; normalization
+> only happens if you run `review`. Making scan normalize would change ingest
+> behaviour for the no-TTY path, which is a separate call.
+
 - Extend the existing `ingest review` verb (today: a bare missing-filter prompt
   loop, `ingest.py:85-117`) into a full interactive confirmation pass over a
   scanned manifest: for each session/calibration group, confirm or correct the
@@ -1126,8 +1200,9 @@ table), and whether to compute stats at scan time or store raw logs.
 8. **U2/U3** filter cleanup queue + interactive ingest review (U2 is a natural
    second UI view on the W9 app; U3 benefits from U1's picker helpers).
    U2 ✅ DONE 2026-07-15 (ledger + apply-renames + /queue + target merge),
-   deployed same day. **U3 remains** — the highest-value open item, and the
-   "close the tap" counterpart to U2's backlog cleanup.
+   deployed same day. U3 ✅ DONE 2026-07-29 — the "close the tap" counterpart
+   to U2's backlog cleanup: `ingest review` now confirms target/filter/OTA
+   against catalog-seeded pick-lists before anything is copied.
 9. **S1** observation sites + SQM-weighted depth — ✅ DONE 2026-07-16,
    hardened 2026-07-29 (modal-across-frames site attribution). Only the
    61 coordinate-less legacy sessions are left as a manual pass.

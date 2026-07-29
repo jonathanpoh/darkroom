@@ -44,8 +44,56 @@ Resolution order: CLI flag → env var → `darkroom.toml`.
 | Catalog DB | `--catalog` | `DARKROOM_CATALOG` | `catalog_path` |
 | Archive root | `--archive` | `DARKROOM_ARCHIVE` | `archive_path` |
 | WBPP work dir | `--wbpp` | `DARKROOM_WBPP` | `wbpp_path` |
+| Catalog API URL | — | `DARKROOM_CATALOG_URL` | `catalog_url` |
+| Catalog API token | — | `DARKROOM_API_TOKEN` | `api_token` |
+
+Set `catalog_url` and the CLI talks to the server for everything; leave it
+unset and it uses the local SQLite file. `catalog_path` then only matters as
+the offline fallback.
 
 See [`darkroom.toml.example`](darkroom.toml.example).
+
+## Catalog server credentials
+
+The server holds two independent secrets, both read from its environment file
+(`EnvironmentFile=/etc/darkroom/env`, see
+[`deploy/darkroom-api.service`](deploy/darkroom-api.service)). It refuses to
+start if either is missing.
+
+| Secret | Guards | Generate with |
+|---|---|---|
+| `DARKROOM_API_TOKEN` | `/api` (bearer header) — the CLI | `openssl rand -hex 32` |
+| `DARKROOM_UI_PASSWORD_HASH` | the browser UI (password → signed cookie) | `python -m darkroom.webapi.passwd` |
+
+### Rotating the API token
+
+The token is an opaque string compared with `secrets.compare_digest` — no
+format requirements, so any high-entropy value works. 32 random bytes as hex
+matches what's already deployed.
+
+```bash
+# 1. Generate one (on either machine)
+openssl rand -hex 32
+
+# 2. On the server: put it in the environment file and restart
+ssh claude@<server> \
+  "sudo sed -i 's/^DARKROOM_API_TOKEN=.*/DARKROOM_API_TOKEN=<new>/' /etc/darkroom/env \
+   && sudo systemctl restart darkroom-api"
+
+# 3. On the Mac: same value in ~/.config/darkroom/darkroom.toml
+#    api_token = "<new>"
+
+# 4. Verify — 401 before the restart propagates, 200 after
+curl -s -o /dev/null -w '%{http_code}\n' \
+  -H "Authorization: Bearer <new>" https://<server>/api/sessions
+```
+
+Rotating invalidates every existing client immediately, so update anywhere else
+the token is written — notably the CCC postflight script, which needs it in
+plaintext to export `DARKROOM_API_TOKEN`. Keep that script `chmod 600` and out
+of the repo. The browser UI is unaffected: its password hash is a separate
+secret, and changing *it* invalidates all browser sessions but leaves the CLI
+working.
 
 ## Subcommands
 
@@ -96,7 +144,7 @@ Browse the catalog in the web UI served by `darkroom.webapi`
 ```bash
 # Three-step (recommended): scan → review → commit
 darkroom ingest scan --asiair ~/staging/Autorun --manifest /tmp/ingest.yaml
-darkroom ingest review /tmp/ingest.yaml      # only if filter detection failed
+darkroom ingest review /tmp/ingest.yaml      # confirm/correct the parsed values
 darkroom ingest commit /tmp/ingest.yaml
 
 # Or one-shot:
@@ -108,6 +156,20 @@ darkroom ingest commit --asiair ~/staging/Autorun
   canonical archive layout; refuses to commit if any `needs_review` items
   remain. Re-running on the same source detects already-archived sessions and
   becomes a no-op (or a top-up if new frames are present).
+- `review` is the one interactive step (`commit` never prompts). It walks every
+  session and calibration group and lets you confirm or correct the three values
+  that get parsed rather than read from a header — **target**, **filter** and
+  **OTA + camera** — picking from values already in the catalog so corrections
+  don't mint near-duplicates. A clean entry is one Enter; an entry with a
+  problem opens on the fix instead of on *Accept*. Corrections rewrite the
+  session_id, destination path and per-file copy plan in place.
+  `--flagged-only` restricts the walk to entries missing a filter.
+- **Correct a manifest with `review`, not a text editor.** `session_id`,
+  `lights_rel_path` and each file's `dst` are derived from target/OTA/camera/
+  filter and are *not* recomputed at commit, so hand-editing an identity field
+  leaves the catalog row and the folder layout disagreeing — silently, and with
+  no warning at commit. See the CHEATSHEET for the field-by-field breakdown and
+  the CCC postflight recipe.
 - Writes to the catalog atomically with the file copy.
 
 ### `darkroom wbpp`

@@ -204,7 +204,11 @@ def test_build_session_entry_existing_same_count():
     entry = build_session_entry(session, output, catalog_sessions=catalog, interactive=False)
 
     assert entry["status"] == "existing"
-    assert entry["files"] == []
+    # Every frame is listed even when nothing is due to be copied, so that
+    # `ingest review` can rebuild the copy plan if an identity edit changes the
+    # session_id. `cmd_commit` skips "existing" entries wholesale regardless.
+    assert len(entry["files"]) == 3
+    assert all(f["copy"] is False for f in entry["files"])
 
 
 def test_build_session_entry_no_filter_non_interactive():
@@ -401,3 +405,371 @@ def test_build_cal_entry_flat_ambiguous_non_interactive(tmp_path):
     ]
     entry = build_cal_entry(group, output=tmp_path, interactive=False, sessions=sessions)
     assert entry["needs_review"] is True
+
+
+# ── plan_session_files ───────────────────────────────────────────────────────
+
+from darkroom.ingest import plan_session_files
+
+
+def test_plan_session_files_new_copies_everything(tmp_path):
+    srcs = [Path("/card/b.fit"), Path("/card/a.fit")]
+    status, files = plan_session_files(
+        srcs, Path("dest"), tmp_path / "dest", "SID", catalog_sessions={},
+    )
+    assert status == "new"
+    assert [f["dst"] for f in files] == ["dest/a.fit", "dest/b.fit"]  # sorted by src
+    assert all(f["copy"] is True for f in files)
+
+
+def test_plan_session_files_existing_lists_without_copying(tmp_path):
+    srcs = [Path("/card/a.fit"), Path("/card/b.fit")]
+    status, files = plan_session_files(
+        srcs, Path("dest"), tmp_path / "dest", "SID", catalog_sessions={"SID": 2},
+    )
+    assert status == "existing"
+    assert len(files) == 2
+    assert all(f["copy"] is False for f in files)
+
+
+def test_plan_session_files_topup_flags_only_missing_frames(tmp_path):
+    dest_abs = tmp_path / "dest"
+    dest_abs.mkdir()
+    (dest_abs / "a.fit").write_text("")
+    srcs = [Path("/card/a.fit"), Path("/card/b.fit")]
+
+    status, files = plan_session_files(
+        srcs, Path("dest"), dest_abs, "SID", catalog_sessions={"SID": 1},
+    )
+    assert status == "topup"
+    assert {Path(f["src"]).name: f["copy"] for f in files} == {"a.fit": False, "b.fit": True}
+
+
+def test_plan_session_files_topup_with_no_dest_dir_copies_all(tmp_path):
+    srcs = [Path("/card/a.fit"), Path("/card/b.fit")]
+    status, files = plan_session_files(
+        srcs, Path("dest"), tmp_path / "nope", "SID", catalog_sessions={"SID": 1},
+    )
+    assert status == "topup"
+    assert all(f["copy"] is True for f in files)
+
+
+# ── cmd_commit ───────────────────────────────────────────────────────────────
+
+import argparse
+
+import yaml as _yaml
+
+from darkroom.ingest import cmd_commit
+
+
+def _commit_manifest(tmp_path, entries, cal=()):
+    archive = tmp_path / "archive"
+    catalog = tmp_path / "cat.db"
+    path = tmp_path / "m.yaml"
+    path.write_text(_yaml.dump({
+        "meta": {"asiair": "/card", "archive": str(archive),
+                 "catalog": str(catalog), "generated": "x"},
+        "sessions": list(entries),
+        "calibration": list(cal),
+    }))
+    return path, archive, catalog
+
+
+def _committable_session(src_dir, names, *, status="new", copy=True):
+    src_dir.mkdir(parents=True, exist_ok=True)
+    for n in names:
+        (src_dir / n).write_text(n)
+    dest = "01_Deep Sky Objects/M 81/2026-06-21_FRA400_ZWOASI585MCPro/Lights/L-Pro"
+    return {
+        "session_id": "M81_20260621_FRA400_ZWOASI585MCPro_L-Pro",
+        "target": "M 81", "obs_date": "2026-06-21", "ota": "FRA400",
+        "camera": "ZWOASI585MCPro", "filter": "L-Pro", "gain": 200,
+        "temperature_c": -20.0, "exposure_sec": 180.0, "focal_length": 400.0,
+        "frame_count": len(names), "needs_review": False, "status": status,
+        "lights_rel_path": dest,
+        "files": [
+            {"src": str(src_dir / n), "dst": f"{dest}/{n}", "copy": copy} for n in names
+        ],
+    }
+
+
+def test_cmd_commit_copies_flagged_files(tmp_path, capsys):
+    entry = _committable_session(tmp_path / "card", ["a.fit", "b.fit"])
+    path, archive, _ = _commit_manifest(tmp_path, [entry])
+
+    cmd_commit(argparse.Namespace(manifest=str(path)))
+
+    assert (archive / entry["lights_rel_path"] / "a.fit").exists()
+    assert (archive / entry["lights_rel_path"] / "b.fit").exists()
+    assert "2 files copied" in capsys.readouterr().out
+
+
+def test_cmd_commit_skips_existing_entries_despite_listed_files(tmp_path, capsys):
+    """The U3 manifest lists every frame even for 'existing' sessions.
+
+    They carry copy: False and the entry is skipped wholesale, so listing them
+    must not cause a re-copy.
+    """
+    entry = _committable_session(
+        tmp_path / "card", ["a.fit", "b.fit"], status="existing", copy=False,
+    )
+    path, archive, _ = _commit_manifest(tmp_path, [entry])
+
+    cmd_commit(argparse.Namespace(manifest=str(path)))
+
+    assert not (archive / entry["lights_rel_path"]).exists()
+    assert "0 files copied" in capsys.readouterr().out
+
+
+def test_cmd_commit_topup_copies_only_flagged_frames(tmp_path):
+    entry = _committable_session(tmp_path / "card", ["a.fit", "b.fit"], status="topup")
+    entry["files"][0]["copy"] = False
+    path, archive, _ = _commit_manifest(tmp_path, [entry])
+
+    cmd_commit(argparse.Namespace(manifest=str(path)))
+
+    dest = archive / entry["lights_rel_path"]
+    assert not (dest / "a.fit").exists()
+    assert (dest / "b.fit").exists()
+
+
+def test_cmd_commit_refuses_unresolved_needs_review(tmp_path, capsys):
+    entry = _committable_session(tmp_path / "card", ["a.fit"])
+    entry["needs_review"] = True
+    entry["filter"] = None
+    path, _, _ = _commit_manifest(tmp_path, [entry])
+
+    with pytest.raises(SystemExit) as exc:
+        cmd_commit(argparse.Namespace(manifest=str(path)))
+
+    assert exc.value.code == 1
+    assert "unresolved needs_review" in capsys.readouterr().err
+
+
+def test_cmd_commit_registers_sessions_in_the_catalog(tmp_path):
+    from darkroom.catalog_client import LocalBackend
+
+    entry = _committable_session(tmp_path / "card", ["a.fit"])
+    path, _, catalog = _commit_manifest(tmp_path, [entry])
+
+    cmd_commit(argparse.Namespace(manifest=str(path)))
+
+    rows = LocalBackend(catalog).query_sessions()
+    assert [r["session_id"] for r in rows] == [entry["session_id"]]
+    assert rows[0]["lights_path"] == entry["lights_rel_path"]
+
+
+def test_existing_catalog_sessions_empty_db_file_has_no_schema(tmp_path):
+    """An existing-but-unmigrated db means 'nothing known', not a traceback.
+
+    sqlite creates an empty file on connect, so the catalog path can exist
+    without the schema. This runs on the unattended CCC postflight path.
+    """
+    import sqlite3 as _sqlite3
+
+    db = tmp_path / "empty.db"
+    _sqlite3.connect(db).close()
+    assert db.exists()
+
+    assert existing_catalog_sessions(db) == {}
+
+
+def test_existing_catalog_sessions_unreadable_file(tmp_path):
+    db = tmp_path / "not-a.db"
+    db.write_text("this is not a sqlite database")
+    assert existing_catalog_sessions(db) == {}
+
+
+# ── notes protection on re-upsert ────────────────────────────────────────────
+
+def test_upsert_session_preserves_notes_against_an_empty_incoming_note(tmp_path):
+    """A re-ingest must not destroy what was written about a night.
+
+    ingest always sends notes="" (it has none to contribute), and a session
+    only has to *look* new for commit to upsert it — so without this an
+    already-catalogued session lost its notes silently.
+    """
+    from darkroom.cataloger import init_db, upsert_session
+    from darkroom.catalog_client import LocalBackend
+
+    db = tmp_path / "cat.db"
+    init_db(db)
+    base = {
+        "session_id": "S1", "target": "M 81", "obs_date": "2026-06-21",
+        "ota": "FRA400", "camera": "ZWOASI585MCPro", "filter": "L-Pro",
+        "gain": 200, "temperature_c": -20.0, "exposure_sec": 180.0,
+        "focal_length": 400.0, "frame_count": 4, "total_integration_sec": 720,
+        "ra_deg": None, "dec_deg": None, "lights_path": "p",
+    }
+    upsert_session(db, {**base, "notes": "guiding poor after 01:00"})
+    upsert_session(db, {**base, "notes": ""})           # the re-ingest
+
+    rows = LocalBackend(db).query_sessions()
+    assert rows[0]["notes"] == "guiding poor after 01:00"
+
+
+def test_upsert_session_still_accepts_a_real_note(tmp_path):
+    from darkroom.cataloger import init_db, upsert_session
+    from darkroom.catalog_client import LocalBackend
+
+    db = tmp_path / "cat.db"
+    init_db(db)
+    base = {
+        "session_id": "S1", "target": "M 81", "obs_date": "2026-06-21",
+        "ota": "FRA400", "camera": "ZWOASI585MCPro", "filter": "L-Pro",
+        "gain": 200, "temperature_c": -20.0, "exposure_sec": 180.0,
+        "focal_length": 400.0, "frame_count": 4, "total_integration_sec": 720,
+        "ra_deg": None, "dec_deg": None, "lights_path": "p",
+    }
+    upsert_session(db, {**base, "notes": "first"})
+    upsert_session(db, {**base, "notes": "second"})
+
+    assert LocalBackend(db).query_sessions()[0]["notes"] == "second"
+
+
+def test_upsert_session_notes_key_is_optional(tmp_path):
+    from darkroom.cataloger import init_db, upsert_session
+
+    db = tmp_path / "cat.db"
+    init_db(db)
+    upsert_session(db, {
+        "session_id": "S1", "target": "M 81", "obs_date": "2026-06-21",
+        "ota": "FRA400", "camera": "ZWOASI585MCPro", "filter": "L-Pro",
+        "gain": 200, "temperature_c": -20.0, "exposure_sec": 180.0,
+        "focal_length": 400.0, "frame_count": 4, "total_integration_sec": 720,
+        "ra_deg": None, "dec_deg": None, "lights_path": "p",
+    })  # no "notes" key at all
+
+
+# ── resolve_catalog_sessions ─────────────────────────────────────────────────
+
+from darkroom.ingest import catalog_frame_counts, resolve_catalog_sessions
+
+
+def test_catalog_frame_counts():
+    rows = [{"session_id": "A", "frame_count": 12}, {"session_id": "B", "frame_count": None}]
+    assert catalog_frame_counts(rows) == {"A": 12, "B": 0}
+
+
+def test_resolve_catalog_sessions_local_reads_the_file(tmp_path):
+    from darkroom.cataloger import init_db, upsert_session
+
+    db = tmp_path / "cat.db"
+    init_db(db)
+    upsert_session(db, {
+        "session_id": "S1", "target": "M 81", "obs_date": "2026-06-21",
+        "ota": "FRA400", "camera": "ZWOASI585MCPro", "filter": "L-Pro",
+        "gain": 200, "temperature_c": -20.0, "exposure_sec": 180.0,
+        "focal_length": 400.0, "frame_count": 4, "total_integration_sec": 720,
+        "ra_deg": None, "dec_deg": None, "lights_path": "p", "notes": "",
+    })
+    counts, verified = resolve_catalog_sessions(db)
+    assert counts == {"S1": 4}
+    assert verified is True
+
+
+def test_resolve_catalog_sessions_local_never_creates_the_db(tmp_path):
+    """A scan must stay read-only on the catalog (LocalBackend would create it)."""
+    db = tmp_path / "nope.db"
+    counts, verified = resolve_catalog_sessions(db)
+
+    assert (counts, verified) == ({}, True)
+    assert not db.exists()
+
+
+def test_resolve_catalog_sessions_uses_the_server_when_configured(tmp_path, monkeypatch):
+    """With a catalog_url set, the verdict must come from the server, not sqlite."""
+    monkeypatch.setenv("DARKROOM_CATALOG_URL", "http://catalog.invalid")
+
+    class FakeBackend:
+        def query_sessions(self):
+            return [{"session_id": "REMOTE", "frame_count": 7}]
+
+    monkeypatch.setattr("darkroom.ingest.resolve_backend", lambda _: FakeBackend())
+
+    counts, verified = resolve_catalog_sessions(tmp_path / "ignored.db")
+    assert counts == {"REMOTE": 7}
+    assert verified is True
+
+
+def test_resolve_catalog_sessions_unreachable_server_degrades(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("DARKROOM_CATALOG_URL", "http://catalog.invalid")
+
+    def boom(_):
+        raise ConnectionError("connection refused")
+
+    monkeypatch.setattr("darkroom.ingest.resolve_backend", boom)
+
+    counts, verified = resolve_catalog_sessions(tmp_path / "ignored.db")
+    assert counts == {}
+    assert verified is False
+    assert "catalog server unreachable" in capsys.readouterr().err
+
+
+def test_cmd_commit_warns_on_an_unverified_manifest(tmp_path, capsys):
+    entry = _committable_session(tmp_path / "card", ["a.fit"])
+    path, _, _ = _commit_manifest(tmp_path, [entry])
+    m = _yaml.safe_load(path.read_text())
+    m["meta"]["status_verified"] = False
+    path.write_text(_yaml.dump(m))
+
+    cmd_commit(argparse.Namespace(manifest=str(path)))
+
+    assert "statuses are unverified" in capsys.readouterr().err
+
+
+# ── catalog provenance line ──────────────────────────────────────────────────
+
+from darkroom.ingest import catalog_label, report_catalog
+
+
+def test_catalog_label_local(tmp_path):
+    assert catalog_label(tmp_path / "cat.db") == f"{tmp_path / 'cat.db'} (local file)"
+
+
+def test_catalog_label_server(monkeypatch, tmp_path):
+    monkeypatch.setenv("DARKROOM_CATALOG_URL", "https://darkroom.example.net")
+    assert catalog_label(tmp_path / "cat.db") == "https://darkroom.example.net (server)"
+
+
+def test_report_catalog_goes_to_stderr(tmp_path, capsys):
+    """stdout carries the manifest in `scan` dry-run mode, so this must not."""
+    report_catalog(tmp_path / "cat.db")
+    captured = capsys.readouterr()
+    assert "Catalog:" in captured.err
+    assert captured.out == ""
+
+
+def test_cmd_scan_dry_run_stdout_stays_valid_yaml(tmp_path, capsys, monkeypatch):
+    """Regression guard: the provenance line must not corrupt the manifest."""
+    import argparse as _argparse
+
+    from darkroom.ingest import cmd_scan
+
+    card = tmp_path / "card" / "Light" / "M 81"
+    card.mkdir(parents=True)
+    monkeypatch.setattr("darkroom.ingest.scan_source",
+                        lambda _: __import__("darkroom.scanner", fromlist=["ScanResult"]).ScanResult())
+
+    cmd_scan(
+        _argparse.Namespace(
+            asiair=str(tmp_path / "card"), archive=str(tmp_path / "nas"),
+            catalog=str(tmp_path / "cat.db"), manifest=None,
+        ),
+        write_file=False,
+    )
+    captured = capsys.readouterr()
+
+    assert "Catalog:" in captured.err
+    parsed = _yaml.safe_load(captured.out)          # must not raise
+    assert parsed["meta"]["archive"] == str(tmp_path / "nas")
+
+
+def test_cmd_commit_reports_the_catalog(tmp_path, capsys):
+    entry = _committable_session(tmp_path / "card", ["a.fit"])
+    path, _, catalog = _commit_manifest(tmp_path, [entry])
+
+    cmd_commit(argparse.Namespace(manifest=str(path)))
+
+    assert f"Catalog: {catalog} (local file)" in capsys.readouterr().err
