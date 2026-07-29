@@ -354,6 +354,11 @@ darkroom catalog list --target "M 81"
   *not* recomputed at commit. Use `darkroom ingest review`. See the ⚠️ above.
 - **Quote targets with spaces:** `--target "M 81"`. Spacing/case are normalised either way.
 - **Flat matching defaults to ±3 days** — bump `--flat-window` if archived flats are older.
+- **Flats are ranked by the flat-morning rule, not raw proximity** — the set shot
+  the morning after a session (`+1 day`) beats one from the previous night, even
+  though both are 1 day away. `wbpp` shows each candidate's offset so you can
+  override; a different night's flats mean a different sky and often a very
+  different flat exposure.
 - **`ModuleNotFoundError` only when a prompt appears** → the bare `darkroom` on
   PATH is a `uv tool` install whose dependencies are stale. Fix:
   `uv tool install --force --editable .` from the repo. See below.

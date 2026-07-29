@@ -225,7 +225,7 @@ For each imaging night the session covers, builds:
 ./WBPP/<target_slug>/SESSION_N/
   Lights/FILTER_<name>/   ← symlinks to NAS light frames
   Darks/                  ← science darks matched by camera/gain/exposure
-  Flats/FILTER_<name>/    ← flats nearest to obs_date (±1 day)
+  Flats/FILTER_<name>/    ← flats for this run (morning after preferred)
   FlatDarks/              ← flat darks matching flat exposure/date (or date+1)
 ```
 
