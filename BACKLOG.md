@@ -191,7 +191,15 @@ the session.
   `darkroom/cataloger.py:1027`, `:1084-1085` (legacy epilog/help).
 - Update to `01_`. Also reconcile `CLAUDE.md`, which mixes `04_` and `01_`.
 
-### B7. `triage` CSV export uses naive quoting
+### B7. `triage` CSV export uses naive quoting — ✅ FIXED
+> Shipped 2026-07-29 (`810e3d6`). `/audit/export.csv` now builds output with
+> `csv.writer` over an `io.StringIO` buffer. Media type, `Content-Disposition`
+> filename and column order are unchanged — the only behavioural difference is
+> correct quoting/escaping. Regression test
+> `tests/triage/test_server.py::TestAuditExport::test_quoted_paths_round_trip`
+> exports a path containing both a `"` and a `,` and round-trips it back
+> through `csv.reader`.
+
 - **Where:** `darkroom/triage/server.py:278-284` (`export.csv`)
 - Hand-rolled `"`-wrapping breaks if a path contains a quote. Use the stdlib
   `csv` module. Low priority (localhost single-user tool).
@@ -344,7 +352,14 @@ the session.
   collide on `set_id`, these can diverge for DSLR ISO gains and create duplicate
   rows. Pick one builder and share it.
 
-### R4. Share `_target_slug`
+### R4. Share `_target_slug` — ✅ FIXED
+> Shipped 2026-07-29 (`d539a94`, alias cleanup in `ca99ee6`). The two
+> definitions were verified byte-identical (`target.replace(" ", "")`) before
+> merging, so this is a pure move: `names.target_slug` is now the single
+> source, imported by `prep.py` and `finish.py` under its own name. `names.py`
+> stays astropy-free (the helper is stdlib-only). Tests:
+> `tests/test_names.py::TestTargetSlug`.
+
 - Defined identically in `prep.py:56` and `finish.py:16`. The wbpp↔finish
   handoff depends on them staying identical — co-locate (e.g. in `config.py` or
   a small `names.py`) to remove silent-drift risk.
@@ -527,7 +542,7 @@ the session.
   showing "calibration used for this stack" must recompute. Acceptable; decide
   whether the UI needs a persisted `finish`-time linkage table.
 
-### W9. Always-on web API + client/server split + deployment
+### W9. Always-on web API + client/server split + deployment — ✅ DONE
 
 > **Phase 1 shipped 2026-07-05** (`b576e64` scaffold, `d743198` write-path
 > rewiring): `darkroom/webapi/` (FastAPI, all 7 /api routes, bearer auth,
