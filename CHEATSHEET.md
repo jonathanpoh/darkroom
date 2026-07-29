@@ -50,19 +50,20 @@ Copies FITS off the SD-card copy into the canonical NAS layout and registers the
 new sessions + calibration sets in the catalog. **Never deletes source files.**
 
 Designed to be non-interactive (CCC postflight has no TTY): generate a manifest,
-eyeball it, then commit.
+review it, then commit.
 
-It has three verbs: **scan** → (review) → **commit**.
+It has three verbs: **scan** → **review** → **commit**.
 
 ```bash
 # 1. Scan and print the manifest to stdout, write nothing (a dry run)
 darkroom ingest scan --asiair /Volumes/ASIAIR/Autorun
 
-# 2. Scan and write the manifest to a file so you can review/edit it
+# 2. Scan and write the manifest to a file for later review
 darkroom ingest scan --asiair /Volumes/ASIAIR/Autorun --manifest run.yaml
 
-# 3. (optional) Resolve any needs_review items interactively
+# 3. Confirm/correct the parsed values (target, filter, OTA+camera) interactively
 darkroom ingest review run.yaml
+darkroom ingest review run.yaml --flagged-only   # only entries missing a filter
 
 # 4. Commit the reviewed manifest (copies files + writes catalog)
 darkroom ingest commit run.yaml
@@ -74,12 +75,76 @@ darkroom ingest commit --asiair /Volumes/ASIAIR/Autorun
 | Verb | Use |
 |---|---|
 | `scan --asiair PATH [--manifest FILE]` | Scan the source; print the manifest (or write it to FILE with `--manifest`). No `--manifest` = dry run. |
-| `review FILE` | Interactively resolve `needs_review` items in FILE. |
+| `review FILE` | Walk FILE and confirm/correct target, filter and OTA+camera per entry. Needs a TTY. |
+| `review --flagged-only` | Visit only the entries missing a filter (the old behaviour). |
 | `commit [FILE]` | Execute FILE; with no FILE, scan `--asiair` + commit directly. |
 | `--archive`, `--catalog` | (on `scan`/`commit`) Override resolved paths. |
 
 > The manifest is always **YAML**. `--manifest run` (no extension) writes `run.yaml`;
 > a `.json` name still gets YAML content and prints a warning.
+
+#### ⚠️ Fix the manifest with `review`, never in a text editor
+
+`session_id`, `lights_rel_path` and every file's `dst` are **derived** from
+target + obs_date + OTA + camera + filter — and **nothing re-derives them at
+commit**. Editing an identity field by hand desyncs the catalog row from the
+folder layout, silently and with no warning:
+
+```yaml
+# hand-edited: filter changed, needs_review cleared, nothing else touched
+filter: L-Extreme                                          # ← what you changed
+session_id: M81_20260621_FRA400_ZWOASI585MCPro_UnknownFilter   # ← still stale
+lights_rel_path: .../Lights/NoFilter                           # ← still stale
+```
+
+That commits happily and leaves the catalog claiming `L-Extreme` while every
+path on disk says `NoFilter` — the exact split-brain state the U2 rename ledger
+had to clean up. `ingest review` recomputes all three (plus the per-file copy
+plan and the new/existing/topup verdict), which is the whole reason it exists.
+
+**Safe to hand-edit:** `notes`, and a file's `copy` flag.
+**Never by hand:** `target`, `filter`, `ota`, `camera`, `obs_date`,
+`session_id`, `set_id`, `lights_rel_path`, `folder_rel_path`, any `dst`.
+
+#### CCC postflight
+
+The postflight has no TTY, so it can only get as far as the manifest — `review`
+refuses without a terminal (exit 1) and `commit` refuses any entry still missing
+a filter. Pass `--archive` and `--catalog` **explicitly**: CCC may run the script
+with a different `HOME` than yours, so `~/.config/darkroom/darkroom.toml` won't
+necessarily be found.
+
+```bash
+#!/bin/zsh
+# CCC postflight — scan only; never commits unattended.
+set -euo pipefail
+
+OUT=/Users/jpoh/ingest                       # absolute: CCC's $HOME may not be yours
+mkdir -p "$OUT"
+exec >> "$OUT/ccc.log" 2>&1
+echo "=== $(date '+%F %T') postflight ==="
+
+STAGING=/Users/jpoh/staging/Autorun          # CCC's destination, not the SD card
+ARCHIVE="/Volumes/Photography 4TB/Astrophotography"
+CATALOG=/Users/jpoh/.config/darkroom/astro_catalog.db
+
+/Users/jpoh/Projects/darkroom/.venv/bin/darkroom ingest scan \
+    --asiair  "$STAGING" \
+    --archive "$ARCHIVE" \
+    --catalog "$CATALOG" \
+    --manifest "$OUT/$(date +%F-%H%M).yaml" < /dev/null
+```
+
+Then, at a real terminal, whenever you get to it:
+
+```bash
+darkroom ingest review  ~/ingest/2026-07-29-0830.yaml
+darkroom ingest commit  ~/ingest/2026-07-29-0830.yaml
+```
+
+Point `--asiair` at CCC's **destination on the Mac**, not `/Volumes/ASIAIR/`:
+the manifest records absolute `src` paths, so ejecting the card before you
+commit would break every copy.
 
 Sessions are grouped by **imaging night** (local noon-to-noon), so a run that crosses
 midnight stays one session, dated to the night it began.
@@ -267,6 +332,9 @@ darkroom catalog list --target "M 81"
 
 - **Source is sacred.** `ingest` never deletes SD-card originals — clear them yourself.
 - **Filter comes from the filename**, not the FITS header (ASIAir doesn't write FILTER).
-- **No TTY in CCC postflight** — keep `ingest` to the manifest → `--commit` flow there.
+- **No TTY in CCC postflight** — the postflight can only run `ingest scan --manifest`;
+  `review` needs a terminal and `commit` is a deliberate step you run yourself.
+- **Never fix a manifest in a text editor** — identity fields are derived and are
+  *not* recomputed at commit. Use `darkroom ingest review`. See the ⚠️ above.
 - **Quote targets with spaces:** `--target "M 81"`. Spacing/case are normalised either way.
 - **Flat matching defaults to ±3 days** — bump `--flat-window` if archived flats are older.

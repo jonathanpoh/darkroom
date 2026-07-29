@@ -41,8 +41,15 @@ darkroom finish ──→ NAS: 01_Deep Sky Objects/<Target>/_Processed/<date>/
 
 ## Key Constraints
 
-- **CCC postflight = no TTY**: `darkroom ingest` must be fully non-interactive.
-  Use a YAML manifest approach: generate manifest first, user reviews, then `--commit`.
+- **CCC postflight = no TTY**: the postflight runs `ingest scan --manifest` only.
+  `ingest review` is the interactive step (refuses without a TTY) and `ingest
+  commit` is run deliberately afterwards; `commit` itself never prompts.
+- **Manifest identity fields are derived, and commit does not re-derive them**:
+  `session_id`, `set_id`, `lights_rel_path`, `folder_rel_path` and every file
+  `dst` come from target/obs_date/OTA/camera/filter. Editing one of those inputs
+  without recomputing the rest leaves the catalog row disagreeing with the
+  folder layout — silently. `darkroom/ingest_review.py:recompute_entry` is the
+  only correct way to apply such an edit; never hand-edit a manifest.
 - **Never delete source files**: SD card originals stay until user manually clears them.
 - **Filter from filename, not header**: ASIAir does not write FILTER to FITS headers.
   Use `darkroom/parse.py:parse_filter()` everywhere.

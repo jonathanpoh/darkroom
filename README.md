@@ -96,7 +96,7 @@ Browse the catalog in the web UI served by `darkroom.webapi`
 ```bash
 # Three-step (recommended): scan → review → commit
 darkroom ingest scan --asiair ~/staging/Autorun --manifest /tmp/ingest.yaml
-darkroom ingest review /tmp/ingest.yaml      # only if filter detection failed
+darkroom ingest review /tmp/ingest.yaml      # confirm/correct the parsed values
 darkroom ingest commit /tmp/ingest.yaml
 
 # Or one-shot:
@@ -108,6 +108,20 @@ darkroom ingest commit --asiair ~/staging/Autorun
   canonical archive layout; refuses to commit if any `needs_review` items
   remain. Re-running on the same source detects already-archived sessions and
   becomes a no-op (or a top-up if new frames are present).
+- `review` is the one interactive step (`commit` never prompts). It walks every
+  session and calibration group and lets you confirm or correct the three values
+  that get parsed rather than read from a header — **target**, **filter** and
+  **OTA + camera** — picking from values already in the catalog so corrections
+  don't mint near-duplicates. A clean entry is one Enter; an entry with a
+  problem opens on the fix instead of on *Accept*. Corrections rewrite the
+  session_id, destination path and per-file copy plan in place.
+  `--flagged-only` restricts the walk to entries missing a filter.
+- **Correct a manifest with `review`, not a text editor.** `session_id`,
+  `lights_rel_path` and each file's `dst` are derived from target/OTA/camera/
+  filter and are *not* recomputed at commit, so hand-editing an identity field
+  leaves the catalog row and the folder layout disagreeing — silently, and with
+  no warning at commit. See the CHEATSHEET for the field-by-field breakdown and
+  the CCC postflight recipe.
 - Writes to the catalog atomically with the file copy.
 
 ### `darkroom wbpp`
