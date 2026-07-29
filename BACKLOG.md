@@ -174,6 +174,45 @@ the session.
   session temperature falls between rungs (assert nearest wins, and that a
   session outside the tolerance gets none rather than all).
 
+### B12. `wbpp` prefers the previous night's flats over the morning-after set — ✅ FIXED
+
+> Fixed 2026-07-29 (`41ed0bc`). New `catalog.flat_sort_key` replaces the
+> proximity sort: sets from the session's own run rank first — offset **+1**
+> (following morning, the normal workflow) ahead of **0** (that evening, which
+> happens when filters are changed mid-session) — then everything else in the
+> window by proximity, preferring the later date on a tie. The `--flat-window`
+> (±3 days) is unchanged; only the ordering within it. `prep.py:_resolve_flat`
+> now prints each candidate's signed offset and labels the morning-after one
+> (`_flat_offset_label`), replacing an unexplained `← closest`, so a
+> mid-session filter change shows both sets side by side and the default is an
+> informed override rather than a guess. One existing test asserted the old
+> ordering and was updated deliberately, with the rule in its docstring.
+> Tests: `tests/test_catalog.py` (+6, incl. the real NGC 281 shape). Suite 861.
+> Verified on the live catalog before and after, then confirmed by Jonathan
+> running `darkroom wbpp` for real.
+
+- Reported by Jonathan 2026-07-29, who had noticed it on earlier wbpp runs
+  ("the suggested matching flats is often the wrong one") — found again while
+  checking what the first real ingest run had produced.
+- **Where:** `darkroom/catalog.py` (`find_flats`), `darkroom/prep.py`
+  (`_resolve_flat`, which shows the list and auto-selects `[0]` when
+  non-interactive).
+- **Problem:** `find_flats` sorted by **absolute** date distance, so `-1` and
+  `+1` day tied and the winner was whatever order the backend happened to
+  return. A session on night N was therefore routinely handed the *previous*
+  night's flats instead of the ones shot the morning after.
+- **Why it matters:** those are different runs under a different sky, often
+  with very different flat exposures — on the live NGC 281 data the mismatched
+  pair was **0.31s vs 0.05s**. Not a cosmetic tie-break.
+- **The convention already existed elsewhere:** `parse.py`'s flat-morning
+  helpers, `ingest.infer_flat_filter` and `catalog.find_flat_darks` all use a
+  directional `0..+1` window (and see **B2**, which fixed the flat-dark half of
+  the same idea). `find_flats` was the only matcher ranking symmetrically.
+- **Jonathan's workflow** (stated 2026-07-29): flats are normally shot the
+  morning after. The exception is a dark-site trip with a mid-session filter
+  change, where he may shoot flats both before and after the change — which is
+  why offset `0` has to stay a valid in-run match rather than being excluded.
+
 ---
 
 ## P2 — Minor / docs
@@ -1182,6 +1221,10 @@ table), and whether to compute stats at scan time or store raw logs.
 
 ## Suggested order for a future session
 1. **B1 + B2** (finish + flat-darks) — silent data-pipeline failures, with tests. ✅ DONE
+   — **B12** (flat-morning ranking) ✅ DONE 2026-07-29 is the third of the same
+   family: calibration matched by a rule that looked right but quietly picked
+   the wrong set. **B11** (dark masters at every temperature) is still open and
+   is the last known one.
 2. **R6 + W5/W6/W7** schema+helper groundwork (move name helpers, WAL, indexes,
    timestamps) — unblocks the web work and B4. ✅ DONE
 3. **B4** (reuse `_parse_coords`), **B3** (confirm `01_` vs `04_`), **B5** (after
