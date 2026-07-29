@@ -44,8 +44,56 @@ Resolution order: CLI flag → env var → `darkroom.toml`.
 | Catalog DB | `--catalog` | `DARKROOM_CATALOG` | `catalog_path` |
 | Archive root | `--archive` | `DARKROOM_ARCHIVE` | `archive_path` |
 | WBPP work dir | `--wbpp` | `DARKROOM_WBPP` | `wbpp_path` |
+| Catalog API URL | — | `DARKROOM_CATALOG_URL` | `catalog_url` |
+| Catalog API token | — | `DARKROOM_API_TOKEN` | `api_token` |
+
+Set `catalog_url` and the CLI talks to the server for everything; leave it
+unset and it uses the local SQLite file. `catalog_path` then only matters as
+the offline fallback.
 
 See [`darkroom.toml.example`](darkroom.toml.example).
+
+## Catalog server credentials
+
+The server holds two independent secrets, both read from its environment file
+(`EnvironmentFile=/etc/darkroom/env`, see
+[`deploy/darkroom-api.service`](deploy/darkroom-api.service)). It refuses to
+start if either is missing.
+
+| Secret | Guards | Generate with |
+|---|---|---|
+| `DARKROOM_API_TOKEN` | `/api` (bearer header) — the CLI | `openssl rand -hex 32` |
+| `DARKROOM_UI_PASSWORD_HASH` | the browser UI (password → signed cookie) | `python -m darkroom.webapi.passwd` |
+
+### Rotating the API token
+
+The token is an opaque string compared with `secrets.compare_digest` — no
+format requirements, so any high-entropy value works. 32 random bytes as hex
+matches what's already deployed.
+
+```bash
+# 1. Generate one (on either machine)
+openssl rand -hex 32
+
+# 2. On the server: put it in the environment file and restart
+ssh claude@<server> \
+  "sudo sed -i 's/^DARKROOM_API_TOKEN=.*/DARKROOM_API_TOKEN=<new>/' /etc/darkroom/env \
+   && sudo systemctl restart darkroom-api"
+
+# 3. On the Mac: same value in ~/.config/darkroom/darkroom.toml
+#    api_token = "<new>"
+
+# 4. Verify — 401 before the restart propagates, 200 after
+curl -s -o /dev/null -w '%{http_code}\n' \
+  -H "Authorization: Bearer <new>" https://<server>/api/sessions
+```
+
+Rotating invalidates every existing client immediately, so update anywhere else
+the token is written — notably the CCC postflight script, which needs it in
+plaintext to export `DARKROOM_API_TOKEN`. Keep that script `chmod 600` and out
+of the repo. The browser UI is unaffected: its password hash is a separate
+secret, and changing *it* invalidates all browser sessions but leaves the CLI
+working.
 
 ## Subcommands
 
