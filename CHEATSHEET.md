@@ -78,7 +78,7 @@ darkroom ingest commit --asiair /Volumes/ASIAIR/Autorun
 | `review FILE` | Walk FILE and confirm/correct target, filter and OTA+camera per entry. Needs a TTY. |
 | `review --flagged-only` | Visit only the entries missing a filter (the old behaviour). |
 | `commit [FILE]` | Execute FILE; with no FILE, scan `--asiair` + commit directly. |
-| `--archive`, `--catalog` | (on `scan`/`commit`) Override resolved paths. |
+| `--archive`, `--catalog` | (on `scan`/`commit`) Override resolved paths. `--catalog` is the **offline fallback only** — a configured `catalog_url`/`DARKROOM_CATALOG_URL` wins for all three verbs. |
 
 > The manifest is always **YAML**. `--manifest run` (no extension) writes `run.yaml`;
 > a `.json` name still gets YAML content and prints a warning.
@@ -110,9 +110,15 @@ plan and the new/existing/topup verdict), which is the whole reason it exists.
 
 The postflight has no TTY, so it can only get as far as the manifest — `review`
 refuses without a terminal (exit 1) and `commit` refuses any entry still missing
-a filter. Pass `--archive` and `--catalog` **explicitly**: CCC may run the script
-with a different `HOME` than yours, so `~/.config/darkroom/darkroom.toml` won't
-necessarily be found.
+a filter. Set every path and the catalog **explicitly in the script**: CCC may
+run it with a different `HOME` than yours, so `~/.config/darkroom/darkroom.toml`
+won't necessarily be found.
+
+With the catalog on the server, export `DARKROOM_CATALOG_URL` +
+`DARKROOM_API_TOKEN` and **don't** pass `--catalog` — that flag is only the
+offline fallback, and pointing it at the dormant local
+`~/.config/darkroom/astro_catalog.db` would make every already-archived session
+look new.
 
 ```bash
 #!/bin/zsh
@@ -126,14 +132,23 @@ echo "=== $(date '+%F %T') postflight ==="
 
 STAGING=/Users/jpoh/staging/Autorun          # CCC's destination, not the SD card
 ARCHIVE="/Volumes/Photography 4TB/Astrophotography"
-CATALOG=/Users/jpoh/.config/darkroom/astro_catalog.db
+
+export DARKROOM_CATALOG_URL=http://192.168.2.217:8000
+export DARKROOM_API_TOKEN=...                # same value as darkroom.toml api_token
 
 /Users/jpoh/Projects/darkroom/.venv/bin/darkroom ingest scan \
     --asiair  "$STAGING" \
     --archive "$ARCHIVE" \
-    --catalog "$CATALOG" \
     --manifest "$OUT/$(date +%F-%H%M).yaml" < /dev/null
 ```
+
+`scan` resolves its new/existing/topup check through the same backend `commit`
+writes to, so with the URL set it asks the server. If the server is unreachable
+it still writes the manifest (a scan is read-only and useful offline) but warns
+loudly and records `meta.status_verified: false`; `commit` repeats that warning,
+since the postflight's warning may only have reached a log nobody read. An
+unverified "new" is cheap — already-copied files are skipped by the dst-exists
+check, and the upsert preserves `processed_state` and `notes`.
 
 Then, at a real terminal, whenever you get to it:
 

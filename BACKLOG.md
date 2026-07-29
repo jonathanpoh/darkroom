@@ -920,6 +920,28 @@ bursty imaging runs, and mismatches fail with a shrug instead of showing what
 > `existing_catalog_sessions` no longer tracebacks on a catalog file that
 > exists without the schema (sqlite creates an empty db on connect, so a
 > touched path aborted an otherwise fine unattended ingest).
+> **Follow-up 2026-07-29 (server-backed catalog)**: two bugs found while working
+> out what the CCC postflight looks like now the catalog lives behind the HTTP
+> API. (1) `ingest scan` computed new/existing/topup by reading local SQLite
+> directly, never `resolve_backend` — proved by pointing `DARKROOM_CATALOG_URL`
+> at a dead port and watching scan succeed while commit failed — so on a
+> server-backed machine every already-archived session was reported `new`. New
+> `ingest.resolve_catalog_sessions` goes through the backend when a
+> `catalog_url` is configured, reads the file directly otherwise (LocalBackend
+> ensures the schema, and a scan must stay read-only on the catalog like
+> procscan), and on an unreachable server still writes the manifest but warns
+> and records `meta.status_verified: false`, which `commit` re-warns about.
+> `meta.catalog` deliberately stays a filesystem path (commit feeds it to
+> resolve_backend as the offline fallback); the URL goes in a new
+> `meta.catalog_url`. (2) The cost of that false `new` was **silent notes
+> loss**: commit sends `notes: ""` on every upsert and the ON CONFLICT clause
+> protected `processed_state` but not `notes`. Now
+> `COALESCE(NULLIF(excluded.notes, ''), sessions.notes)` — a real note still
+> wins, a blank one preserves — matching the convention `set_processed_state`
+> already followed. One fix covers both backends since `webapi/app.py` calls
+> the same `cataloger.upsert_session`. Verified against a live uvicorn: first
+> scan `new` → commit → note added over the API → re-scan reports `existing`
+> → re-commit leaves the note and processed_state intact, no local db created.
 > **Not done**: `scan` still writes the raw ASIAir target name; normalization
 > only happens if you run `review`. Making scan normalize would change ingest
 > behaviour for the no-TTY path, which is a separate call.

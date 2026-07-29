@@ -455,8 +455,16 @@ def upsert_session(db_path: Path, session: dict) -> None:
     """Insert or update a session in the database.
 
     Uses SQLite's upsert (INSERT ... ON CONFLICT) syntax. On conflict by
-    session_id, updates all fields EXCEPT processed_status, which is
-    preserved to protect manually-set values during re-scans.
+    session_id, updates all fields EXCEPT processed_status/processed_state,
+    which are preserved to protect manually-set values during re-scans.
+
+    `notes` is treated the same way, but one step softer: a non-empty incoming
+    note still wins, while an empty one leaves what is already there. Ingest
+    never has a note to contribute (it always sends ""), so without this a
+    re-ingest of an already-catalogued session silently destroyed whatever was
+    written about that night — which is easy to trigger, since a session only
+    has to *look* new for commit to upsert it. Matches the convention
+    `set_processed_state` already follows (None leaves notes untouched).
 
     Args:
         db_path: Path to SQLite database file
@@ -473,6 +481,7 @@ def upsert_session(db_path: Path, session: dict) -> None:
     session.setdefault("processed_status", None)
     session.setdefault("site_lat", None)
     session.setdefault("site_lon", None)
+    session.setdefault("notes", "")
     with sqlite3.connect(db_path) as conn:
         conn.execute(
             """
@@ -504,7 +513,7 @@ def upsert_session(db_path: Path, session: dict) -> None:
                 ra_deg                = excluded.ra_deg,
                 dec_deg               = excluded.dec_deg,
                 lights_path           = excluded.lights_path,
-                notes                 = excluded.notes,
+                notes                 = COALESCE(NULLIF(excluded.notes, ''), sessions.notes),
                 updated_at            = excluded.updated_at,
                 site_lat              = COALESCE(excluded.site_lat, sessions.site_lat),
                 site_lon              = COALESCE(excluded.site_lon, sessions.site_lon)

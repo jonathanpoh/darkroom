@@ -579,3 +579,141 @@ def test_existing_catalog_sessions_unreadable_file(tmp_path):
     db = tmp_path / "not-a.db"
     db.write_text("this is not a sqlite database")
     assert existing_catalog_sessions(db) == {}
+
+
+# ── notes protection on re-upsert ────────────────────────────────────────────
+
+def test_upsert_session_preserves_notes_against_an_empty_incoming_note(tmp_path):
+    """A re-ingest must not destroy what was written about a night.
+
+    ingest always sends notes="" (it has none to contribute), and a session
+    only has to *look* new for commit to upsert it — so without this an
+    already-catalogued session lost its notes silently.
+    """
+    from darkroom.cataloger import init_db, upsert_session
+    from darkroom.catalog_client import LocalBackend
+
+    db = tmp_path / "cat.db"
+    init_db(db)
+    base = {
+        "session_id": "S1", "target": "M 81", "obs_date": "2026-06-21",
+        "ota": "FRA400", "camera": "ZWOASI585MCPro", "filter": "L-Pro",
+        "gain": 200, "temperature_c": -20.0, "exposure_sec": 180.0,
+        "focal_length": 400.0, "frame_count": 4, "total_integration_sec": 720,
+        "ra_deg": None, "dec_deg": None, "lights_path": "p",
+    }
+    upsert_session(db, {**base, "notes": "guiding poor after 01:00"})
+    upsert_session(db, {**base, "notes": ""})           # the re-ingest
+
+    rows = LocalBackend(db).query_sessions()
+    assert rows[0]["notes"] == "guiding poor after 01:00"
+
+
+def test_upsert_session_still_accepts_a_real_note(tmp_path):
+    from darkroom.cataloger import init_db, upsert_session
+    from darkroom.catalog_client import LocalBackend
+
+    db = tmp_path / "cat.db"
+    init_db(db)
+    base = {
+        "session_id": "S1", "target": "M 81", "obs_date": "2026-06-21",
+        "ota": "FRA400", "camera": "ZWOASI585MCPro", "filter": "L-Pro",
+        "gain": 200, "temperature_c": -20.0, "exposure_sec": 180.0,
+        "focal_length": 400.0, "frame_count": 4, "total_integration_sec": 720,
+        "ra_deg": None, "dec_deg": None, "lights_path": "p",
+    }
+    upsert_session(db, {**base, "notes": "first"})
+    upsert_session(db, {**base, "notes": "second"})
+
+    assert LocalBackend(db).query_sessions()[0]["notes"] == "second"
+
+
+def test_upsert_session_notes_key_is_optional(tmp_path):
+    from darkroom.cataloger import init_db, upsert_session
+
+    db = tmp_path / "cat.db"
+    init_db(db)
+    upsert_session(db, {
+        "session_id": "S1", "target": "M 81", "obs_date": "2026-06-21",
+        "ota": "FRA400", "camera": "ZWOASI585MCPro", "filter": "L-Pro",
+        "gain": 200, "temperature_c": -20.0, "exposure_sec": 180.0,
+        "focal_length": 400.0, "frame_count": 4, "total_integration_sec": 720,
+        "ra_deg": None, "dec_deg": None, "lights_path": "p",
+    })  # no "notes" key at all
+
+
+# ── resolve_catalog_sessions ─────────────────────────────────────────────────
+
+from darkroom.ingest import catalog_frame_counts, resolve_catalog_sessions
+
+
+def test_catalog_frame_counts():
+    rows = [{"session_id": "A", "frame_count": 12}, {"session_id": "B", "frame_count": None}]
+    assert catalog_frame_counts(rows) == {"A": 12, "B": 0}
+
+
+def test_resolve_catalog_sessions_local_reads_the_file(tmp_path):
+    from darkroom.cataloger import init_db, upsert_session
+
+    db = tmp_path / "cat.db"
+    init_db(db)
+    upsert_session(db, {
+        "session_id": "S1", "target": "M 81", "obs_date": "2026-06-21",
+        "ota": "FRA400", "camera": "ZWOASI585MCPro", "filter": "L-Pro",
+        "gain": 200, "temperature_c": -20.0, "exposure_sec": 180.0,
+        "focal_length": 400.0, "frame_count": 4, "total_integration_sec": 720,
+        "ra_deg": None, "dec_deg": None, "lights_path": "p", "notes": "",
+    })
+    counts, verified = resolve_catalog_sessions(db)
+    assert counts == {"S1": 4}
+    assert verified is True
+
+
+def test_resolve_catalog_sessions_local_never_creates_the_db(tmp_path):
+    """A scan must stay read-only on the catalog (LocalBackend would create it)."""
+    db = tmp_path / "nope.db"
+    counts, verified = resolve_catalog_sessions(db)
+
+    assert (counts, verified) == ({}, True)
+    assert not db.exists()
+
+
+def test_resolve_catalog_sessions_uses_the_server_when_configured(tmp_path, monkeypatch):
+    """With a catalog_url set, the verdict must come from the server, not sqlite."""
+    monkeypatch.setenv("DARKROOM_CATALOG_URL", "http://catalog.invalid")
+
+    class FakeBackend:
+        def query_sessions(self):
+            return [{"session_id": "REMOTE", "frame_count": 7}]
+
+    monkeypatch.setattr("darkroom.ingest.resolve_backend", lambda _: FakeBackend())
+
+    counts, verified = resolve_catalog_sessions(tmp_path / "ignored.db")
+    assert counts == {"REMOTE": 7}
+    assert verified is True
+
+
+def test_resolve_catalog_sessions_unreachable_server_degrades(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("DARKROOM_CATALOG_URL", "http://catalog.invalid")
+
+    def boom(_):
+        raise ConnectionError("connection refused")
+
+    monkeypatch.setattr("darkroom.ingest.resolve_backend", boom)
+
+    counts, verified = resolve_catalog_sessions(tmp_path / "ignored.db")
+    assert counts == {}
+    assert verified is False
+    assert "catalog server unreachable" in capsys.readouterr().err
+
+
+def test_cmd_commit_warns_on_an_unverified_manifest(tmp_path, capsys):
+    entry = _committable_session(tmp_path / "card", ["a.fit"])
+    path, _, _ = _commit_manifest(tmp_path, [entry])
+    m = _yaml.safe_load(path.read_text())
+    m["meta"]["status_verified"] = False
+    path.write_text(_yaml.dump(m))
+
+    cmd_commit(argparse.Namespace(manifest=str(path)))
+
+    assert "statuses are unverified" in capsys.readouterr().err

@@ -14,7 +14,7 @@ import yaml
 
 from darkroom.cataloger import make_session_id
 from darkroom.catalog_client import resolve_backend
-from darkroom.config import resolve_catalog, resolve_path
+from darkroom.config import resolve_catalog, resolve_catalog_url, resolve_path
 from darkroom.names import KNOWN_FILTERS, _normalize_camera, session_dest_rel
 from darkroom.scanner import CalibrationGroup, Session, ScanResult, scan_source
 
@@ -189,6 +189,47 @@ def existing_catalog_sessions(catalog_path: Path) -> dict[str, int]:
     except sqlite3.DatabaseError:
         return {}
     return {r[0]: r[1] for r in rows}
+
+
+def catalog_frame_counts(rows: list[dict]) -> dict[str, int]:
+    """{session_id: frame_count} from catalog rows, backend-agnostic."""
+    return {
+        r["session_id"]: r.get("frame_count") or 0
+        for r in rows
+        if r.get("session_id")
+    }
+
+
+def resolve_catalog_sessions(catalog: Path) -> tuple[dict[str, int], bool]:
+    """Return ({session_id: frame_count}, verified) for the dedupe check.
+
+    The new/existing/topup verdict has to be computed against whichever catalog
+    `commit` will actually write to. When a `catalog_url` is configured that is
+    the server, so this goes through `resolve_backend` — reading the local
+    SQLite file instead would report every already-archived session as "new".
+
+    With no server configured it reads the file directly rather than via
+    LocalBackend, because LocalBackend ensures the schema on construction and a
+    scan must stay read-only on the catalog (same rule `procscan` follows).
+
+    `verified=False` means the server could not be reached: the manifest is
+    still written, since a scan is read-only and useful offline, but every
+    status in it is a guess and `meta.status_verified` says so.
+    """
+    if not resolve_catalog_url():
+        return existing_catalog_sessions(catalog), True
+    try:
+        backend = resolve_backend(str(catalog))
+        return catalog_frame_counts(backend.query_sessions()), True
+    except Exception as exc:  # noqa: BLE001 — any backend failure degrades alike
+        print(
+            f"Warning: catalog server unreachable ({exc}).\n"
+            "         Every session will be reported 'new' and the manifest is "
+            "flagged status_verified: false.\n"
+            "         Re-run the scan, or check the statuses before committing.",
+            file=sys.stderr,
+        )
+        return {}, False
 
 
 def make_cal_set_id(
@@ -382,7 +423,7 @@ def build_manifest(
     interactive: bool,
 ) -> dict:
     """Build the full manifest dict from a ScanResult."""
-    catalog_sessions = existing_catalog_sessions(catalog)
+    catalog_sessions, status_verified = resolve_catalog_sessions(catalog)
 
     session_entries = [
         build_session_entry(s, output, catalog_sessions, interactive)
@@ -397,8 +438,15 @@ def build_manifest(
         "meta": {
             "asiair": str(source),
             "archive": str(output),
+            # Stays the local path: `cmd_commit` feeds it to resolve_backend as
+            # the offline fallback, so it must remain a usable filesystem path
+            # even when the server is what actually gets written.
             "catalog": str(catalog),
+            "catalog_url": resolve_catalog_url(),
             "generated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+            # False = the catalog was unreachable, so every `status` below is a
+            # guess ("new") rather than a verdict. See resolve_catalog_sessions.
+            "status_verified": status_verified,
         },
         "sessions": session_entries,
         "calibration": cal_entries,
@@ -494,6 +542,18 @@ def cmd_commit(args: argparse.Namespace) -> None:
         manifest = yaml.safe_load(manifest_path.read_text())
         output = Path(manifest["meta"]["archive"])
         catalog = Path(manifest["meta"]["catalog"])
+
+    # A manifest scanned while the catalog was unreachable carries guessed
+    # statuses. Worth saying out loud — the scan-time warning may only have
+    # reached a postflight log nobody read — but not worth refusing over: an
+    # over-eager "new" re-copies nothing (dst-exists check) and the upsert
+    # preserves processed_state and notes.
+    if manifest.get("meta", {}).get("status_verified") is False:
+        print(
+            "Warning: this manifest was scanned while the catalog was "
+            "unreachable — 'new'/'existing'/'topup' statuses are unverified.",
+            file=sys.stderr,
+        )
 
     # Hard-refuse if any needs_review items remain
     flagged = [

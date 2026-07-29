@@ -24,6 +24,7 @@ import yaml
 
 from darkroom.ingest import (
     cal_dest_rel,
+    catalog_frame_counts,
     make_cal_set_id,
     plan_session_files,
 )
@@ -100,19 +101,6 @@ def collect_known_values(rows: list[dict], manifest: dict) -> KnownValues:
         cameras=tuple(sorted(c for c in cameras if c not in _PLACEHOLDERS)),
         combos=tuple(sorted(combos)),
     )
-
-
-def catalog_frame_counts(rows: list[dict]) -> dict[str, int]:
-    """{session_id: frame_count} from catalog rows.
-
-    The backend-agnostic equivalent of `ingest.existing_catalog_sessions`, which
-    reads SQLite directly — review has to work against a remote catalog too.
-    """
-    return {
-        r["session_id"]: r.get("frame_count") or 0
-        for r in rows
-        if r.get("session_id")
-    }
 
 
 # ── entry inspection ─────────────────────────────────────────────────────────
