@@ -191,6 +191,30 @@ def existing_catalog_sessions(catalog_path: Path) -> dict[str, int]:
     return {r[0]: r[1] for r in rows}
 
 
+def catalog_label(catalog: Path) -> str:
+    """Which catalog this run is using, for the provenance line.
+
+    A configured `catalog_url` wins for every verb, so the local path is only
+    ever in play when no server is set. Saying which one out loud is what makes
+    an accidental local run obvious: without it, a postflight that failed to
+    pick up `DARKROOM_CATALOG_URL` (a different HOME finds no darkroom.toml)
+    archives the frames and registers them in a stale local file, silently,
+    while the server never learns the session exists.
+    """
+    url = resolve_catalog_url()
+    return f"{url} (server)" if url else f"{catalog} (local file)"
+
+
+def report_catalog(catalog: Path) -> None:
+    """Print the provenance line.
+
+    Deliberately stderr: `ingest scan` with no --manifest writes the YAML to
+    stdout, which has to stay machine-readable. A CCC postflight redirects both
+    streams to its log, so it lands there either way.
+    """
+    print(f"Catalog: {catalog_label(catalog)}", file=sys.stderr)
+
+
 def catalog_frame_counts(rows: list[dict]) -> dict[str, int]:
     """{session_id: frame_count} from catalog rows, backend-agnostic."""
     return {
@@ -482,6 +506,7 @@ def cmd_scan(args: argparse.Namespace, *, write_file: bool) -> None:
         print(f"Error: source path does not exist: {source}", file=sys.stderr)
         sys.exit(1)
 
+    report_catalog(catalog)
     scan = scan_source(source)
     manifest = build_manifest(scan, source, output, catalog, interactive)
 
@@ -532,6 +557,9 @@ def cmd_commit(args: argparse.Namespace) -> None:
         output = _require_path(args.archive, "DARKROOM_ARCHIVE", "archive_path", "archive")
         catalog = resolve_catalog(args.catalog)
         interactive = sys.stdin.isatty()
+        # Ahead of the scan, so the provenance line precedes anything
+        # build_manifest reports about reaching that catalog.
+        report_catalog(catalog)
         scan = scan_source(source)
         manifest = build_manifest(scan, source, output, catalog, interactive)
     else:
@@ -542,6 +570,8 @@ def cmd_commit(args: argparse.Namespace) -> None:
         manifest = yaml.safe_load(manifest_path.read_text())
         output = Path(manifest["meta"]["archive"])
         catalog = Path(manifest["meta"]["catalog"])
+        # Before any copying or upserting: say where this is about to land.
+        report_catalog(catalog)
 
     # A manifest scanned while the catalog was unreachable carries guessed
     # statuses. Worth saying out loud — the scan-time warning may only have

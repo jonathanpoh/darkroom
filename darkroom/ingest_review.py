@@ -22,11 +22,13 @@ from pathlib import Path
 
 import yaml
 
+from darkroom.config import resolve_catalog
 from darkroom.ingest import (
     cal_dest_rel,
     catalog_frame_counts,
     make_cal_set_id,
     plan_session_files,
+    report_catalog,
 )
 from darkroom.names import (
     KNOWN_FILTERS,
@@ -545,6 +547,7 @@ def _load_catalog_rows(args) -> list[dict]:
     """
     from darkroom.catalog_client import resolve_backend
 
+    report_catalog(resolve_catalog(getattr(args, "catalog", None)))
     try:
         backend = resolve_backend(getattr(args, "catalog", None))
         return backend.query_sessions()

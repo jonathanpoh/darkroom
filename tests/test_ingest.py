@@ -717,3 +717,59 @@ def test_cmd_commit_warns_on_an_unverified_manifest(tmp_path, capsys):
     cmd_commit(argparse.Namespace(manifest=str(path)))
 
     assert "statuses are unverified" in capsys.readouterr().err
+
+
+# ── catalog provenance line ──────────────────────────────────────────────────
+
+from darkroom.ingest import catalog_label, report_catalog
+
+
+def test_catalog_label_local(tmp_path):
+    assert catalog_label(tmp_path / "cat.db") == f"{tmp_path / 'cat.db'} (local file)"
+
+
+def test_catalog_label_server(monkeypatch, tmp_path):
+    monkeypatch.setenv("DARKROOM_CATALOG_URL", "https://darkroom.example.net")
+    assert catalog_label(tmp_path / "cat.db") == "https://darkroom.example.net (server)"
+
+
+def test_report_catalog_goes_to_stderr(tmp_path, capsys):
+    """stdout carries the manifest in `scan` dry-run mode, so this must not."""
+    report_catalog(tmp_path / "cat.db")
+    captured = capsys.readouterr()
+    assert "Catalog:" in captured.err
+    assert captured.out == ""
+
+
+def test_cmd_scan_dry_run_stdout_stays_valid_yaml(tmp_path, capsys, monkeypatch):
+    """Regression guard: the provenance line must not corrupt the manifest."""
+    import argparse as _argparse
+
+    from darkroom.ingest import cmd_scan
+
+    card = tmp_path / "card" / "Light" / "M 81"
+    card.mkdir(parents=True)
+    monkeypatch.setattr("darkroom.ingest.scan_source",
+                        lambda _: __import__("darkroom.scanner", fromlist=["ScanResult"]).ScanResult())
+
+    cmd_scan(
+        _argparse.Namespace(
+            asiair=str(tmp_path / "card"), archive=str(tmp_path / "nas"),
+            catalog=str(tmp_path / "cat.db"), manifest=None,
+        ),
+        write_file=False,
+    )
+    captured = capsys.readouterr()
+
+    assert "Catalog:" in captured.err
+    parsed = _yaml.safe_load(captured.out)          # must not raise
+    assert parsed["meta"]["archive"] == str(tmp_path / "nas")
+
+
+def test_cmd_commit_reports_the_catalog(tmp_path, capsys):
+    entry = _committable_session(tmp_path / "card", ["a.fit"])
+    path, _, catalog = _commit_manifest(tmp_path, [entry])
+
+    cmd_commit(argparse.Namespace(manifest=str(path)))
+
+    assert f"Catalog: {catalog} (local file)" in capsys.readouterr().err
