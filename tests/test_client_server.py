@@ -352,3 +352,31 @@ def test_find_darks_parity(backends):
         == find_darks(http, camera="ZWOASI585MCPro", gain=999, exposure_sec=180.0)
         == []
     )
+
+
+def test_find_darks_temperature_parity(backends):
+    """Temperature matching is client-side, so it must see temperature_c over HTTP.
+
+    The filter lives in darkroom.catalog, not in the query — if the API ever
+    stopped serialising temperature_c, LocalBackend would keep working and only
+    the HTTP path would break (with a KeyError, not a wrong answer).
+    """
+    local, http = backends
+    for temp in (-20.0, -10.0):
+        cal = _cal_set(
+            f"Dark_ZWOASI585MCPro_gain200_180s_{temp:g}C",
+            frame_type="Dark", camera="ZWOASI585MCPro", gain=200, exposure_sec=180.0,
+            temperature_c=temp, is_master=1,
+        )
+        for b in (local, http):
+            b.upsert_calibration_set(cal)
+
+    kwargs = dict(camera="ZWOASI585MCPro", gain=200, exposure_sec=180.0)
+    for temp in (-20.0, -10.0, 5.0):
+        assert _strip(find_darks(local, temperature_c=temp, **kwargs)) == _strip(
+            find_darks(http, temperature_c=temp, **kwargs)
+        ), f"backends disagree at {temp}C"
+
+    # ±3C default keeps only the matching set-point, not the whole ladder (B11).
+    assert [r["temperature_c"] for r in find_darks(http, temperature_c=-20.0, **kwargs)] == [-20.0]
+    assert find_darks(http, temperature_c=5.0, **kwargs) == []

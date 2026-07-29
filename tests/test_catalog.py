@@ -8,6 +8,7 @@ from darkroom.catalog import (
     find_darks,
     find_flats,
     find_flat_darks,
+    dark_temp_ties,
 )
 from darkroom.catalog_client import LocalBackend
 
@@ -162,6 +163,28 @@ def test_query_sessions_sharpless_normalised(tmp_path):
         assert len(rows) == 1, f"{spelling!r} failed to match"
 
 
+def insert_dark(
+    db: Path,
+    set_id: str,
+    *,
+    camera: str = "ZWO ASI585MC Pro",
+    gain: int = 200,
+    exposure_sec: float = 180.0,
+    temperature_c: float | None,
+    is_master: int = 0,
+    capture_date: str = "2026-02-01",
+    folder_path: str = "00_Calibration/Darks/ZWOASI585MCPro",
+    frame_count: int = 30,
+) -> None:
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "INSERT INTO calibration_sets VALUES (?, 'Dark', ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?)",
+        (set_id, camera, gain, exposure_sec, temperature_c, capture_date, folder_path, frame_count, is_master),
+    )
+    conn.commit()
+    conn.close()
+
+
 def test_find_darks(tmp_path):
     db = make_db(tmp_path)
     rows = find_darks(LocalBackend(db), camera="ZWO ASI585MC Pro", gain=200, exposure_sec=180.0)
@@ -173,6 +196,126 @@ def test_find_darks_no_match(tmp_path):
     db = make_db(tmp_path)
     rows = find_darks(LocalBackend(db), camera="ZWO ASI585MC Pro", gain=200, exposure_sec=60.0)
     assert rows == []
+
+
+def test_find_darks_temperature_prefers_exact_setpoint(tmp_path):
+    db = make_db(tmp_path)
+    insert_dark(db, "Dark_master_-20", temperature_c=-20.0, is_master=1)
+    insert_dark(db, "Dark_master_-10", temperature_c=-10.0, is_master=1)
+    rows = find_darks(
+        LocalBackend(db), camera="ZWO ASI585MC Pro", gain=200, exposure_sec=180.0,
+        temperature_c=-20.0,
+    )
+    assert rows[0]["set_id"] == "Dark_master_-20"
+    # B11: the -10C master must be gone, not merely outranked — the bug was
+    # that every master in the ladder got symlinked alongside the right one.
+    assert "Dark_master_-10" not in {r["set_id"] for r in rows}
+
+
+def test_find_darks_temperature_uncooled_ladder_nearest_wins(tmp_path):
+    db = make_db(tmp_path)
+    insert_dark(db, "Dark_15", temperature_c=15.0, is_master=1)
+    insert_dark(db, "Dark_20", temperature_c=20.0, is_master=1)
+    insert_dark(db, "Dark_25", temperature_c=25.0, is_master=1)
+    rows = find_darks(
+        LocalBackend(db), camera="ZWO ASI585MC Pro", gain=200, exposure_sec=180.0,
+        temperature_c=22.0,
+    )
+    assert rows[0]["temperature_c"] == 20.0
+
+
+def test_find_darks_temperature_outside_tolerance_returns_empty(tmp_path):
+    # distinct exposure_sec keeps the base fixture's -20.0C row (exposure_sec=180.0)
+    # from matching the query itself
+    db = make_db(tmp_path)
+    insert_dark(db, "Dark_15", exposure_sec=75.0, temperature_c=15.0, is_master=1)
+    insert_dark(db, "Dark_20", exposure_sec=75.0, temperature_c=20.0, is_master=1)
+    rows = find_darks(
+        LocalBackend(db), camera="ZWO ASI585MC Pro", gain=200, exposure_sec=75.0,
+        temperature_c=-20.0,
+    )
+    assert rows == []
+
+
+def test_find_darks_temperature_explicit_tolerance_narrows_results(tmp_path):
+    db = make_db(tmp_path)
+    insert_dark(db, "Dark_18", temperature_c=18.0, is_master=1)
+    insert_dark(db, "Dark_21", temperature_c=21.0, is_master=1)
+    rows_default = find_darks(
+        LocalBackend(db), camera="ZWO ASI585MC Pro", gain=200, exposure_sec=180.0,
+        temperature_c=18.0,
+    )
+    assert len(rows_default) == 2
+    rows_narrow = find_darks(
+        LocalBackend(db), camera="ZWO ASI585MC Pro", gain=200, exposure_sec=180.0,
+        temperature_c=18.0, temp_tolerance=2.0,
+    )
+    assert len(rows_narrow) == 1
+    assert rows_narrow[0]["temperature_c"] == 18.0
+
+
+def test_find_darks_null_temperature_is_fallback_not_a_miss(tmp_path):
+    db = make_db(tmp_path)
+    insert_dark(db, "Dark_null", temperature_c=None, is_master=1)
+    insert_dark(db, "Dark_22", temperature_c=22.0, is_master=1)
+    rows = find_darks(
+        LocalBackend(db), camera="ZWO ASI585MC Pro", gain=200, exposure_sec=180.0,
+        temperature_c=20.0,
+    )
+    assert len(rows) == 2
+    assert rows[0]["temperature_c"] == 22.0
+    assert any(r["temperature_c"] is None for r in rows)
+
+
+def test_find_darks_null_temperature_matches_regardless_of_tolerance(tmp_path):
+    db = make_db(tmp_path)
+    insert_dark(db, "Dark_null_60s", exposure_sec=60.0, temperature_c=None, is_master=1)
+    rows = find_darks(
+        LocalBackend(db), camera="ZWO ASI585MC Pro", gain=200, exposure_sec=60.0,
+        temperature_c=-99.0,
+    )
+    assert len(rows) == 1
+    assert rows[0]["temperature_c"] is None
+
+
+def test_find_darks_masters_rank_before_nearer_raw(tmp_path):
+    db = make_db(tmp_path)
+    insert_dark(db, "Dark_raw_exact", exposure_sec=90.0, temperature_c=-20.0, is_master=0)
+    insert_dark(db, "Dark_master_off", exposure_sec=90.0, temperature_c=-18.0, is_master=1)
+    rows = find_darks(
+        LocalBackend(db), camera="ZWO ASI585MC Pro", gain=200, exposure_sec=90.0,
+        temperature_c=-20.0,
+    )
+    assert rows[0]["is_master"]
+
+
+def test_find_darks_temperature_none_skips_matching(tmp_path):
+    db = make_db(tmp_path)
+    insert_dark(db, "Dark_a", exposure_sec=45.0, temperature_c=-20.0, is_master=1)
+    insert_dark(db, "Dark_b", exposure_sec=45.0, temperature_c=15.0, is_master=1)
+    insert_dark(db, "Dark_c", exposure_sec=45.0, temperature_c=40.0, is_master=1)
+    rows = find_darks(
+        LocalBackend(db), camera="ZWO ASI585MC Pro", gain=200, exposure_sec=45.0,
+    )
+    assert len(rows) == 3
+
+
+def test_dark_temp_ties_ambiguous_between_two_setpoints():
+    rows = [{"temperature_c": 20.0}, {"temperature_c": 25.0}]
+    result = dark_temp_ties(rows, 22.5)
+    assert len(result) == 2
+
+
+def test_dark_temp_ties_clear_nearest_returns_empty():
+    rows = [{"temperature_c": 20.0}, {"temperature_c": 25.0}]
+    result = dark_temp_ties(rows, 21.0)
+    assert result == []
+
+
+def test_dark_temp_ties_same_temperature_is_not_ambiguous():
+    rows = [{"temperature_c": -20.0}, {"temperature_c": -20.0}]
+    result = dark_temp_ties(rows, -20.0)
+    assert result == []
 
 
 def test_find_flats_one_match(tmp_path):

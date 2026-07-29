@@ -8,6 +8,8 @@ from itertools import groupby
 from pathlib import Path
 
 from darkroom.catalog import (
+    DEFAULT_DARK_TEMP_TOLERANCE,
+    dark_temp_ties,
     find_bias,
     find_darks,
     find_flat_darks,
@@ -122,6 +124,37 @@ def _resolve_flat(
     return cal_rows[0]
 
 
+def _no_darks_note(
+    backend: CatalogBackend, s0: dict, *,
+    session_temp: float | None, tolerance: float, matched_any: bool,
+) -> str:
+    """Explain an empty Darks/ — a near-miss on temperature reads very differently
+    from having no darks at that gain/exposure at all, and the fix differs too
+    (raise the tolerance vs. go and shoot darks). Worth the second query: 55 of
+    the 201 live sessions with any master at their gain/exposure currently land
+    outside ±3C, so this line is what the user actually sees.
+    """
+    if matched_any:
+        return "matched sets have no files on disk"
+    if session_temp is None:
+        return "no darks found"
+    masters = [
+        r for r in find_darks(
+            backend, camera=s0["camera"], gain=s0["gain"], exposure_sec=s0["exposure_sec"],
+        )
+        if r.get("is_master") and r["temperature_c"] is not None
+    ]
+    if not masters:
+        return "no darks found at this gain/exposure"
+    nearest = min(masters, key=lambda r: abs(r["temperature_c"] - session_temp))
+    delta = abs(nearest["temperature_c"] - session_temp)
+    return (
+        f"no darks within ±{tolerance:g}C of {session_temp:g}C — nearest master is"
+        f" {nearest['temperature_c']:g}C, {delta:g}C away;"
+        f" use --dark-temp-tolerance {delta:g} to accept it"
+    )
+
+
 def _build_night(
     sessions: list[dict],
     *,
@@ -129,6 +162,7 @@ def _build_night(
     backend: CatalogBackend,
     session_dir: Path,
     flat_window: int,
+    dark_temp_tolerance: float = DEFAULT_DARK_TEMP_TOLERANCE,
 ) -> None:
     """Build one SESSION_N directory from one or more sessions on the same night."""
     session_dir.mkdir(parents=True, exist_ok=True)
@@ -142,22 +176,47 @@ def _build_night(
         count = make_symlinks(files, dest)
         print(f"  Lights/FILTER_{filter_name}/    {count} symlinks")
 
-    # Darks — camera/gain/exposure from first session (all sessions same night share params)
+    # Darks — camera/gain/exposure/temperature from first session (all sessions
+    # same night share params)
     s0 = sessions[0]
+    session_temp = s0.get("temperature_c")
     dark_rows = find_darks(
-        backend, camera=s0["camera"], gain=s0["gain"], exposure_sec=s0["exposure_sec"]
+        backend, camera=s0["camera"], gain=s0["gain"], exposure_sec=s0["exposure_sec"],
+        temperature_c=session_temp, temp_tolerance=dark_temp_tolerance,
     )
     master_dark_rows = [r for r in dark_rows if r.get("is_master")]
     dark_count = 0
-    for row in master_dark_rows or dark_rows:
-        if row.get("is_master"):
-            master_path = output / row["folder_path"]
-            files = [master_path] if master_path.exists() else []
+    if master_dark_rows:
+        # Exactly one master (B11). This used to loop, symlinking every master
+        # find_darks returned — which for an uncooled ladder meant handing WBPP
+        # five masters spanning 15..35C at once.
+        best = master_dark_rows[0]
+        if session_temp is None:
+            print("  Note: session has no recorded temperature — taking the first dark master.")
         else:
+            tied = dark_temp_ties(master_dark_rows, session_temp)
+            if tied:
+                temps = ", ".join(f"{r['temperature_c']:g}C" for r in tied)
+                print(
+                    f"  WARNING: session at {session_temp:g}C sits exactly between dark"
+                    f" masters at {temps} — neither is nearer. Taking"
+                    f" {best['temperature_c']:g}C."
+                )
+        master_path = output / best["folder_path"]
+        files = [master_path] if master_path.exists() else []
+        dark_count = make_symlinks(files, session_dir / "Darks")
+    else:
+        # No master at this temperature — fall back to raw subs, where B5's
+        # multi-row behaviour still applies (raws are combined, not chosen).
+        for row in dark_rows:
             files = discover_darks(output / row["folder_path"], exposure_sec=s0["exposure_sec"])
-        dark_count += make_symlinks(files, session_dir / "Darks")
+            dark_count += make_symlinks(files, session_dir / "Darks")
     if dark_count == 0:
-        print("  Darks/                    0 symlinks  [no darks found]")
+        note = _no_darks_note(
+            backend, s0, session_temp=session_temp,
+            tolerance=dark_temp_tolerance, matched_any=bool(dark_rows),
+        )
+        print(f"  Darks/                    0 symlinks  [{note}]")
     else:
         print(f"  Darks/                    {dark_count} symlinks")
 
@@ -282,6 +341,7 @@ def build_wbpp_sessions(
     target_name: str,
     overwrite: bool = False,
     flat_window: int = 3,
+    dark_temp_tolerance: float = DEFAULT_DARK_TEMP_TOLERANCE,
 ) -> None:
     """Build SESSION_N dirs under wbpp_root/<slug>/ for the given (resolved) rows."""
     slug = target_slug(target_name)
@@ -310,6 +370,7 @@ def build_wbpp_sessions(
             backend=backend,
             session_dir=session_dir,
             flat_window=flat_window,
+            dark_temp_tolerance=dark_temp_tolerance,
         )
         print(f"\nIn PixInsight: WBPP → Add Directory → select {session_dir}/")
 
@@ -326,6 +387,7 @@ def cmd_prep(
     session_id: str | None = None,
     overwrite: bool = False,
     flat_window: int = 3,
+    dark_temp_tolerance: float = DEFAULT_DARK_TEMP_TOLERANCE,
 ) -> None:
     """Resolve --target/--date(s)/--session, then build SESSION_N dirs."""
     target_name, rows = _resolve_rows(
@@ -339,13 +401,15 @@ def cmd_prep(
         target_name=target_name,
         overwrite=overwrite,
         flat_window=flat_window,
+        dark_temp_tolerance=dark_temp_tolerance,
     )
 
 
 # ── interactive picker ───────────────────────────────────────────────────────
 
 def _run_interactive(
-    backend: CatalogBackend, *, output: Path, wbpp_root: Path, overwrite: bool, flat_window: int
+    backend: CatalogBackend, *, output: Path, wbpp_root: Path, overwrite: bool,
+    flat_window: int, dark_temp_tolerance: float = DEFAULT_DARK_TEMP_TOLERANCE,
 ) -> None:
     """Prompt for a target + nights, confirm, then build SESSION_N dirs."""
     import questionary  # lazy: only the interactive path needs the dependency
@@ -385,6 +449,7 @@ def _run_interactive(
         target_name=target_name,
         overwrite=overwrite,
         flat_window=flat_window,
+        dark_temp_tolerance=dark_temp_tolerance,
     )
 
 
@@ -418,6 +483,7 @@ def run(args: argparse.Namespace) -> None:
             wbpp_root=wbpp_root,
             overwrite=args.overwrite,
             flat_window=args.flat_window,
+            dark_temp_tolerance=args.dark_temp_tolerance,
         )
         return
 
@@ -430,6 +496,7 @@ def run(args: argparse.Namespace) -> None:
         session_id=args.session,
         overwrite=args.overwrite,
         flat_window=args.flat_window,
+        dark_temp_tolerance=args.dark_temp_tolerance,
     )
 
 
@@ -449,6 +516,10 @@ def add_subparser(subparsers) -> None:
                    help="Clear and regenerate target WBPP dir before creating symlinks")
     p.add_argument("--flat-window", type=int, default=3, metavar="DAYS",
                    help="Match flats within ±DAYS of the session date (default: 3)")
+    p.add_argument("--dark-temp-tolerance", type=float,
+                   default=DEFAULT_DARK_TEMP_TOLERANCE, metavar="DEGREES",
+                   help="Match darks within ±DEGREES of the session temperature, "
+                        f"nearest first (default: {DEFAULT_DARK_TEMP_TOLERANCE:g})")
     p.add_argument("--archive", metavar="PATH",
                    help="Archive root (env: DARKROOM_ARCHIVE)")
     p.add_argument("--catalog", metavar="PATH",
