@@ -34,6 +34,43 @@ cp darkroom.toml.example darkroom.toml   # then edit paths
 The `darkroom` console script is registered via `[project.scripts]`. Run it as
 `uv run darkroom …` (or activate the venv).
 
+### If you also want a bare `darkroom` on PATH
+
+```bash
+uv tool install --editable .
+```
+
+**Re-run that after every dependency change**, with `--force`:
+
+```bash
+uv tool install --force --editable .
+```
+
+An editable tool install tracks your *source* but pins its *dependencies* at
+install time, in a venv of its own — so bare `darkroom` and `uv run darkroom`
+share code while silently diverging on what's installed alongside it. The
+failure is confusing, because it doesn't look like a stale install:
+
+- Everything that only needs already-installed packages keeps working, so
+  `ingest scan`/`commit` behave normally.
+- Optional dependencies are imported **lazily** and on purpose — `questionary`
+  is pulled in inside the prompt functions so `picker`/`ingest_review` stay
+  importable without a TTY. So the module imports fine and nothing fails until
+  the first prompt actually renders.
+
+Net effect: `darkroom ingest review` and `darkroom wbpp`'s picker die with
+`ModuleNotFoundError: No module named 'questionary'` at the moment they try to
+ask you something, while every other verb looks healthy. Check with:
+
+```bash
+which -a darkroom                                    # tool install, or the venv?
+~/.local/share/uv/tools/darkroom/bin/python -c "import questionary"
+```
+
+Scripts should call the venv binary by absolute path
+(`/path/to/darkroom/.venv/bin/darkroom`) rather than relying on PATH — the CCC
+postflight does this, which is why it is immune to the above.
+
 ## Configuration
 
 Every subcommand needs a catalog path; ingest/finish also need an archive root.
