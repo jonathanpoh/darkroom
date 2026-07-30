@@ -1,3 +1,4 @@
+import argparse
 import pytest
 from datetime import date
 from pathlib import Path
@@ -12,7 +13,7 @@ from darkroom.finish import (
     _list_session_dirs, _confirm_and_delete, _resolve_session_ids,
     _mark_sessions_processed, cmd_finish,
 )
-from darkroom.prep import _build_night, _no_darks_note
+from darkroom.prep import _build_night, _no_darks_note, add_subparser as prep_add_subparser
 
 
 def touch(p: Path, content: bytes = b"") -> Path:
@@ -711,6 +712,16 @@ def test_no_darks_note_suggests_tolerance_for_raw_only_near_miss(tmp_path):
     assert "nearest raw set is" in note
     assert "--dark-temp-tolerance" in note
     assert "no darks found at this gain/exposure" not in note
+
+
+def test_dark_temp_tolerance_rejects_negative(capsys):
+    parser = argparse.ArgumentParser()
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    prep_add_subparser(sub)
+    with pytest.raises(SystemExit):
+        parser.parse_args(["wbpp", "--dark-temp-tolerance", "-5"])
+    assert "non-negative" in capsys.readouterr().err
+
 
 # ── dry-run previews session resolution ─────────────────────────────────────
 

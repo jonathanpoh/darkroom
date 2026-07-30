@@ -526,6 +526,16 @@ def run(args: argparse.Namespace) -> None:
     )
 
 
+def _nonnegative_float(value: str) -> float:
+    """Reject negative values: a negative tolerance silently matches only
+    NULL-temperature darks (abs(diff) <= negative is never true), producing
+    an empty Darks/ instead of an argument error."""
+    f = float(value)
+    if f < 0:
+        raise argparse.ArgumentTypeError(f"must be a non-negative number of degrees, got {value}")
+    return f
+
+
 def add_subparser(subparsers) -> None:
     p = subparsers.add_parser(
         "wbpp",
@@ -542,7 +552,7 @@ def add_subparser(subparsers) -> None:
                    help="Clear and regenerate target WBPP dir before creating symlinks")
     p.add_argument("--flat-window", type=int, default=3, metavar="DAYS",
                    help="Match flats within ±DAYS of the session date (default: 3)")
-    p.add_argument("--dark-temp-tolerance", type=float,
+    p.add_argument("--dark-temp-tolerance", type=_nonnegative_float,
                    default=DEFAULT_DARK_TEMP_TOLERANCE, metavar="DEGREES",
                    help="Match darks within ±DEGREES of the session temperature, "
                         f"nearest first (default: {DEFAULT_DARK_TEMP_TOLERANCE:g})")
