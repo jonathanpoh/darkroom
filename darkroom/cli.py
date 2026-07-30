@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import argparse
 
-from darkroom import catalog_cli, finish, ingest, prep
+from darkroom import catalog_cli, finish, ingest, logs, prep
 from darkroom.triage import cli as triage_cli
 
 
@@ -19,6 +19,7 @@ def main() -> None:
     ingest.add_subparser(sub)
     prep.add_subparser(sub)
     finish.add_subparser(sub)
+    logs.add_subparser(sub)
     triage_cli.add_subparser(sub)
 
     args = parser.parse_args()
