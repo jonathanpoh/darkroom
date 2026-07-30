@@ -162,11 +162,16 @@ header {
 
 details.rig { border-bottom: 1px solid var(--hairline); }
 .rigsum {
-  display: grid; grid-template-columns: 26px 270px 170px 1fr 90px 104px; gap: 16px; align-items: center;
+  display: grid; grid-template-columns: 26px 270px 170px 1fr 140px 104px; gap: 16px; align-items: center;
   padding: 12px 10px; cursor: pointer; list-style: none;
 }
 .rigsum::-webkit-details-marker { display: none; }
-.rigsum:hover { background: var(--panel); }
+/* The rig header carries a panel fill so it reads as a header rather than
+   another data row — with the Cal chips and the raw-hours suffix the table
+   below it got dense enough that a hairline alone stopped separating them,
+   most visibly on targets with four or five rigs. Hover steps up one rung. */
+.rigsum { background: var(--panel); }
+.rigsum:hover { background: var(--panel-hi); }
 .rigsum .tri { color: var(--ink-3); transition: transform .12s; display: block;
                justify-self: center;
                line-height: 1; align-self: center; }
@@ -186,13 +191,22 @@ details[open] .rigsum .strip { visibility: hidden; }
 .gword { font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); }
 .gword.deep { color: var(--safelight); }
 
-.nightcols { grid-template-columns: 36px 100px 150px 150px 110px 1fr 76px; }
+/* Filter gives up 30px ("L-Extreme" never needed 150) to pay for the wider
+   Hours cell, so the 1fr Site track keeps enough room for "Santa Susana" plus
+   its weight badge inside .wrap's 1100px measure. */
+.nightcols { grid-template-columns: 36px 100px 120px 150px 110px 1fr 68px 130px; }
 .night { align-items: center; cursor: default; }
 .night:hover { background: none; }
 .night .fchip { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
 .night .fchip i { width: 9px; height: 9px; border-radius: 2px; flex: none; }
 .night .exp { color: var(--ink-3); font-size: 12px; font-variant-numeric: tabular-nums; }
 .night .h { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink); }
+/* hoursHTML emits <b> for the rig summary's sake (.hnum b is the emphasis
+   there); on a night row the figure stays the same weight it always was. */
+.night .h b { font-weight: inherit; color: inherit; }
+/* raw hours ride along with the home-equivalent figure — same grey as the site
+   name, so the weighted number stays the one the eye lands on. */
+.rawh { color: var(--ink-3); font-size: 11.5px; }
 .night .date { font-variant-numeric: tabular-nums; }
 .night .date a { color: inherit; text-decoration: none; }
 .night .date a:hover { color: var(--safelight-hi); text-decoration: underline; }
@@ -211,6 +225,41 @@ details[open] .rigsum .strip { visibility: hidden; }
 .statelabel { font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); }
 .statelabel.processed { color: var(--safelight); }
 .statelabel.in_progress { color: var(--ink-2); }
+
+/* ── calibration match (F3) ──────────────────
+   Same outlined micro-pill recipe as .wbadge above, one per calibration class.
+
+   Deliberately no --safelight here. On this row that colour means *doneness* —
+   the grease-pencil mark and the PROCESSED label — and a missing flat has
+   nothing to do with how far along a target is; borrowing it made the two read
+   as one scale. So the four states are a brightness ladder instead: matched is
+   lit, missing is plain dim, "not used" fades further, and "can't tell" is the
+   only one that changes the border, to dashed.
+
+   `missing` and `na` sitting close together on that ladder is intended, not a
+   contrast bug to fix later: both mean the frames won't be in the WBPP input and
+   the same manual step follows — go and shoot them, or match and copy them in by
+   hand. Only `ok` needs to be unmistakable from the rest. */
+.caldots { display: inline-flex; align-items: center; gap: 4px; }
+.caldot {
+  font-style: normal; font-size: 9.5px; letter-spacing: .06em;
+  line-height: 15px; min-width: 15px; padding: 0 3px; text-align: center;
+  border: 1px solid var(--hairline); border-radius: 2px;
+  color: var(--ink-3); cursor: help; flex: none;
+}
+.caldot.ok { color: var(--ink); border-color: var(--ink-3); }
+.caldot.missing { color: var(--ink-3); border-color: var(--hairline); }
+.caldot.na { opacity: .35; }
+.caldot.unknown { border-style: dashed; }
+
+/* session detail page — the verbose form of the same match */
+.calblock .calrow > span { display: flex; flex-direction: column; gap: 2px; }
+.calstatus { font-size: 11px; color: var(--ink); }
+.calstatus.missing { color: var(--safelight); }
+.calstatus.na, .calstatus.unknown { color: var(--ink-3); }
+.caldetail { font-size: 11px; color: var(--ink-2); }
+.calset { font-size: 10.5px; color: var(--ink-3); word-break: break-all; }
+.calblock .footnote { margin-top: 14px; }
 
 /* ── cleanup tease + footer ──────────────── */
 .cleanup {

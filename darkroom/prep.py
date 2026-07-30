@@ -9,12 +9,14 @@ from pathlib import Path
 
 from darkroom.catalog import (
     DEFAULT_DARK_TEMP_TOLERANCE,
+    DEFAULT_FLAT_WINDOW_DAYS,
     dark_temp_ties,
     find_bias,
     find_darks,
     find_flat_darks,
     find_flats,
-    flat_offset_days,
+    flat_offset_label,
+    nearest_dark,
     query_all_sessions,
 )
 from darkroom.catalog_client import CatalogBackend, resolve_backend
@@ -79,20 +81,6 @@ def _overwrite_target_dir(target_dir: Path) -> None:
     clear_sessions(target_dir)
 
 
-def _flat_offset_label(capture_date: str, obs_date: str) -> str:
-    """e.g. '+1 day (morning after)', 'same evening', '-2 days'.
-
-    Makes the ranking checkable at a glance: the whole point of the flat-morning
-    rule is that ±1 day are *not* equivalent, which a bare date doesn't show.
-    """
-    delta = flat_offset_days(capture_date, obs_date)
-    if delta == 0:
-        return "same evening"
-    if delta == 1:
-        return "+1 day (morning after)"
-    return f"{delta:+d} days"
-
-
 def _resolve_flat(
     cal_rows: list[dict], filter_name: str, obs_date: str, window_days: int
 ) -> dict | None:
@@ -112,7 +100,7 @@ def _resolve_flat(
     print(f"  Multiple flat sets found for {filter_name} near {obs_date}:")
     for i, row in enumerate(cal_rows, 1):
         print(f"    {i}) {row['capture_date']} ({row['frame_count']} frames)"
-              f"  {_flat_offset_label(row['capture_date'], obs_date)}"
+              f"  {flat_offset_label(row['capture_date'], obs_date)}"
               f"{' ← default' if i == 1 else ''}")
     if not interactive:
         print("  Non-interactive: auto-selecting the best match.")
@@ -138,15 +126,12 @@ def _no_darks_note(
         return "matched sets have no files on disk"
     if session_temp is None:
         return "no darks found"
-    rows = [
-        r for r in find_darks(
-            backend, camera=s0["camera"], gain=s0["gain"], exposure_sec=s0["exposure_sec"],
-        )
-        if r["temperature_c"] is not None
-    ]
-    if not rows:
+    nearest = nearest_dark(
+        backend, camera=s0["camera"], gain=s0["gain"],
+        exposure_sec=s0["exposure_sec"], temperature_c=session_temp,
+    )
+    if nearest is None:
         return "no darks found at this gain/exposure"
-    nearest = min(rows, key=lambda r: abs(r["temperature_c"] - session_temp))
     delta = abs(nearest["temperature_c"] - session_temp)
     kind = "master" if nearest.get("is_master") else "raw set"
     return (
@@ -550,8 +535,10 @@ def add_subparser(subparsers) -> None:
     p.add_argument("--session", metavar="ID", help="Select single session by catalog ID")
     p.add_argument("--overwrite", action="store_true",
                    help="Clear and regenerate target WBPP dir before creating symlinks")
-    p.add_argument("--flat-window", type=int, default=3, metavar="DAYS",
-                   help="Match flats within ±DAYS of the session date (default: 3)")
+    p.add_argument("--flat-window", type=int, default=DEFAULT_FLAT_WINDOW_DAYS,
+                   metavar="DAYS",
+                   help="Match flats within ±DAYS of the session date "
+                        f"(default: {DEFAULT_FLAT_WINDOW_DAYS})")
     p.add_argument("--dark-temp-tolerance", type=_nonnegative_float,
                    default=DEFAULT_DARK_TEMP_TOLERANCE, metavar="DEGREES",
                    help="Match darks within ±DEGREES of the session temperature, "

@@ -1129,3 +1129,115 @@ def test_queue_targets_rename_partial_failure_lists_per_session_errors(tmp_path)
     assert "renamed 1 session of IC 4604_1-1" in resp.text
     assert sidA in resp.text
     assert "failed to merge" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# calibration-match indicator (F3)
+# ---------------------------------------------------------------------------
+
+
+def _calibrated(db_path, camera="ZWOASI585MCPro"):
+    """A dark, a flat and a flat dark that all match _session()'s defaults."""
+    upsert_calibration_set(db_path, _cal_set(
+        "Dark_set", frame_type="Dark", camera=camera, ota=None, filter=None,
+        exposure_sec=180.0, capture_date="2026-02-01",
+        folder_path="00_Calibration/Darks/" + camera,
+    ))
+    upsert_calibration_set(db_path, _cal_set(
+        "Flat_set", frame_type="Flat", camera=camera, capture_date="2026-02-20",
+    ))
+    upsert_calibration_set(db_path, _cal_set(
+        "FlatDark_set", frame_type="FlatDark", camera=camera, ota=None, filter=None,
+        capture_date="2026-02-20",
+        folder_path="00_Calibration/FlatDarks/" + camera,
+    ))
+
+
+def test_target_page_embeds_calibration_per_night(tmp_path):
+    client, db_path = make_client(tmp_path)
+    upsert_session(db_path, _session("M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"))
+    _calibrated(db_path)
+    login(client)
+
+    night = _embedded_data(client.get("/targets/M%2081").text)[0]["nights"][0]
+    assert night["cal"]["darks"]["status"] == "ok"
+    assert night["cal"]["flats"]["status"] == "ok"
+    assert night["cal"]["flat_darks"]["status"] == "ok"
+
+
+def test_target_page_flags_missing_darks(tmp_path):
+    client, db_path = make_client(tmp_path)
+    upsert_session(db_path, _session("M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"))
+    _calibrated(db_path)
+    # Same camera, wrong exposure — "missing", not "not used".
+    conn = catalog_db.open_db(db_path)
+    try:
+        conn.execute(
+            "UPDATE calibration_sets SET exposure_sec = 60.0 WHERE frame_type = 'Dark'"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    login(client)
+
+    night = _embedded_data(client.get("/targets/M%2081").text)[0]["nights"][0]
+    assert night["cal"]["darks"]["status"] == "missing"
+
+
+def test_overview_does_not_compute_calibration(tmp_path):
+    """The overview shows no calibration state, so it shouldn't pay to match
+    every session on the page."""
+    client, db_path = make_client(tmp_path)
+    upsert_session(db_path, _session("M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"))
+    _calibrated(db_path)
+    login(client)
+
+    assert "cal" not in _embedded_data(client.get("/").text)[0]["nights"][0]
+
+
+def test_build_aggregate_shape_unchanged_without_cal_rows(tmp_path):
+    """`cal_rows` is optional the same way `sites` is — fixtures and callers
+    that don't pass it keep the previous night dict exactly."""
+    rows = [_session("M81_20260219_FRA400_ZWOASI585MCPro_L-Pro")]
+    rows[0]["processed_state"] = "unprocessed"
+    assert "cal" not in _build_aggregate(rows)[0]["nights"][0]
+
+
+def test_session_page_renders_calibration_panel(tmp_path):
+    client, db_path = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db_path, _session(sid))
+    _calibrated(db_path)
+    login(client)
+
+    html = client.get(f"/sessions/{sid}").text
+    assert "Calibration match" in html
+    assert "Flat_set" in html  # the matched set is named, not just a status
+    assert "+1 day (morning after)" in html
+
+
+def test_session_page_calibration_survives_a_validation_error(tmp_path):
+    client, db_path = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db_path, _session(sid))
+    _calibrated(db_path)
+    login(client)
+
+    resp = client.post(f"/sessions/{sid}", data={"gain": "not-a-number"})
+    assert resp.status_code == 400
+    assert "Calibration match" in resp.text
+
+
+def test_unknown_ota_session_is_not_reported_as_calibrated(tmp_path):
+    """An Unknown OTA can't be matched against flats — the indicator must say
+    so rather than matching every scope's flats."""
+    client, db_path = make_client(tmp_path)
+    upsert_session(
+        db_path,
+        _session("M81_20260219_Unknown_ZWOASI585MCPro_L-Pro", ota="Unknown"),
+    )
+    _calibrated(db_path)
+    login(client)
+
+    night = _embedded_data(client.get("/targets/M%2081").text)[0]["nights"][0]
+    assert night["cal"]["flats"]["status"] == "unknown"

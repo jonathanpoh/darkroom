@@ -79,34 +79,87 @@ function hoursOf(nights) {
 function stripHTML(hours, totalMax) {
   const total = Object.values(hours).reduce((a, b) => a + b, 0);
   const pct = totalMax ? (total / totalMax) * 100 : 100;
-  const segs = Object.entries(hours).sort((a, b) => a[0].localeCompare(b[0])).map(([f, h]) =>
-    `<div class="seg" data-tip="<b>${fname(f)}</b> · ${h.toFixed(1)}h" style="flex:${h} ${h} 0; background:${fcolor(f)}"></div>`
-  ).join("");
+  // Grow factors are each filter's *share* of the strip, scaled to sum to 100 —
+  // not the raw hours. Raw hours as flex-grow silently under-fills whenever the
+  // total is below 1h: flex distributes only `sum(grow)` of the free space when
+  // that sum is < 1, so a 0.95h rig drew a bar 95% of its cell and looked
+  // misaligned against every rig beside it.
+  const segs = Object.entries(hours).sort((a, b) => a[0].localeCompare(b[0])).map(([f, h]) => {
+    const grow = total > 0 ? (h / total) * 100 : 0;
+    return `<div class="seg" data-tip="<b>${fname(f)}</b> · ${h.toFixed(1)}h" style="flex:${grow} 1 0; background:${fcolor(f)}"></div>`;
+  }).join("");
   return `<div class="strip" style="width:${Math.max(pct, 4)}%">${segs}</div>`;
 }
 
 /* doneness gauge: how much integration is banked (per rig, or per target in
-   the overview). <2h needs more data · 5–10h workable · 20h+ good.
-   sqrt scale, 30h = full. */
+   the overview). sqrt scale, 30h = full.
+
+   One table for the ladder: [upper bound, word, colour, modifier, range label].
+   The footnotes describing it are generated from `zoneLadder()` below rather
+   than written out by hand — they used to say "5–10h workable" and omit "solid"
+   entirely, neither of which was ever true of these thresholds. */
 const GAUGE_MAX = 30;
-function gaugeHTML(h, withWord = true, rawH) {
-  const zone = h < 2 ? ["needs data", "var(--ink-3)", ""] :
-               h < 10 ? ["workable", "var(--ink-2)", ""] :
-               h < 20 ? ["solid", "var(--ink)", ""] :
-                        ["deep", "var(--safelight)", "deep"];
+const ZONES = [
+  [2,        "needs data", "var(--ink-3)",     "",     "under 2h"],
+  [10,       "workable",   "var(--ink-2)",     "",     "2–10h"],
+  [20,       "solid",      "var(--ink)",       "",     "10–20h"],
+  [Infinity, "deep",       "var(--safelight)", "deep", "20h+"],
+];
+const zoneOf = h => ZONES.find(([max]) => h < max);
+const zoneLadder = () => ZONES.map(([, word, , , range]) => `${range} ${word}`).join(" · ");
+
+/* `showNumbers` is off wherever the hours are already on the row (the target
+   page's rig summary, since hoursHTML puts them there); on the overview the
+   tooltip is the only place the weighted figure appears, so it keeps them. */
+function gaugeHTML(h, withWord = true, rawH, showNumbers = true) {
+  const [, word, colour, mod, range] = zoneOf(h);
   const w = Math.min(Math.sqrt(h / GAUGE_MAX), 1) * 100;
   const tick = v => `<i class="gtick" style="left:${Math.sqrt(v / GAUGE_MAX) * 100}%"></i>`;
   const weighted = rawH !== undefined && Math.abs(h - rawH) > 0.05;
-  const tip = weighted
-    ? `<b>${h.toFixed(1)}h</b> home-equivalent (${rawH.toFixed(1)}h raw) — ${zone[0]}`
-    : `<b>${h.toFixed(1)}h</b> — ${zone[0]}`;
+  const tip = !showNumbers
+    ? `<b>${word}</b> — ${range}`
+    : weighted
+      ? `<b>${h.toFixed(1)}h</b> home-equivalent (${rawH.toFixed(1)}h raw) — ${word}`
+      : `<b>${h.toFixed(1)}h</b> — ${word}`;
   return `<span class="gauge" data-tip="${tip}">
-    <span class="gtrack"><span class="gfill" style="width:${w}%; background:${zone[1]}"></span>${tick(2)}${tick(10)}${tick(20)}</span>
-    ${withWord ? `<span class="gword ${zone[2]}">${zone[0]}</span>` : ""}</span>`;
+    <span class="gtrack"><span class="gfill" style="width:${w}%; background:${colour}"></span>${tick(2)}${tick(10)}${tick(20)}</span>
+    ${withWord ? `<span class="gword ${mod}">${word}</span>` : ""}</span>`;
+}
+
+/* Hours, weighted-first: a night under a dark site banks more usable depth than
+   the clock says, and that — not the raw figure — is what decides whether the
+   target needs another session. The raw hours stay alongside in the dimmer grey,
+   and only when the site's sky quality actually moves the number (same 0.05h
+   threshold the gauge uses), so home sessions still read as a bare "5.5h". */
+function hoursHTML(rawH, weightedH, cls = "h") {
+  const wh = weightedH ?? rawH;
+  const raw = Math.abs(wh - rawH) > 0.05 ? ` <span class="rawh">(${rawH.toFixed(1)}h raw)</span>` : "";
+  return `<span class="${cls}"><b>${wh.toFixed(1)}</b>h${raw}</span>`;
 }
 
 const nameCell = (t) =>
   `<span><span class="tname display">${t.target}</span>${t.cname ? `<span class="cname">${t.cname}</span>` : ""}</span>`;
+
+/* ── calibration match (F3) ────────────────────
+   One letter-chip per calibration class, coloured by whether `wbpp` would find
+   a matching set. Server-computed (darkroom.catalog.match_session_calibration)
+   so the chips and the prep run agree; `detail` carries the why, via the shared
+   data-tip tooltip. */
+const CAL_CLASSES = [["darks", "D", "Darks"], ["flats", "F", "Flats"], ["flat_darks", "FD", "Flat darks"]];
+const CAL_WORD = { ok: "matched", missing: "missing", na: "not used", unknown: "can't tell" };
+/* data-tip is assigned with innerHTML and deliberately allows <b>, so anything
+   interpolated from the catalog (set ids, folder paths, camera names) is escaped. */
+const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+                          .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+function calCell(cal) {
+  if (!cal) return `<span class="caldots"></span>`;
+  const chips = CAL_CLASSES.map(([key, abbr, title]) => {
+    const c = cal[key] || { status: "unknown", detail: "not computed" };
+    const head = esc(`${title}: ${c.label || CAL_WORD[c.status] || c.status}`);
+    return `<i class="caldot ${c.status}" data-tip="<b>${head}</b> · ${esc(c.detail)}">${abbr}</i>`;
+  }).join("");
+  return `<span class="caldots">${chips}</span>`;
+}
 
 const backlogH = t => t.nights.filter(n => n.state === "unprocessed" || n.state === "in_progress")
                               .reduce((a, n) => a + n.h, 0);
@@ -195,7 +248,7 @@ function renderOverview() {
       <a class="go" href="/queue">→ cleanup queue</a></div>
     <p class="footnote">
       Open = hours in sessions still open or in progress ·
-      Depth = open hours: &lt;2h needs data · 5–10h workable · 20h+ deep ·
+      Depth = open hours: ${zoneLadder()} ·
       marks are clickable in the target view ·
       Depth is weighted by site sky quality (SQM flux ratio) when known — home-equivalent hours</p>`;
   document.getElementById("q").addEventListener("input", e => { query = e.target.value.toLowerCase(); renderOverview(); const q = document.getElementById("q"); q.focus(); q.setSelectionRange(q.value.length, q.value.length); });
@@ -241,7 +294,8 @@ function renderDetail() {
         <span class="exp">${n.frames || "?"} × ${n.exp ? n.exp.toFixed(0) + "s" : "?"}${n.gain ? " · gain" + n.gain : ""}</span>
         <span class="statelabel ${n.state}">${STATE_LABEL[n.state]}</span>
         <span class="sitecell"><span class="sitechip">${n.site || ""}</span>${n.w !== undefined && n.w !== 1 ? `<span class="wbadge">×${n.w}</span>` : ""}</span>
-        <span class="h">${n.h.toFixed(1)}h</span>
+        ${calCell(n.cal)}
+        ${hoursHTML(n.h, n.wh)}
       </div>`).join("");
     const gs = (key, label, extra="") => {
       const on = gsort.key === key;
@@ -251,15 +305,15 @@ function renderDetail() {
       <summary class="rigsum">
         <svg class="tri" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2.5 1 L8 5 L2.5 9 Z" fill="currentColor"/></svg>
         <span class="rigname display">${rig}</span>
-        ${gaugeHTML(ghw, true, gh)}
+        ${gaugeHTML(ghw, true, gh, false)}
         ${stripHTML(hoursOf(nights), null)}
-        <span class="hnum num"><b>${gh.toFixed(1)}</b>h</span>
+        ${hoursHTML(gh, ghw, "hnum num")}
         <span class="n">${nights.length} sessions</span>
       </summary>
       <div class="rigbody">
         <div class="cols nightcols headrow">
           <span class="colhead"></span>${gs("date", "Night")}<span class="colhead">Filter</span>
-          <span class="colhead">Exposure</span>${gs("state", "State")}<span class="colhead">Site</span>${gs("h", "Hours", "num")}
+          <span class="colhead">Exposure</span>${gs("state", "State")}<span class="colhead">Site</span><span class="colhead">Cal</span>${gs("h", "Hours", "num")}
         </div>
         ${rows}
       </div>
@@ -276,8 +330,10 @@ function renderDetail() {
     ${groups}
     <p class="footnote">grease-pencil marks: <span class="lamp">○</span> processed · half-circle in progress · strike skipped · dotted = open.
       click a mark to cycle state — updates the catalog.
-      gauge = integration banked per rig: &lt;2h needs data · 5–10h workable · 20h+ deep, weighted by site sky quality.
-      Site column: named observing site the session's coordinates matched, if any; a ×badge shows its SQM weight relative to home when it isn't 1×.</p>`;
+      gauge = integration banked per rig: ${zoneLadder()}, weighted by site sky quality.
+      Hours are home-equivalent — what the integration would have been worth from home — with the raw figure alongside when the site's sky quality moves it.
+      Site column: named observing site the session's coordinates matched, if any; a ×badge shows its SQM weight relative to home when it isn't 1×.
+      Cal: what <b>wbpp</b> would find for Darks / Flats / FlatDarks — lit = matched, dim = missing, faded = that camera doesn't use them, dashed = can't tell. Hover for the matched set. Catalog only: this server can't see the archive.</p>`;
   document.querySelectorAll("details.rig").forEach(d => d.addEventListener("toggle", () => {
     if (d.open) detail.closed.delete(d.dataset.rig); else detail.closed.add(d.dataset.rig);
   }));
