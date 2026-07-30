@@ -1169,6 +1169,14 @@ Queued 2026-07-07, shipped 2026-07-30.
 > sets of every type, including ZWOASI585MCPro flat darks (49 sessions match,
 > 82 miss). The "ZWO doesn't need flat darks" note in CLAUDE.md isn't what the
 > catalog says.
+>
+> Chip styling was revised the same day (see the `.caldot` block): `missing`
+> dropped `--safelight`, because on that row the colour means *doneness* (the
+> grease-pencil mark, the PROCESSED label) and a missing flat isn't a point on
+> that scale. `missing` and `na` deliberately look alike — both mean the frames
+> won't be in the WBPP input and the same manual step follows (shoot them, or
+> match and copy them in by hand), so only `ok` needs to stand apart. Don't
+> "fix" that contrast.
 
 Original entry: per session (night row in the
 target detail view), indicate whether matching darks/flats/flat-darks exist in

@@ -234,7 +234,12 @@ details[open] .rigsum .strip { visibility: hidden; }
    nothing to do with how far along a target is; borrowing it made the two read
    as one scale. So the four states are a brightness ladder instead: matched is
    lit, missing is plain dim, "not used" fades further, and "can't tell" is the
-   only one that changes the border, to dashed. */
+   only one that changes the border, to dashed.
+
+   `missing` and `na` sitting close together on that ladder is intended, not a
+   contrast bug to fix later: both mean the frames won't be in the WBPP input and
+   the same manual step follows — go and shoot them, or match and copy them in by
+   hand. Only `ok` needs to be unmistakable from the rest. */
 .caldots { display: inline-flex; align-items: center; gap: 4px; }
 .caldot {
   font-style: normal; font-size: 9.5px; letter-spacing: .06em;
