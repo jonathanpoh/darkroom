@@ -3,6 +3,7 @@ from darkroom.parse import (
     ota_from_focallen,
     parse_filter,
     parse_exposure,
+    parse_temperature,
     parse_datetime,
     flat_morning_date,
     reclassify_flat_dark,
@@ -84,6 +85,22 @@ def test_parse_datetime():
     stem = "Light_M 81_180.0s_Bin1_585MC_gain200_20260219-220000_-20.0C_L-Pro_0001"
     dt = parse_datetime(stem)
     assert dt == datetime(2026, 2, 19, 22, 0, 0)
+
+
+def test_parse_temperature_negative():
+    stem = "Dark_180.0s_Bin1_585MC_gain200_20260201-000000_-20.0C_0001"
+    assert parse_temperature(stem) == -20.0
+
+
+def test_parse_temperature_positive():
+    stem = "Dark_180.0s_Bin1_585MC_gain200_20260201-000000_15.0C_0001"
+    assert parse_temperature(stem) == 15.0
+
+
+def test_parse_temperature_no_match():
+    # "585MC" and "180.0s" must not false-match the temperature pattern
+    stem = "Dark_180.0s_Bin1_585MC_gain200_20260201-000000_0001"
+    assert parse_temperature(stem) is None
 
 
 def test_flat_morning_date_post_midnight():

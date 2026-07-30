@@ -131,25 +131,26 @@ def _no_darks_note(
     """Explain an empty Darks/ — a near-miss on temperature reads very differently
     from having no darks at that gain/exposure at all, and the fix differs too
     (raise the tolerance vs. go and shoot darks). Worth the second query: 55 of
-    the 201 live sessions with any master at their gain/exposure currently land
+    the 201 live sessions with any dark set at their gain/exposure currently land
     outside ±3C, so this line is what the user actually sees.
     """
     if matched_any:
         return "matched sets have no files on disk"
     if session_temp is None:
         return "no darks found"
-    masters = [
+    rows = [
         r for r in find_darks(
             backend, camera=s0["camera"], gain=s0["gain"], exposure_sec=s0["exposure_sec"],
         )
-        if r.get("is_master") and r["temperature_c"] is not None
+        if r["temperature_c"] is not None
     ]
-    if not masters:
+    if not rows:
         return "no darks found at this gain/exposure"
-    nearest = min(masters, key=lambda r: abs(r["temperature_c"] - session_temp))
+    nearest = min(rows, key=lambda r: abs(r["temperature_c"] - session_temp))
     delta = abs(nearest["temperature_c"] - session_temp)
+    kind = "master" if nearest.get("is_master") else "raw set"
     return (
-        f"no darks within ±{tolerance:g}C of {session_temp:g}C — nearest master is"
+        f"no darks within ±{tolerance:g}C of {session_temp:g}C — nearest {kind} is"
         f" {nearest['temperature_c']:g}C, {delta:g}C away;"
         f" use --dark-temp-tolerance {delta:g} to accept it"
     )
@@ -186,15 +187,24 @@ def _build_night(
     )
     master_dark_rows = [r for r in dark_rows if r.get("is_master")]
     dark_count = 0
-    if master_dark_rows:
-        # Exactly one master (B11). This used to loop, symlinking every master
-        # find_darks returned — which for an uncooled ladder meant handing WBPP
-        # five masters spanning 15..35C at once.
-        best = master_dark_rows[0]
+    # Ranked by find_darks (B11). Usually just one master, but a stale
+    # folder_path on the nearest can leave its file missing on disk — walk
+    # the ranking and take the first one that's actually there.
+    best = None
+    skipped = []
+    for row in master_dark_rows:
+        if (output / row["folder_path"]).exists():
+            best = row
+            break
+        skipped.append(row)
+    if best is not None:
         if session_temp is None:
             print("  Note: session has no recorded temperature — taking the first dark master.")
         else:
-            tied = dark_temp_ties(master_dark_rows, session_temp)
+            # Tie check runs against masters present on disk only — a missing
+            # file can't be picked, so it isn't a real tie candidate.
+            on_disk = [r for r in master_dark_rows if (output / r["folder_path"]).exists()]
+            tied = dark_temp_ties(on_disk, session_temp)
             if tied:
                 temps = ", ".join(f"{r['temperature_c']:g}C" for r in tied)
                 print(
@@ -202,14 +212,30 @@ def _build_night(
                     f" masters at {temps} — neither is nearer. Taking"
                     f" {best['temperature_c']:g}C."
                 )
+        if skipped:
+            missing = ", ".join(
+                f"{r['temperature_c']:g}C" if r["temperature_c"] is not None else "unknown-temp"
+                for r in skipped
+            )
+            best_label = f"{best['temperature_c']:g}C" if best["temperature_c"] is not None else "unknown-temp"
+            print(
+                f"  Note: nearer dark master(s) at {missing} matched but file(s) missing"
+                f" on disk — using {best_label} instead."
+            )
         master_path = output / best["folder_path"]
-        files = [master_path] if master_path.exists() else []
-        dark_count = make_symlinks(files, session_dir / "Darks")
+        dark_count = make_symlinks([master_path], session_dir / "Darks")
     else:
-        # No master at this temperature — fall back to raw subs, where B5's
-        # multi-row behaviour still applies (raws are combined, not chosen).
+        # No master file usable at this temperature (no master row, or every
+        # matched master's file is missing on disk) — fall back to raw subs,
+        # where B5's multi-row behaviour still applies (raws are combined,
+        # not chosen). Raw dark sets at different temperatures share the same
+        # Darks/<Camera>/ folder, so still filter by temperature — an
+        # exposure-only scan would leak out-of-tolerance raws back in.
         for row in dark_rows:
-            files = discover_darks(output / row["folder_path"], exposure_sec=s0["exposure_sec"])
+            files = discover_darks(
+                output / row["folder_path"], exposure_sec=s0["exposure_sec"],
+                temperature_c=session_temp, temp_tolerance=dark_temp_tolerance,
+            )
             dark_count += make_symlinks(files, session_dir / "Darks")
     if dark_count == 0:
         note = _no_darks_note(
