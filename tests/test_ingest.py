@@ -773,3 +773,53 @@ def test_cmd_commit_reports_the_catalog(tmp_path, capsys):
     cmd_commit(argparse.Namespace(manifest=str(path)))
 
     assert f"Catalog: {catalog} (local file)" in capsys.readouterr().err
+
+
+# ── F4: session wall-clock span through the manifest and into the catalog ────
+
+def test_build_session_entry_carries_the_session_span():
+    session = _make_session()
+    session.start_utc = "2026-02-19T22:00:00"
+    session.end_utc = "2026-02-19T23:03:00"
+
+    entry = build_session_entry(session, Path("/staging"), catalog_sessions={}, interactive=False)
+
+    assert entry["start_utc"] == "2026-02-19T22:00:00"
+    assert entry["end_utc"] == "2026-02-19T23:03:00"
+
+
+def test_build_session_entry_span_is_none_when_the_scan_found_none():
+    entry = build_session_entry(
+        _make_session(), Path("/staging"), catalog_sessions={}, interactive=False
+    )
+    assert entry["start_utc"] is None
+    assert entry["end_utc"] is None
+
+
+def test_cmd_commit_registers_the_session_span(tmp_path):
+    from darkroom.catalog_client import LocalBackend
+
+    entry = _committable_session(tmp_path / "card", ["a.fit"])
+    entry["start_utc"] = "2026-06-21T22:00:00"
+    entry["end_utc"] = "2026-06-22T02:30:00"
+    path, _, catalog = _commit_manifest(tmp_path, [entry])
+
+    cmd_commit(argparse.Namespace(manifest=str(path)))
+
+    rows = LocalBackend(catalog).query_sessions()
+    assert rows[0]["start_utc"] == "2026-06-21T22:00:00"
+    assert rows[0]["end_utc"] == "2026-06-22T02:30:00"
+
+
+def test_cmd_commit_tolerates_a_manifest_without_span_keys(tmp_path):
+    """Manifests written before F4 must still commit (span lands NULL)."""
+    from darkroom.catalog_client import LocalBackend
+
+    entry = _committable_session(tmp_path / "card", ["a.fit"])
+    assert "start_utc" not in entry
+    path, _, catalog = _commit_manifest(tmp_path, [entry])
+
+    cmd_commit(argparse.Namespace(manifest=str(path)))
+
+    rows = LocalBackend(catalog).query_sessions()
+    assert rows[0]["start_utc"] is None

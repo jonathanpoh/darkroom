@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import sqlite3
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -203,6 +206,74 @@ def test_get_calibration_sets_frame_type_and_camera_filters(tmp_path):
         "/api/calibration-sets", params={"camera": "NoSuchCamera"}, headers=AUTH
     )
     assert resp.json() == []
+
+
+# ---------------------------------------------------------------------------
+# POST /api/session-guiding (F4)
+# ---------------------------------------------------------------------------
+
+
+def _guiding_rows(tmp_path):
+    """Read session_guiding directly — the table has no GET route (yet)."""
+    conn = sqlite3.connect(tmp_path / "catalog.db")
+    conn.row_factory = sqlite3.Row
+    try:
+        return [dict(r) for r in conn.execute("SELECT * FROM session_guiding")]
+    finally:
+        conn.close()
+
+
+def test_post_session_guiding_writes_row(tmp_path):
+    client = make_client(tmp_path)
+
+    resp = client.post(
+        "/api/session-guiding",
+        json={
+            "session_id": "s1",
+            "rms_total_arcsec": 0.93,
+            "guide_frames": 1200,
+            "coverage": 0.87,
+            # A list, not a JSON string — the server serialises it.
+            "source_logs": ["PHD2_GuideLog_2026-07-28_220000.txt"],
+        },
+        headers=AUTH,
+    )
+    assert resp.status_code == 204
+
+    rows = _guiding_rows(tmp_path)
+    assert len(rows) == 1
+    assert rows[0]["session_id"] == "s1"
+    assert rows[0]["rms_total_arcsec"] == pytest.approx(0.93)
+    assert json.loads(rows[0]["source_logs"]) == [
+        "PHD2_GuideLog_2026-07-28_220000.txt"
+    ]
+    assert rows[0]["computed_at"]
+
+
+def test_post_session_guiding_twice_replaces_the_row(tmp_path):
+    client = make_client(tmp_path)
+    client.post(
+        "/api/session-guiding",
+        json={"session_id": "s1", "rms_total_arcsec": 0.93, "peak_arcsec": 4.0},
+        headers=AUTH,
+    )
+    client.post(
+        "/api/session-guiding",
+        json={"session_id": "s1", "rms_total_arcsec": 1.21},
+        headers=AUTH,
+    )
+
+    rows = _guiding_rows(tmp_path)
+    assert len(rows) == 1
+    assert rows[0]["rms_total_arcsec"] == pytest.approx(1.21)
+    # Replace, not merge: a value the new scan didn't measure goes back to NULL.
+    assert rows[0]["peak_arcsec"] is None
+
+
+def test_post_session_guiding_no_auth_401(tmp_path):
+    client = make_client(tmp_path)
+    resp = client.post("/api/session-guiding", json={"session_id": "s1"})
+    assert resp.status_code == 401
 
 
 # ---------------------------------------------------------------------------
@@ -792,3 +863,52 @@ def test_create_app_from_env_with_token_returns_app(tmp_path, monkeypatch):
     client = TestClient(app)
     resp = client.get("/api/sessions", headers={"Authorization": "Bearer envtoken"})
     assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# session wall-clock span (F4)
+# ---------------------------------------------------------------------------
+
+def test_post_session_accepts_and_returns_the_span(tmp_path):
+    client = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    resp = client.post(
+        "/api/sessions",
+        json=_session(sid, start_utc="2026-02-19T22:00:00", end_utc="2026-02-20T02:30:00"),
+        headers=AUTH,
+    )
+    assert resp.status_code == 204
+
+    row = client.get("/api/sessions", params={"session_id": sid}, headers=AUTH).json()[0]
+    assert row["start_utc"] == "2026-02-19T22:00:00"
+    assert row["end_utc"] == "2026-02-20T02:30:00"
+
+
+def test_post_session_without_span_leaves_it_null(tmp_path):
+    client = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    client.post("/api/sessions", json=_session(sid), headers=AUTH)
+
+    row = client.get("/api/sessions", params={"session_id": sid}, headers=AUTH).json()[0]
+    assert row["start_utc"] is None
+    assert row["end_utc"] is None
+
+
+def test_patch_session_span_updates_without_touching_identity(tmp_path):
+    """The `catalog backfill-times --apply` path when catalog_url is set."""
+    client = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    client.post("/api/sessions", json=_session(sid), headers=AUTH)
+
+    resp = client.patch(
+        f"/api/sessions/{sid}",
+        json={"start_utc": "2026-02-19T22:00:00", "end_utc": "2026-02-20T02:30:00"},
+        headers=AUTH,
+    )
+    assert resp.status_code == 200
+
+    row = client.get("/api/sessions", params={"session_id": sid}, headers=AUTH).json()[0]
+    assert row["start_utc"] == "2026-02-19T22:00:00"
+    assert row["end_utc"] == "2026-02-20T02:30:00"
+    assert row["session_id"] == sid
+    assert row["lights_path"].endswith("2026-02-19_FRA400_ZWOASI585MCPro/Lights/L-Pro")

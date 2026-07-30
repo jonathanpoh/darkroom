@@ -26,6 +26,9 @@ _EDITABLE_FIELDS = frozenset({
     "gain", "temperature_c", "exposure_sec", "focal_length",
     "ra_deg", "dec_deg", "site_lat", "site_lon", "notes",
     "processed_state", "processed_path", "processed_date",
+    # F4: derived wall-clock span, written by `catalog backfill-times`. Not an
+    # identity component — editing it never touches session_id/lights_path.
+    "start_utc", "end_utc",
 })
 
 # Identity components: changing any of these changes the derived session_id.
@@ -189,6 +192,24 @@ def query_calibration_sets(
         "ORDER BY is_master DESC, capture_date, set_id",
         params,
     ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def query_session_guiding(
+    conn: sqlite3.Connection, *, session_id: str | None = None
+) -> list[dict]:
+    """Return session_guiding rows (F4), optionally for one session.
+
+    A session with no guide-log match simply has no row — that is the common
+    case (guide logs only cover part of the archive's history), so callers
+    treat "absent" as "not measured", never as "guided badly".
+    """
+    if session_id is not None:
+        rows = conn.execute(
+            "SELECT * FROM session_guiding WHERE session_id = ?", (session_id,)
+        ).fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM session_guiding").fetchall()
     return [dict(r) for r in rows]
 
 

@@ -6,7 +6,9 @@ import sqlite3
 import sys
 from collections import Counter
 from itertools import groupby
+from pathlib import Path
 
+from darkroom import guidelog
 from darkroom.catalog import query_all_sessions
 from darkroom.catalog_client import resolve_backend
 from darkroom.cataloger import (
@@ -117,6 +119,108 @@ def _scan_processed_run(args: argparse.Namespace) -> None:
         tag = f"  [{t.evidence_date}]" if t.evidence_date else ""
         print(f"  {t.session_id}  {t.current_state} -> {t.proposed_state}{tag}")
     print(f"\nApplied {applied} change(s), {len(transitions) - applied} unchanged")
+
+
+def _scan_guiding_run(args: argparse.Namespace) -> None:
+    """Match PHD2 guide-log segments to sessions by time and store the stats.
+
+    Matching is purely temporal — each session's stored start_utc/end_utc span
+    is intersected with the segments parsed out of every log. Log target names
+    are never consulted (see darkroom.guidescan).
+
+    Dry run (default) is pure-read: it parses logs and reads sessions, and
+    writes nothing. --apply writes via darkroom.guidescan.apply, through the
+    catalog backend (local file or webapi, per catalog_url — W9).
+
+    Both halves of what didn't match are reported and never guessed at: a
+    whole date range failing to match means the ASIAir clock/timezone was not
+    what the parser assumes, which is the user's call, not the scanner's.
+
+    `--settle-exclude` tunes how much post-dither settling is discarded. It is
+    left at guidelog.DEFAULT_SETTLE_EXCLUDE_SEC by default because the stored
+    numbers are only comparable across sessions at one setting.
+    """
+    from darkroom import guidescan, logs
+
+    backend = resolve_backend(args.catalog)
+
+    if args.logs:
+        logs_dir = Path(args.logs).expanduser()
+    else:
+        archive = resolve_path(None, "DARKROOM_ARCHIVE", "archive_path")
+        if archive is None:
+            sys.exit(
+                "Error: --logs, or --archive / DARKROOM_ARCHIVE / darkroom.toml "
+                "archive_path (whose 00_Logs/ASIAir subdirectory is used), required"
+            )
+        logs_dir = archive / logs.ARCHIVE_SUBDIR
+    if not logs_dir.is_dir():
+        sys.exit(f"Error: guide log directory not found: {logs_dir}")
+
+    result = guidescan.scan(
+        logs_dir, backend, settle_exclude_sec=args.settle_exclude
+    )
+
+    for line in _guiding_report(result):
+        print(line)
+
+    if not args.apply:
+        for tgt, group in groupby(
+            sorted(result.matches, key=lambda m: (m.target, m.obs_date)),
+            key=lambda m: m.target,
+        ):
+            print(f"\n{tgt}")
+            for m in group:
+                cov = "" if m.coverage is None else f"  cov {m.coverage * 100:.0f}%"
+                print(
+                    f"  {m.obs_date}  {m.session_id}  {m.rms_total_arcsec:.2f}\" "
+                    f"(RA {m.rms_ra_arcsec:.2f} Dec {m.rms_dec_arcsec:.2f})"
+                    f"{cov}  {m.guide_frames} frames"
+                )
+        print(
+            f"\n{len(result.matches)} session(s) would get guiding stats; "
+            "run with --apply to write"
+        )
+        return
+
+    try:
+        applied = guidescan.apply(backend, result)
+    except sqlite3.OperationalError as e:
+        sys.exit(
+            f"Error writing to catalog: {e}\n"
+            "Hint: run any `darkroom catalog` command against this catalog once "
+            "(e.g. `catalog list`) to ensure it's migrated to the current schema, "
+            "then retry --apply."
+        )
+
+    print(f"\nApplied guiding stats to {applied} session(s)")
+
+
+def _guiding_report(result) -> list[str]:
+    """The unmatched-both-ways report every scan-guiding run prints.
+
+    Deliberately identical in dry-run and --apply mode: the mismatches are the
+    diagnostic, not a preview of pending writes.
+    """
+    lines = [
+        f"{result.log_count} log(s), {result.segment_count} guiding segment(s); "
+        f"{len(result.matches)} session(s) matched"
+    ]
+    if result.undated_sessions:
+        lines.append(
+            f"  {len(result.undated_sessions)} session(s) have no start_utc — "
+            "run `darkroom catalog backfill-times` first"
+        )
+    if result.unmatched_sessions:
+        lines.append(
+            f"  {len(result.unmatched_sessions)} dated session(s) matched no guide data:"
+        )
+        for row in result.unmatched_sessions:
+            lines.append(f"    {row['obs_date']}  {row['session_id']}")
+    if result.unmatched_logs:
+        lines.append(f"  {len(result.unmatched_logs)} log(s) matched no session:")
+        lines.extend(f"    {name}" for name in result.unmatched_logs)
+    return lines
 
 
 def _apply_renames_run(args: argparse.Namespace) -> None:
@@ -397,6 +501,151 @@ def _backfill_sites_run(args: argparse.Namespace) -> None:
     print(", ".join(parts))
 
 
+def _backfill_times_run(args: argparse.Namespace) -> None:
+    """Backfill start_utc/end_utc on sessions from archive FITS DATE-OBS/EXPTIME.
+
+    Only frames whose imaging night (cataloger.compute_imaging_night, the
+    canonical noon-to-noon rule) equals the session's obs_date are considered:
+    a lights_path folder can hold more than one night, and more than one
+    session row can point at the same folder. start_utc is then the earliest
+    such frame's DATE-OBS; end_utc is the latest one's DATE-OBS plus *that*
+    frame's exposure, so the span covers the final sub-exposure (F4 intersects
+    guide-log segments against it).
+
+    Dry run (default) is pure-read: it never writes to the catalog. --apply
+    writes via update_session_fields, through the catalog backend (local file
+    or webapi, per catalog_url — W9). Only sessions with a NULL start_utc are
+    ever candidates, so re-running is a no-op once applied (idempotent by
+    construction).
+    """
+    from astropy.io import fits
+
+    from darkroom.cataloger import compute_imaging_night, compute_session_span
+
+    backend = resolve_backend(
+        args.catalog, url_flag=args.catalog_url, token_flag=args.api_token
+    )
+    archive = resolve_path(args.archive, "DARKROOM_ARCHIVE", "archive_path")
+    if archive is None:
+        sys.exit("Error: --archive / DARKROOM_ARCHIVE / darkroom.toml archive_path required")
+
+    rows = backend.query_sessions()
+    candidates = [r for r in rows if r.get("lights_path") and r.get("start_utc") is None]
+
+    found = []  # list[(row, start_utc, end_utc)]
+    no_headers = 0
+    missing = 0
+    read_errors = 0
+    wrong_night = 0
+
+    for row in candidates:
+        folder = archive / row["lights_path"]
+        if not folder.is_dir():
+            missing += 1
+            continue
+
+        frames = [
+            p
+            for p in sorted(folder.rglob("*"))
+            if p.suffix.lower() in (".fit", ".fits") and "thumbnail" not in p.name.lower()
+        ]
+        if not frames:
+            no_headers += 1
+            continue
+
+        # Every frame: the span's endpoints are the min and the max, and
+        # sorted() above is filename order, which is not guaranteed
+        # chronological. Read errors are skipped per-frame so one bad file
+        # doesn't cost the session its span.
+        stamps = []
+        unreadable = 0
+        for frame in frames:
+            try:
+                header = fits.getheader(frame)
+            except Exception:
+                unreadable += 1
+                continue
+            stamps.append(
+                (
+                    header.get("DATE-OBS", ""),
+                    header.get("EXPOSURE", header.get("EXPTIME", 0.0)),
+                )
+            )
+
+        if unreadable:
+            read_errors += 1
+
+        # A folder is not a session. Legacy archive layouts (pre-F4) can have
+        # two session rows pointing at one lights_path, and taking the span
+        # over the whole folder then hands both of them the same multi-day
+        # window — observed as a 76-hour "session" that swallowed three
+        # nights' guide rows and reported an identical bogus RMS for both.
+        # Keep only frames whose imaging night is this session's, using the
+        # same noon-to-noon rule the scanner groups by.
+        on_night = [s for s in stamps if compute_imaging_night(s[0]) == row["obs_date"]]
+        if not on_night:
+            # Nothing dated at all is a header problem; dated frames that all
+            # belong to other nights is a layout problem. Both mean no span
+            # gets written — never fall back to the unfiltered folder span.
+            if any(compute_imaging_night(s[0]) is not None for s in stamps):
+                wrong_night += 1
+            else:
+                no_headers += 1
+            continue
+
+        start_utc, end_utc = compute_session_span(on_night)
+        if start_utc is None:
+            no_headers += 1
+            continue
+        found.append((row, start_utc, end_utc))
+
+    if not args.apply:
+        for tgt, group in groupby(
+            sorted(found, key=lambda f: (f[0]["target"], f[0]["session_id"])),
+            key=lambda f: f[0]["target"],
+        ):
+            print(f"\n{tgt}")
+            for row, start_utc, end_utc in group:
+                print(f"  {row['session_id']}: {start_utc} -> {end_utc}")
+        parts = [
+            f"{len(found)} would be set",
+            f"{no_headers} no date headers",
+            f"{missing} missing on disk",
+        ]
+        if wrong_night:
+            parts.append(f"{wrong_night} skipped (no frames on the session night)")
+        if read_errors:
+            parts.append(f"{read_errors} read errors")
+        print(f"\n{', '.join(parts)}; run with --apply to write")
+        return
+
+    try:
+        written = 0
+        for row, start_utc, end_utc in found:
+            if backend.update_session_fields(
+                row["session_id"], start_utc=start_utc, end_utc=end_utc
+            ):
+                written += 1
+    except sqlite3.OperationalError as e:
+        sys.exit(
+            f"Error writing to catalog: {e}\n"
+            "Hint: run any `darkroom catalog` command against this catalog once "
+            "(e.g. `catalog list`) to ensure it's migrated to the current schema, "
+            "then retry --apply."
+        )
+
+    parts = [
+        f"{written} set",
+        f"{no_headers} no date headers",
+        f"{missing} missing on disk",
+    ]
+    if wrong_night:
+        parts.append(f"{wrong_night} skipped (no frames on the session night)")
+    if read_errors:
+        parts.append(f"{read_errors} read errors")
+    print(", ".join(parts))
+
+
 def add_subparser(subparsers) -> None:
     p = subparsers.add_parser(
         "catalog",
@@ -469,6 +718,35 @@ def add_subparser(subparsers) -> None:
     sp.add_argument("--apply", action="store_true",
                      help="Write proposed changes to the catalog (default: dry run, read-only)")
     sp.set_defaults(func=_scan_processed_run)
+
+    sg = sub.add_parser(
+        "scan-guiding", parents=[catalog_flag],
+        help="Match PHD2 guide logs to sessions by time and store guiding stats",
+        description="Parse every PHD2_GuideLog_*.txt in the log directory and "
+                    "intersect its guiding segments with each session's stored UTC "
+                    "wall-clock span (start_utc/end_utc — run `catalog backfill-times` "
+                    "first if those are NULL), pooling the in-window rows into one "
+                    "RMS/peak/p95 per session. Matching is by time only; log target "
+                    "names are never used. Sessions matching no log, and logs matching "
+                    "no session, are reported rather than guessed at. Dry run by "
+                    "default (prints what it measured, writes nothing); pass --apply "
+                    "to write. Re-running replaces existing rows.",
+    )
+    sg.add_argument("--logs", metavar="PATH",
+                    help="Guide log directory (default: <archive>/00_Logs/ASIAir)")
+    sg.add_argument("--settle-exclude", type=float, metavar="SECONDS",
+                    default=guidelog.DEFAULT_SETTLE_EXCLUDE_SEC,
+                    help="Seconds of guiding discarded after a segment start or a "
+                         f"dither (default: {guidelog.DEFAULT_SETTLE_EXCLUDE_SEC:g}). "
+                         "A good night barely moves (NGC 281 0.92\" -> 0.90\" going "
+                         "from 15s to 120s); a bad one moves a lot (M 45 15.04\" -> "
+                         "5.60\"), since on a poor night the dither recoveries ARE "
+                         "much of the error. Leave it at the default unless you are "
+                         "deliberately probing that sensitivity — the stored numbers "
+                         "are only comparable across sessions at one setting.")
+    sg.add_argument("--apply", action="store_true",
+                    help="Write guiding stats to the catalog (default: dry run, read-only)")
+    sg.set_defaults(func=_scan_guiding_run)
 
     ar = sub.add_parser(
         "apply-renames", parents=[catalog_flag],
@@ -543,3 +821,20 @@ def add_subparser(subparsers) -> None:
     bf.add_argument("--apply", action="store_true",
                      help="Write proposed changes to the catalog (default: dry run, read-only)")
     bf.set_defaults(func=_backfill_sites_run)
+
+    bt = sub.add_parser(
+        "backfill-times", parents=site_flags,
+        help="Backfill start_utc/end_utc on sessions from archive FITS headers",
+        description="Read DATE-OBS/EXPTIME from every FITS frame of each session with "
+                    "a NULL start_utc, keep only the frames whose imaging night is "
+                    "that session's obs_date (one lights_path folder can hold several "
+                    "nights), and propose setting the session's UTC wall-clock span: "
+                    "start_utc = earliest DATE-OBS, end_utc = latest DATE-OBS "
+                    "plus that frame's exposure. Dry run by default (prints proposed "
+                    "changes, writes nothing); pass --apply to write them. Idempotent: "
+                    "only NULL start_utc sessions are ever candidates.",
+    )
+    bt.add_argument("--archive", metavar="PATH", help="Archive root (env: DARKROOM_ARCHIVE)")
+    bt.add_argument("--apply", action="store_true",
+                     help="Write proposed changes to the catalog (default: dry run, read-only)")
+    bt.set_defaults(func=_backfill_times_run)

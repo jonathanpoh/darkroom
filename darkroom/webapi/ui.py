@@ -14,6 +14,7 @@ actually need it.
 
 from __future__ import annotations
 
+import json
 import re
 import time
 import urllib.parse
@@ -104,10 +105,56 @@ def _safe_next(next_: str | None) -> str:
     return "/"
 
 
+def _is_spike_dominated(rms: float | None, p95: float | None) -> bool:
+    """True when the total RMS is carried by a few catastrophic frames.
+
+    RMS squares each error, so ten wrecked subs out of fifty can push an
+    otherwise excellent night into the `poor` band. p95 is what a typical frame
+    actually did, so `rms >= 2 * p95` separates the two cases: measured across
+    the live catalog, clean nights sit at or below 1.0, a uniformly bad night
+    (M 45 2025-09-22, rms 35.3″ / p95 28.3″) at ~1.2, and spike-dominated
+    nights (NGC 6888 2026-07-20, rms 19.18″ / p95 2.11″) at 6–12.
+
+    Presentation only — nothing here changes the stored numbers or the band.
+    """
+    if rms is None or p95 is None or p95 <= 0:
+        return False
+    return rms >= 2 * p95
+
+
+def _guiding_summary(row: dict | None) -> dict | None:
+    """Compact a `session_guiding` row into the shape the safelight JS reads.
+
+    Short keys, like the rest of the night dict (`h`, `wh`, `sid`). Returns
+    None for a missing row *or* one with no total RMS: both mean "not
+    measured", which the UI shows as an em-dash rather than a number.
+    """
+    if row is None or row.get("rms_total_arcsec") is None:
+        return None
+    try:
+        logs = json.loads(row.get("source_logs") or "[]")
+    except (TypeError, ValueError):
+        logs = []
+    return {
+        "rms": row["rms_total_arcsec"],
+        "ra": row.get("rms_ra_arcsec"),
+        "dec": row.get("rms_dec_arcsec"),
+        "peak": row.get("peak_arcsec"),
+        "p95": row.get("p95_arcsec"),
+        "cov": row.get("coverage"),
+        "spike": _is_spike_dominated(row["rms_total_arcsec"], row.get("p95_arcsec")),
+        "frames": row.get("guide_frames"),
+        "lost": row.get("star_lost_events"),
+        "dropped": row.get("dropped_frames"),
+        "logs": logs if isinstance(logs, list) else [],
+    }
+
+
 def _build_aggregate(
     rows: list[dict],
     sites: list[dict] | None = None,
     cal_rows: list[dict] | None = None,
+    guiding_rows: list[dict] | None = None,
 ) -> list[dict]:
     """Group session rows by target into the shape the safelight JS expects.
 
@@ -131,6 +178,11 @@ def _build_aggregate(
     their previous shape, which is what `/` does since the overview shows no
     calibration state and shouldn't pay to compute it.
 
+    `guiding_rows` (from `catalog_db.query_session_guiding`) adds a `guiding`
+    key per night (F4), None where that session has no row — the common case,
+    since guide logs only cover part of the archive's history. Optional on the
+    same terms as `cal_rows`.
+
     SQM weighting is delegated to `darkroom.sites.annotate_sessions` (S2),
     shared with the JSON API's `GET /api/sessions`. That helper returns copies
     rather than mutating, so `rows` below is a local rebind and the caller's
@@ -144,6 +196,9 @@ def _build_aggregate(
     # One backend for the whole page: the matchers hit it several times per
     # session, and LocalBackend would open a SQLite connection for each.
     cal_backend = MemoryCalibrationBackend(cal_rows) if cal_rows is not None else None
+    guiding_by_session = (
+        {g["session_id"]: g for g in guiding_rows} if guiding_rows is not None else None
+    )
 
     groups: dict[str, list[dict]] = {}
     for row in rows:
@@ -179,6 +234,10 @@ def _build_aggregate(
             }
             if cal_backend is not None:
                 night["cal"] = match_session_calibration(cal_backend, s)
+            if guiding_by_session is not None:
+                night["guiding"] = _guiding_summary(
+                    guiding_by_session.get(s["session_id"])
+                )
             nights.append(night)
         total_h = sum(hours.values())
         last = max((s["obs_date"] for s in sessions if s["obs_date"]), default=None)
@@ -200,6 +259,26 @@ def _session_calibration(conn, session: dict) -> dict:
     """The calibration match for one session, for the session detail page."""
     backend = MemoryCalibrationBackend(catalog_db.query_calibration_sets(conn))
     return match_session_calibration(backend, session)
+
+
+def _session_guiding(conn, session: dict) -> dict | None:
+    """One session's guiding row (F4) for the session detail page, or None.
+
+    The raw row, plus `logs` decoded from the stored JSON array — the panel
+    shows more of it than the night chip does (pixel scale, guide camera,
+    guided seconds), so it isn't the compacted `_guiding_summary` shape.
+    """
+    rows = catalog_db.query_session_guiding(conn, session_id=session["session_id"])
+    if not rows:
+        return None
+    row = dict(rows[0])
+    try:
+        logs = json.loads(row.get("source_logs") or "[]")
+    except (TypeError, ValueError):
+        logs = []
+    row["logs"] = logs if isinstance(logs, list) else []
+    row["spike"] = _is_spike_dominated(row.get("rms_total_arcsec"), row.get("p95_arcsec"))
+    return row
 
 
 def _date_diff(a: str | None, b: str | None) -> int | None:
@@ -508,12 +587,13 @@ def build_ui_router(db_path: Path, ui_password_hash: str) -> APIRouter:
             rows = catalog_db.query_sessions(conn, target=target)
             sites = catalog_db.list_sites(conn)
             cal_rows = catalog_db.query_calibration_sets(conn)
+            guiding_rows = catalog_db.query_session_guiding(conn)
         finally:
             conn.close()
         if not rows:
             raise HTTPException(status_code=404, detail="target not found")
 
-        aggregate = _build_aggregate(rows, sites, cal_rows)
+        aggregate = _build_aggregate(rows, sites, cal_rows, guiding_rows)
         # query_sessions normalises `target` case/spacing-insensitively, so
         # aggregate[0]["target"] is the canonical form even if the URL segment
         # wasn't (e.g. "m81" -> "M 81") — scope strictly to that one entry.
@@ -732,6 +812,7 @@ def build_ui_router(db_path: Path, ui_password_hash: str) -> APIRouter:
         try:
             rows = catalog_db.query_sessions(conn, session_id=session_id)
             cal = _session_calibration(conn, rows[0]) if rows else None
+            guiding = _session_guiding(conn, rows[0]) if rows else None
         finally:
             conn.close()
         if not rows:
@@ -744,6 +825,7 @@ def build_ui_router(db_path: Path, ui_password_hash: str) -> APIRouter:
                 "session": rows[0],
                 "processed_states": _PROCESSED_STATES,
                 "cal": cal,
+                "guiding": guiding,
                 "error": error,
             },
         )
@@ -788,6 +870,7 @@ def build_ui_router(db_path: Path, ui_password_hash: str) -> APIRouter:
                     try:
                         rows = catalog_db.query_sessions(conn, session_id=session_id)
                         cal = _session_calibration(conn, rows[0] if rows else current)
+                        guiding = _session_guiding(conn, rows[0] if rows else current)
                     finally:
                         conn.close()
                     return templates.TemplateResponse(
@@ -797,6 +880,7 @@ def build_ui_router(db_path: Path, ui_password_hash: str) -> APIRouter:
                             "session": rows[0] if rows else current,
                             "processed_states": _PROCESSED_STATES,
                             "cal": cal,
+                            "guiding": guiding,
                             "error": f"Invalid numeric value for {key!r}: {raw!r}",
                         },
                         status_code=400,
@@ -818,6 +902,9 @@ def build_ui_router(db_path: Path, ui_password_hash: str) -> APIRouter:
                             "session": rows[0] if rows else current,
                             "processed_states": _PROCESSED_STATES,
                             "cal": _session_calibration(
+                                conn, rows[0] if rows else current
+                            ),
+                            "guiding": _session_guiding(
                                 conn, rows[0] if rows else current
                             ),
                             "error": str(e),

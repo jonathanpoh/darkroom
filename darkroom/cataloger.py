@@ -10,6 +10,7 @@ Two commands for ingestion:
 """
 
 import argparse
+import json
 import os
 import re
 import sqlite3
@@ -62,6 +63,61 @@ def compute_imaging_night(date_obs_utc: str) -> str | None:
         return local_dt.strftime("%Y-%m-%d")
     except Exception:
         return None
+
+
+def parse_date_obs(date_obs_utc: str) -> datetime | None:
+    """Parse a FITS DATE-OBS (always UTC on this rig) into an aware UTC datetime.
+
+    Same astropy `isot`/`utc` handling as compute_imaging_night, so the two
+    agree on what a frame's timestamp means. Returns None for anything
+    unparseable — this runs per-frame, so failures stay silent.
+    """
+    if not date_obs_utc:
+        return None
+    try:
+        t = Time(str(date_obs_utc).strip(), format="isot", scale="utc")
+        return t.datetime.replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+
+def _format_utc(dt: datetime) -> str:
+    """Render an aware datetime as second-resolution ISO UTC, no offset suffix.
+
+    Matches the shape FITS DATE-OBS already uses ("2026-07-28T21:55:17") so
+    stored spans sort lexicographically against each other and parse with
+    datetime.fromisoformat.
+    """
+    return dt.astimezone(timezone.utc).replace(tzinfo=None).isoformat(timespec="seconds")
+
+
+def compute_session_span(frames) -> tuple[str | None, str | None]:
+    """Return (start_utc, end_utc) ISO strings for an iterable of light frames.
+
+    *frames* is an iterable of (date_obs, exposure_sec) pairs, in any order.
+    start_utc is the earliest DATE-OBS; end_utc is the latest DATE-OBS plus
+    *that* frame's exposure, so the span covers the final sub-exposure rather
+    than stopping when it started.
+
+    Frames are sorted here rather than trusted in file-iteration order — the
+    scan paths collect them by directory walk, which is not chronological.
+    (F4: this span is what guide-log segments get intersected against.)
+    """
+    parsed = []
+    for date_obs, exposure in frames:
+        dt = parse_date_obs(date_obs)
+        if dt is None:
+            continue
+        try:
+            exp = float(exposure or 0.0)
+        except (TypeError, ValueError):
+            exp = 0.0
+        parsed.append((dt, exp))
+    if not parsed:
+        return None, None
+    parsed.sort(key=lambda p: p[0])
+    last_dt, last_exp = parsed[-1]
+    return _format_utc(parsed[0][0]), _format_utc(last_dt + timedelta(seconds=last_exp))
 
 
 # ============================================================================
@@ -251,7 +307,9 @@ _SESSIONS_SCHEMA = """
         created_at               TEXT,
         updated_at               TEXT,
         site_lat                 REAL,
-        site_lon                 REAL
+        site_lon                 REAL,
+        start_utc                TEXT,
+        end_utc                  TEXT
     )
 """
 
@@ -377,6 +435,33 @@ def init_db(db_path: Path) -> None:
                 created_at  TEXT,
                 updated_at  TEXT
             );
+            -- F4: per-session guiding quality, derived by intersecting PHD2
+            -- guide-log segments with the session's start_utc/end_utc span
+            -- (`darkroom catalog scan-guiding`). A side table, not columns on
+            -- sessions: "no guiding data" is simply row-absent, and re-scans
+            -- can INSERT OR REPLACE a whole row without touching the session.
+            -- `coverage` = guided seconds / session wall span — the guard
+            -- against a partial log looking authoritative.
+            CREATE TABLE IF NOT EXISTS session_guiding (
+                session_id         TEXT PRIMARY KEY,
+                rms_ra_arcsec      REAL,
+                rms_dec_arcsec     REAL,
+                rms_total_arcsec   REAL,
+                peak_arcsec        REAL,
+                p95_arcsec         REAL,
+                guide_frames       INTEGER,
+                excluded_frames    INTEGER,
+                dropped_frames     INTEGER,
+                star_lost_events   INTEGER,
+                dither_count       INTEGER,
+                guided_sec         INTEGER,
+                coverage           REAL,
+                pixel_scale_arcsec REAL,
+                guide_camera       TEXT,
+                guide_exposure_ms  INTEGER,
+                source_logs        TEXT,   -- JSON array of log basenames
+                computed_at        TEXT
+            );
         """
         )
         # Additive migrations for existing (pre-W3) sessions tables. These must
@@ -421,6 +506,14 @@ def init_db(db_path: Path) -> None:
             conn.execute("ALTER TABLE sessions ADD COLUMN site_lat REAL")
         if "site_lon" not in cols:
             conn.execute("ALTER TABLE sessions ADD COLUMN site_lon REAL")
+
+        # F4: session wall-clock span in UTC, for intersecting guide-log
+        # segments with a night. CREATE TABLE IF NOT EXISTS above is a no-op on
+        # an existing table, so an already-live DB only gets these here.
+        if "start_utc" not in cols:
+            conn.execute("ALTER TABLE sessions ADD COLUMN start_utc TEXT")
+        if "end_utc" not in cols:
+            conn.execute("ALTER TABLE sessions ADD COLUMN end_utc TEXT")
 
         # Indexes are (re)created here, after the rebuild above (which drops
         # them along with the old table) — safe to run every time.
@@ -481,6 +574,8 @@ def upsert_session(db_path: Path, session: dict) -> None:
     session.setdefault("processed_status", None)
     session.setdefault("site_lat", None)
     session.setdefault("site_lon", None)
+    session.setdefault("start_utc", None)
+    session.setdefault("end_utc", None)
     session.setdefault("notes", "")
     with sqlite3.connect(db_path) as conn:
         conn.execute(
@@ -490,13 +585,13 @@ def upsert_session(db_path: Path, session: dict) -> None:
                 gain, temperature_c, exposure_sec, focal_length,
                 frame_count, total_integration_sec, ra_deg, dec_deg,
                 lights_path, processed_status, notes, created_at, updated_at,
-                site_lat, site_lon
+                site_lat, site_lon, start_utc, end_utc
             ) VALUES (
                 :session_id, :target, :obs_date, :ota, :camera, :filter,
                 :gain, :temperature_c, :exposure_sec, :focal_length,
                 :frame_count, :total_integration_sec, :ra_deg, :dec_deg,
                 :lights_path, :processed_status, :notes, :created_at, :updated_at,
-                :site_lat, :site_lon
+                :site_lat, :site_lon, :start_utc, :end_utc
             )
             ON CONFLICT(session_id) DO UPDATE SET
                 target                = excluded.target,
@@ -516,7 +611,9 @@ def upsert_session(db_path: Path, session: dict) -> None:
                 notes                 = COALESCE(NULLIF(excluded.notes, ''), sessions.notes),
                 updated_at            = excluded.updated_at,
                 site_lat              = COALESCE(excluded.site_lat, sessions.site_lat),
-                site_lon              = COALESCE(excluded.site_lon, sessions.site_lon)
+                site_lon              = COALESCE(excluded.site_lon, sessions.site_lon),
+                start_utc             = COALESCE(excluded.start_utc, sessions.start_utc),
+                end_utc               = COALESCE(excluded.end_utc, sessions.end_utc)
             """,
             session,
         )
@@ -560,6 +657,47 @@ def upsert_calibration_set(db_path: Path, cal_set: dict) -> None:
                 updated_at   = excluded.updated_at
             """,
             cal_set,
+        )
+
+
+_GUIDING_COLUMNS = (
+    "session_id",
+    "rms_ra_arcsec", "rms_dec_arcsec", "rms_total_arcsec",
+    "peak_arcsec", "p95_arcsec",
+    "guide_frames", "excluded_frames", "dropped_frames",
+    "star_lost_events", "dither_count",
+    "guided_sec", "coverage",
+    "pixel_scale_arcsec", "guide_camera", "guide_exposure_ms",
+    "source_logs", "computed_at",
+)
+
+
+def upsert_session_guiding(db_path: Path, guiding: dict) -> None:
+    """Insert or replace one session's guiding stats (F4).
+
+    INSERT OR REPLACE, not an ON CONFLICT update: the row is wholly derived
+    from the guide logs, so a re-scan should replace it outright — a field
+    that no longer has a value must go back to NULL rather than keep a stale
+    one. Unknown keys are ignored and missing ones become NULL, so callers
+    (`darkroom.guidescan.apply`, the webapi) can pass whatever they have.
+
+    Args:
+        db_path: Path to SQLite database file
+        guiding: Dictionary with keys matching the session_guiding schema;
+            `source_logs` may be a list, which is stored as a JSON array.
+    """
+    row = {col: guiding.get(col) for col in _GUIDING_COLUMNS}
+    if isinstance(row["source_logs"], (list, tuple)):
+        row["source_logs"] = json.dumps(list(row["source_logs"]))
+    row["computed_at"] = row["computed_at"] or datetime.now(timezone.utc).strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+    placeholders = ", ".join(f":{col}" for col in _GUIDING_COLUMNS)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            f"INSERT OR REPLACE INTO session_guiding ({', '.join(_GUIDING_COLUMNS)}) "
+            f"VALUES ({placeholders})",
+            row,
         )
 
 
@@ -716,6 +854,9 @@ class SessionAnalyzer:
                 filter_ = first.get("filter_header") or _filter_from_path(lights_path) or None
 
             focallen = first.get("focallen")
+            start_utc, end_utc = compute_session_span(
+                (f.get("date_obs", ""), f.get("exposure")) for f in frames
+            )
             sessions.append({
                 "target": _normalize_target(first["object"] or _target_from_path(lights_path)),
                 "obs_date": night,
@@ -732,6 +873,8 @@ class SessionAnalyzer:
                 "dec_deg": first.get("dec_deg"),
                 "site_lat": first.get("site_lat"),
                 "site_lon": first.get("site_lon"),
+                "start_utc": start_utc,
+                "end_utc": end_utc,
                 "lights_path": str(lights_path),
                 "notes": "",
             })

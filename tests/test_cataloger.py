@@ -14,6 +14,7 @@ from darkroom.cataloger import (
     make_session_id,
     find_lights_folders,
     compute_imaging_night,
+    compute_session_span,
     SessionAnalyzer,
     FITSHeaderExtractor,
     CalibrationCataloger,
@@ -1219,3 +1220,217 @@ class TestCalibrationCatalogerFlatDarkThreshold:
 
         assert len(cal_sets) == 1
         assert cal_sets[0]["frame_type"] == "Dark"
+
+
+# ── F4: session wall-clock span (start_utc / end_utc) ────────────────────────
+
+class TestComputeSessionSpan:
+    def test_span_covers_the_final_exposure(self):
+        start, end = compute_session_span([
+            ("2026-02-19T22:00:00", 180.0),
+            ("2026-02-19T22:03:00", 180.0),
+        ])
+        assert start == "2026-02-19T22:00:00"
+        # last frame *started* at 22:03 — the span runs to when it finished.
+        assert end == "2026-02-19T22:06:00"
+
+    def test_unsorted_input_still_yields_min_and_max(self):
+        """Frames arrive in directory-walk order, which is not chronological."""
+        start, end = compute_session_span([
+            ("2026-02-19T23:30:00", 300.0),
+            ("2026-02-19T22:00:00", 180.0),
+            ("2026-02-19T22:30:00", 180.0),
+        ])
+        assert start == "2026-02-19T22:00:00"
+        assert end == "2026-02-19T23:35:00"
+
+    def test_end_uses_the_last_frames_exposure_not_the_first(self):
+        start, end = compute_session_span([
+            ("2026-02-19T22:00:00", 60.0),
+            ("2026-02-19T22:10:00", 600.0),
+        ])
+        assert (start, end) == ("2026-02-19T22:00:00", "2026-02-19T22:20:00")
+
+    def test_span_crosses_midnight(self):
+        start, end = compute_session_span([
+            ("2026-02-19T23:58:00", 180.0),
+            ("2026-02-20T00:01:00", 180.0),
+        ])
+        assert (start, end) == ("2026-02-19T23:58:00", "2026-02-20T00:04:00")
+
+    def test_single_frame(self):
+        assert compute_session_span([("2026-02-19T22:00:00", 180.0)]) == (
+            "2026-02-19T22:00:00",
+            "2026-02-19T22:03:00",
+        )
+
+    def test_empty_and_unparseable_give_none(self):
+        assert compute_session_span([]) == (None, None)
+        assert compute_session_span([("", 180.0), ("not-a-date", 180.0)]) == (None, None)
+
+    def test_unparseable_frames_are_skipped_not_fatal(self):
+        start, end = compute_session_span([
+            ("", 180.0),
+            ("2026-02-19T22:00:00", 180.0),
+        ])
+        assert (start, end) == ("2026-02-19T22:00:00", "2026-02-19T22:03:00")
+
+    def test_missing_exposure_treated_as_zero(self):
+        assert compute_session_span([("2026-02-19T22:00:00", None)]) == (
+            "2026-02-19T22:00:00",
+            "2026-02-19T22:00:00",
+        )
+
+    def test_fractional_seconds_truncated_to_second_resolution(self):
+        start, end = compute_session_span([("2026-02-19T22:00:00.500", 180.0)])
+        assert start == "2026-02-19T22:00:00"
+        assert end == "2026-02-19T22:03:00"
+
+
+class TestSessionSpanSchema:
+    def test_adds_span_columns_to_db_missing_them(self, tmp_path):
+        """CREATE TABLE IF NOT EXISTS is a no-op on an existing table.
+
+        Without the ALTER TABLE guard in init_db, a live catalog would never
+        gain these columns — the trap processed_state fell into.
+        """
+        db = tmp_path / "old.db"
+        with sqlite3.connect(db) as conn:
+            conn.executescript("""
+                CREATE TABLE sessions (
+                    id                       INTEGER PRIMARY KEY,
+                    session_id               TEXT NOT NULL UNIQUE,
+                    target                   TEXT NOT NULL,
+                    obs_date                 TEXT NOT NULL,
+                    ota                      TEXT,
+                    camera                   TEXT,
+                    filter                   TEXT,
+                    gain                     INTEGER,
+                    temperature_c            REAL,
+                    exposure_sec             REAL,
+                    focal_length             REAL,
+                    frame_count              INTEGER,
+                    total_integration_sec    INTEGER,
+                    ra_deg                   REAL,
+                    dec_deg                  REAL,
+                    lights_path              TEXT,
+                    processed_status         TEXT,
+                    processed_state          TEXT NOT NULL DEFAULT 'unprocessed',
+                    processed_path           TEXT,
+                    processed_date           TEXT,
+                    notes                    TEXT,
+                    created_at               TEXT,
+                    updated_at               TEXT,
+                    site_lat                 REAL,
+                    site_lon                 REAL
+                );
+                INSERT INTO sessions (session_id, target, obs_date)
+                    VALUES ('S1', 'M 81', '2026-02-19');
+                CREATE TABLE calibration_sets (set_id TEXT PRIMARY KEY, frame_type TEXT NOT NULL);
+            """)
+        init_db(db)
+        with sqlite3.connect(db) as conn:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(sessions)")}
+            row = conn.execute(
+                "SELECT start_utc, end_utc FROM sessions WHERE session_id = 'S1'"
+            ).fetchone()
+        assert {"start_utc", "end_utc"} <= cols
+        assert row == (None, None)  # existing rows survive, unpopulated
+
+    def test_init_db_is_idempotent_over_the_span_migration(self, tmp_path):
+        db = tmp_path / "test.db"
+        init_db(db)
+        init_db(db)
+        with sqlite3.connect(db) as conn:
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(sessions)")]
+        assert cols.count("start_utc") == 1
+        assert cols.count("end_utc") == 1
+
+
+class TestUpsertSessionSpan:
+    def _session(self, **overrides):
+        base = {
+            "session_id": "M81_20260219_FRA400_ASI585MC_L-Pro",
+            "target": "M 81",
+            "obs_date": "2026-02-19",
+            "ota": "FRA400",
+            "camera": "ZWO ASI585MC",
+            "filter": "L-Pro",
+            "gain": 200,
+            "temperature_c": -10.0,
+            "exposure_sec": 180.0,
+            "focal_length": 400.0,
+            "frame_count": 10,
+            "total_integration_sec": 1800,
+            "ra_deg": None,
+            "dec_deg": None,
+            "lights_path": "/fake",
+            "notes": "",
+        }
+        base.update(overrides)
+        return base
+
+    def _span(self, db):
+        with sqlite3.connect(db) as conn:
+            return conn.execute(
+                "SELECT start_utc, end_utc FROM sessions WHERE session_id = ?",
+                ("M81_20260219_FRA400_ASI585MC_L-Pro",),
+            ).fetchone()
+
+    def test_session_without_span_keys_upserts_fine(self, tmp_path):
+        db = tmp_path / "test.db"
+        init_db(db)
+        upsert_session(db, self._session())  # no start_utc/end_utc keys at all
+        assert self._span(db) == (None, None)
+
+    def test_insert_then_update_carries_the_span(self, tmp_path):
+        db = tmp_path / "test.db"
+        init_db(db)
+        upsert_session(db, self._session(
+            start_utc="2026-02-19T22:00:00", end_utc="2026-02-20T02:00:00"
+        ))
+        assert self._span(db) == ("2026-02-19T22:00:00", "2026-02-20T02:00:00")
+
+        # Re-ingest with more frames: the DO UPDATE SET must carry the new span.
+        upsert_session(db, self._session(
+            start_utc="2026-02-19T21:30:00", end_utc="2026-02-20T03:00:00"
+        ))
+        assert self._span(db) == ("2026-02-19T21:30:00", "2026-02-20T03:00:00")
+
+    def test_coalesce_preserves_backfilled_span_on_a_spanless_rescan(self, tmp_path):
+        db = tmp_path / "test.db"
+        init_db(db)
+        upsert_session(db, self._session(
+            start_utc="2026-02-19T22:00:00", end_utc="2026-02-20T02:00:00"
+        ))
+        upsert_session(db, self._session())
+        assert self._span(db) == ("2026-02-19T22:00:00", "2026-02-20T02:00:00")
+
+
+class TestAnalyzeSessionsSpan:
+    def _make_meta(self, date_obs, exposure=180.0, stem="Light_M 81_180.0s_L-Pro_0001"):
+        return {
+            "filename_stem": stem,
+            "file_path": f"/fake/{stem}.fit",
+            "date_obs": date_obs,
+            "exposure": exposure,
+            "camera": "ZWO ASI585MC Pro",
+            "gain": 200,
+            "temperature": -20.0,
+            "object": "M 81",
+            "filter_header": None,
+            "imagetyp": "Light Frame",
+            "focallen": 400,
+            "ra_deg": None,
+            "dec_deg": None,
+        }
+
+    def test_span_populated_from_all_frames_regardless_of_order(self, tmp_path):
+        metas = [
+            self._make_meta("2026-02-19T23:00:00", 300.0, "Light_0003"),
+            self._make_meta("2026-02-19T22:00:00", 180.0, "Light_0001"),
+        ]
+        result = SessionAnalyzer.analyze_sessions(metas, tmp_path / "Lights")
+        assert len(result) == 1
+        assert result[0]["start_utc"] == "2026-02-19T22:00:00"
+        assert result[0]["end_utc"] == "2026-02-19T23:05:00"

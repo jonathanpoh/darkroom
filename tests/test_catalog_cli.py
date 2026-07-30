@@ -1,4 +1,5 @@
-"""Tests for `darkroom catalog sites ...` / `backfill-sites` (S1 Phase 3)."""
+"""Tests for `darkroom catalog sites ...` / `backfill-sites` (S1 Phase 3)
+and `backfill-times` (F4)."""
 from __future__ import annotations
 
 import argparse
@@ -9,6 +10,8 @@ from astropy.io import fits
 
 from darkroom.catalog_cli import (
     _backfill_sites_run,
+    _backfill_times_run,
+    _scan_guiding_run,
     _sites_add_run,
     _sites_list_run,
     _sites_set_run,
@@ -16,6 +19,7 @@ from darkroom.catalog_cli import (
 )
 from darkroom.catalog_client import LocalBackend
 from darkroom.cataloger import init_db, upsert_session
+from darkroom.guidelog import DEFAULT_SETTLE_EXCLUDE_SEC
 
 
 # ---------------------------------------------------------------------------
@@ -59,12 +63,18 @@ def _session(
     return base
 
 
-def _make_fits(path: Path, sitelat=None, sitelong=None) -> Path:
+def _make_fits(
+    path: Path,
+    sitelat=None,
+    sitelong=None,
+    date_obs="2026-02-19T22:00:00",
+    exposure=180.0,
+) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     hdu = fits.PrimaryHDU()
     hdu.header["OBJECT"] = "M 81"
-    hdu.header["DATE-OBS"] = "2026-02-19T22:00:00"
-    hdu.header["EXPOSURE"] = 180.0
+    hdu.header["DATE-OBS"] = date_obs
+    hdu.header["EXPOSURE"] = exposure
     if sitelat is not None:
         hdu.header["SITELAT"] = sitelat
     if sitelong is not None:
@@ -398,5 +408,226 @@ def test_argparse_registration_backfill_sites():
 
     args = p.parse_args(["catalog", "backfill-sites", "--archive", "/tmp/x", "--apply"])
     assert args.func is _backfill_sites_run
+    assert args.archive == "/tmp/x"
+    assert args.apply is True
+
+
+def test_argparse_registration_scan_guiding():
+    p = argparse.ArgumentParser()
+    sub = p.add_subparsers(dest="cmd", required=True)
+    add_subparser(sub)
+
+    args = p.parse_args(["catalog", "scan-guiding", "--logs", "/tmp/logs", "--apply"])
+    assert args.func is _scan_guiding_run
+    assert args.logs == "/tmp/logs"
+    assert args.apply is True
+
+    # --logs is optional: it defaults to <archive>/00_Logs/ASIAir at run time.
+    args = p.parse_args(["catalog", "scan-guiding"])
+    assert args.logs is None
+    assert args.apply is False
+    # The stored numbers are only comparable at one setting, so the default
+    # is pinned to the parser's — the regression anchors are calibrated to it.
+    assert args.settle_exclude == pytest.approx(DEFAULT_SETTLE_EXCLUDE_SEC)
+
+    args = p.parse_args(["catalog", "scan-guiding", "--settle-exclude", "120"])
+    assert args.settle_exclude == pytest.approx(120.0)
+    assert isinstance(args.settle_exclude, float)
+
+
+# ---------------------------------------------------------------------------
+# backfill-times (F4)
+# ---------------------------------------------------------------------------
+
+_LIGHTS = "01_Deep Sky Objects/M 81/2026-02-19_FRA400_ZWOASI585MCPro/Lights/L-Pro"
+
+
+def test_backfill_times_dry_run_prints_proposals_without_mutating(tmp_path, capsys):
+    db = tmp_path / "cat.db"
+    archive = tmp_path / "archive"
+    init_db(db)
+
+    upsert_session(db, _session("s1", lights_path=_LIGHTS))
+    _make_fits(archive / _LIGHTS / "Light_0001.fit", date_obs="2026-02-19T22:00:00")
+    _make_fits(archive / _LIGHTS / "Light_0002.fit", date_obs="2026-02-19T22:03:00")
+
+    _backfill_times_run(_backfill_args(db, archive, apply=False))
+
+    out = capsys.readouterr().out
+    assert "s1: 2026-02-19T22:00:00 -> 2026-02-19T22:06:00" in out
+    assert "1 would be set, 0 no date headers, 0 missing on disk; run with --apply to write" in out
+
+    rows = LocalBackend(db).query_sessions(session_id="s1")
+    assert rows[0]["start_utc"] is None
+    assert rows[0]["end_utc"] is None
+
+
+def test_backfill_times_apply_writes_span_then_second_dry_run_reports_nothing(tmp_path, capsys):
+    db = tmp_path / "cat.db"
+    archive = tmp_path / "archive"
+    init_db(db)
+
+    upsert_session(db, _session("s1", lights_path=_LIGHTS))
+    _make_fits(archive / _LIGHTS / "Light_0001.fit", date_obs="2026-02-19T22:00:00")
+    _make_fits(archive / _LIGHTS / "Light_0002.fit", date_obs="2026-02-19T22:03:00")
+
+    _backfill_times_run(_backfill_args(db, archive, apply=True))
+    out = capsys.readouterr().out
+    assert "1 set, 0 no date headers, 0 missing on disk" in out
+
+    rows = LocalBackend(db).query_sessions(session_id="s1")
+    assert rows[0]["start_utc"] == "2026-02-19T22:00:00"
+    assert rows[0]["end_utc"] == "2026-02-19T22:06:00"
+
+    # Second dry run: the now-set session is no longer a candidate.
+    _backfill_times_run(_backfill_args(db, archive, apply=False))
+    out2 = capsys.readouterr().out
+    assert "0 would be set, 0 no date headers, 0 missing on disk; run with --apply to write" in out2
+
+
+def test_backfill_times_end_uses_the_last_frames_own_exposure(tmp_path, capsys):
+    """The span must cover the final sub-exposure, at that frame's length.
+
+    Filenames sort _0001 first but it is the *earlier*, shorter frame — the
+    endpoint has to come from the chronologically last frame.
+    """
+    db = tmp_path / "cat.db"
+    archive = tmp_path / "archive"
+    init_db(db)
+
+    upsert_session(db, _session("s1", lights_path=_LIGHTS))
+    _make_fits(archive / _LIGHTS / "Light_0001.fit",
+               date_obs="2026-02-19T23:30:00", exposure=300.0)
+    _make_fits(archive / _LIGHTS / "Light_0002.fit",
+               date_obs="2026-02-19T22:00:00", exposure=180.0)
+
+    _backfill_times_run(_backfill_args(db, archive, apply=True))
+
+    rows = LocalBackend(db).query_sessions(session_id="s1")
+    assert rows[0]["start_utc"] == "2026-02-19T22:00:00"
+    assert rows[0]["end_utc"] == "2026-02-19T23:35:00"
+
+
+def test_backfill_times_skips_sessions_that_already_have_a_span(tmp_path, capsys):
+    db = tmp_path / "cat.db"
+    archive = tmp_path / "archive"
+    init_db(db)
+
+    upsert_session(db, _session(
+        "s1", lights_path=_LIGHTS,
+        start_utc="2020-01-01T00:00:00", end_utc="2020-01-01T01:00:00",
+    ))
+    _make_fits(archive / _LIGHTS / "Light_0001.fit", date_obs="2026-02-19T22:00:00")
+
+    _backfill_times_run(_backfill_args(db, archive, apply=True))
+
+    assert "0 set" in capsys.readouterr().out
+    rows = LocalBackend(db).query_sessions(session_id="s1")
+    assert rows[0]["start_utc"] == "2020-01-01T00:00:00"
+
+
+def test_backfill_times_counts_missing_folders_and_headerless_frames(tmp_path, capsys):
+    db = tmp_path / "cat.db"
+    archive = tmp_path / "archive"
+    init_db(db)
+
+    upsert_session(db, _session("s1", lights_path=_LIGHTS))
+    missing = "01_Deep Sky Objects/M 82/2026-02-19_FRA400_ZWOASI585MCPro/Lights/L-Pro"
+    upsert_session(db, _session("s2", target="M 82", lights_path=missing))
+    _make_fits(archive / _LIGHTS / "Light_0001.fit", date_obs="")
+
+    _backfill_times_run(_backfill_args(db, archive, apply=False))
+
+    out = capsys.readouterr().out
+    assert "0 would be set, 1 no date headers, 1 missing on disk" in out
+
+
+def test_backfill_times_two_sessions_sharing_one_folder_get_their_own_nights(
+    tmp_path, capsys
+):
+    """One lights_path, two nights, two session rows — each gets only its own.
+
+    Real case from the live archive (M 81, legacy pre-F4 layout): both the
+    2025-03-25 and 2025-03-28 sessions pointed at the same folder, so an
+    unfiltered folder span handed both the same 76-hour window. Both then
+    swallowed three nights of guide rows and reported an identical, bogus
+    49.59" RMS.
+    """
+    db = tmp_path / "cat.db"
+    archive = tmp_path / "archive"
+    init_db(db)
+
+    shared = "01_Deep Sky Objects/M 81/2025-03-25_FRA400_Canon6D/Lights/NoFilter"
+    upsert_session(db, _session("early", obs_date="2025-03-25", lights_path=shared))
+    upsert_session(db, _session("late", obs_date="2025-03-28", lights_path=shared))
+
+    # Night of the 25th (the second frame is after local midnight).
+    _make_fits(archive / shared / "Light_0001.fit", date_obs="2025-03-25T23:54:23")
+    _make_fits(archive / shared / "Light_0002.fit", date_obs="2025-03-26T00:30:00")
+    # Night of the 28th.
+    _make_fits(archive / shared / "Light_0003.fit", date_obs="2025-03-28T22:00:00")
+    _make_fits(archive / shared / "Light_0004.fit", date_obs="2025-03-29T04:02:22")
+
+    _backfill_times_run(_backfill_args(db, archive, apply=True))
+    assert "2 set" in capsys.readouterr().out
+
+    rows = {
+        r["session_id"]: r
+        for r in LocalBackend(db).query_sessions(target="M 81")
+    }
+    assert rows["early"]["start_utc"] == "2025-03-25T23:54:23"
+    assert rows["early"]["end_utc"] == "2025-03-26T00:33:00"
+    assert rows["late"]["start_utc"] == "2025-03-28T22:00:00"
+    assert rows["late"]["end_utc"] == "2025-03-29T04:05:22"
+    # The bug was that these were identical — and 76 hours long.
+    assert rows["early"]["start_utc"] != rows["late"]["start_utc"]
+    assert rows["early"]["end_utc"] != rows["late"]["end_utc"]
+
+
+def test_backfill_times_skips_session_with_no_frames_on_its_night(tmp_path, capsys):
+    """No frame for this session's night -> write nothing, don't fall back."""
+    db = tmp_path / "cat.db"
+    archive = tmp_path / "archive"
+    init_db(db)
+
+    shared = "01_Deep Sky Objects/M 81/2025-03-25_FRA400_Canon6D/Lights/NoFilter"
+    upsert_session(db, _session("orphan", obs_date="2025-04-02", lights_path=shared))
+    _make_fits(archive / shared / "Light_0001.fit", date_obs="2025-03-25T23:54:23")
+
+    _backfill_times_run(_backfill_args(db, archive, apply=True))
+
+    out = capsys.readouterr().out
+    assert "0 set" in out
+    assert "1 skipped (no frames on the session night)" in out
+
+    rows = LocalBackend(db).query_sessions(session_id="orphan")
+    assert rows[0]["start_utc"] is None
+    assert rows[0]["end_utc"] is None
+
+
+def test_backfill_times_does_not_touch_identity_fields(tmp_path):
+    """start_utc/end_utc are derived, not identity — session_id/lights_path stand."""
+    db = tmp_path / "cat.db"
+    archive = tmp_path / "archive"
+    init_db(db)
+
+    upsert_session(db, _session("s1", lights_path=_LIGHTS))
+    _make_fits(archive / _LIGHTS / "Light_0001.fit", date_obs="2026-02-19T22:00:00")
+
+    _backfill_times_run(_backfill_args(db, archive, apply=True))
+
+    rows = LocalBackend(db).query_sessions(session_id="s1")
+    assert len(rows) == 1
+    assert rows[0]["session_id"] == "s1"
+    assert rows[0]["lights_path"] == _LIGHTS
+
+
+def test_argparse_registration_backfill_times():
+    p = argparse.ArgumentParser()
+    sub = p.add_subparsers(dest="cmd", required=True)
+    add_subparser(sub)
+
+    args = p.parse_args(["catalog", "backfill-times", "--archive", "/tmp/x", "--apply"])
+    assert args.func is _backfill_times_run
     assert args.archive == "/tmp/x"
     assert args.apply is True

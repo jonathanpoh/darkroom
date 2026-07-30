@@ -161,6 +161,43 @@ function calCell(cal) {
   return `<span class="caldots">${chips}</span>`;
 }
 
+/* ── guiding (F4) ──────────────────────────────
+   Total guide RMS in arcsec for the night, from the guide logs matched to this
+   session by time (darkroom catalog scan-guiding). Absent for most sessions —
+   the logs only cover part of the archive's history — and an em-dash is the
+   honest answer there: no row means "not measured", never "guided badly".
+
+   Bands are absolute, not relative to the imaging scale: 1" means something
+   different at FRA400 than at FMA180, but the repo has no camera pixel-size
+   table yet, and absolute bands are good enough to rank nights. */
+const GUIDE_WORD = { good: "good", fair: "fair", poor: "poor" };
+const guideBand = rms => rms < 1.0 ? "good" : rms <= 2.0 ? "fair" : "poor";
+function guidingCell(g) {
+  if (!g || g.rms == null) return `<span class="guide none">—</span>`;
+  const band = guideBand(g.rms);
+  const as = v => v == null ? "?" : v.toFixed(2) + "″";
+  const partial = g.cov != null && g.cov < 0.8;
+  const bits = [
+    `<b>${as(g.rms)} RMS</b> — ${GUIDE_WORD[band]}`,
+    `RA ${as(g.ra)} · Dec ${as(g.dec)}`,
+    `peak ${as(g.peak)} · p95 ${as(g.p95)}`,
+  ];
+  if (g.cov != null) {
+    const pct = (g.cov * 100).toFixed(0);
+    /* A log covering a fraction of the night must not read as the verdict on
+       all of it — say so rather than quietly showing the number. */
+    bits.push(partial ? `coverage ${pct}% — partial log, not the whole night`
+                      : `coverage ${pct}%`);
+  }
+  bits.push(`${g.frames ?? "?"} frames · ${g.lost ?? 0} star-loss · ${g.dropped ?? 0} dropped`);
+  /* rms >= 2 * p95 (computed server-side): the number is real, but it is a few
+     wrecked subs rather than a bad night. Keep the value and its band, mark it. */
+  if (g.spike) bits.push(`spike-dominated: most frames near ${as(g.p95)}, worst ${as(g.peak)} — a few bad subs rather than a bad night`);
+  if (g.logs && g.logs.length) bits.push(esc(g.logs.join(", ")));
+  const mark = g.spike ? `<span class="spike" aria-label="spike-dominated">▲</span>` : "";
+  return `<span class="guide ${band}${partial ? " partial" : ""}" data-tip="${bits.join(" · ")}">${as(g.rms)}${mark}</span>`;
+}
+
 const backlogH = t => t.nights.filter(n => n.state === "unprocessed" || n.state === "in_progress")
                               .reduce((a, n) => a + n.h, 0);
 const backlogWH = t => t.nights.filter(n => n.state === "unprocessed" || n.state === "in_progress")
@@ -295,6 +332,7 @@ function renderDetail() {
         <span class="statelabel ${n.state}">${STATE_LABEL[n.state]}</span>
         <span class="sitecell"><span class="sitechip">${n.site || ""}</span>${n.w !== undefined && n.w !== 1 ? `<span class="wbadge">×${n.w}</span>` : ""}</span>
         ${calCell(n.cal)}
+        ${guidingCell(n.guiding)}
         ${hoursHTML(n.h, n.wh)}
       </div>`).join("");
     const gs = (key, label, extra="") => {
@@ -313,7 +351,7 @@ function renderDetail() {
       <div class="rigbody">
         <div class="cols nightcols headrow">
           <span class="colhead"></span>${gs("date", "Night")}<span class="colhead">Filter</span>
-          <span class="colhead">Exposure</span>${gs("state", "State")}<span class="colhead">Site</span><span class="colhead">Cal</span>${gs("h", "Hours", "num")}
+          <span class="colhead">Exposure</span>${gs("state", "State")}<span class="colhead">Site</span><span class="colhead">Cal</span><span class="colhead">Guiding</span>${gs("h", "Hours", "num")}
         </div>
         ${rows}
       </div>
@@ -333,7 +371,8 @@ function renderDetail() {
       gauge = integration banked per rig: ${zoneLadder()}, weighted by site sky quality.
       Hours are home-equivalent — what the integration would have been worth from home — with the raw figure alongside when the site's sky quality moves it.
       Site column: named observing site the session's coordinates matched, if any; a ×badge shows its SQM weight relative to home when it isn't 1×.
-      Cal: what <b>wbpp</b> would find for Darks / Flats / FlatDarks — lit = matched, dim = missing, faded = that camera doesn't use them, dashed = can't tell. Hover for the matched set. Catalog only: this server can't see the archive.</p>`;
+      Cal: what <b>wbpp</b> would find for Darks / Flats / FlatDarks — lit = matched, dim = missing, faded = that camera doesn't use them, dashed = can't tell. Hover for the matched set. Catalog only: this server can't see the archive.
+      Guiding: total guide RMS from the PHD2 logs matched to the night by time — under 1″ good, 1–2″ fair, over 2″ poor; an em-dash means no log covers it, not bad guiding. Hover for RA/Dec, peak, p95 and how much of the night the log actually covers.</p>`;
   document.querySelectorAll("details.rig").forEach(d => d.addEventListener("toggle", () => {
     if (d.open) detail.closed.delete(d.dataset.rig); else detail.closed.add(d.dataset.rig);
   }));

@@ -29,6 +29,8 @@ class CatalogBackend(Protocol):
 
     def upsert_calibration_set(self, cal_set: dict) -> None: ...
 
+    def upsert_session_guiding(self, guiding: dict) -> None: ...
+
     def set_processed_state(
         self,
         session_id: str,
@@ -137,6 +139,14 @@ class LocalBackend:
 
         self._ensure_schema()
         upsert_calibration_set(self.db_path, cal_set)
+
+    def upsert_session_guiding(self, guiding: dict) -> None:
+        from darkroom.cataloger import upsert_session_guiding
+
+        # session_guiding is an F4 table — _ensure_schema creates it on a DB
+        # file that predates it, same rationale as list_pending_renames.
+        self._ensure_schema()
+        upsert_session_guiding(self.db_path, guiding)
 
     def set_processed_state(
         self,
@@ -429,6 +439,11 @@ class HttpBackend:
 
     def upsert_calibration_set(self, cal_set: dict) -> None:
         resp = self._client.post("/api/calibration-sets", json=cal_set)
+        self._check(resp)
+        resp.raise_for_status()
+
+    def upsert_session_guiding(self, guiding: dict) -> None:
+        resp = self._client.post("/api/session-guiding", json=guiding)
         self._check(resp)
         resp.raise_for_status()
 

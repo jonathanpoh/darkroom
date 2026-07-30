@@ -8,11 +8,21 @@ import pytest
 from fastapi.testclient import TestClient
 
 from darkroom import catalog_db
-from darkroom.cataloger import upsert_calibration_set, upsert_session
+from darkroom.cataloger import (
+    upsert_calibration_set,
+    upsert_session,
+    upsert_session_guiding,
+)
 from darkroom.webapi import auth
 from darkroom.webapi.app import create_app
 from darkroom.webapi.auth import hash_password
-from darkroom.webapi.ui import _build_aggregate, reset_login_rate_limit, _target_suggestions
+from darkroom.webapi.ui import (
+    _build_aggregate,
+    _guiding_summary,
+    _is_spike_dominated,
+    _target_suggestions,
+    reset_login_rate_limit,
+)
 
 TOKEN = "testtoken"
 UI_PASSWORD = "test-password"
@@ -1241,3 +1251,267 @@ def test_unknown_ota_session_is_not_reported_as_calibrated(tmp_path):
 
     night = _embedded_data(client.get("/targets/M%2081").text)[0]["nights"][0]
     assert night["cal"]["flats"]["status"] == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# guiding indicator (F4)
+# ---------------------------------------------------------------------------
+
+
+def _guided(db_path, session_id, **extra):
+    """A session_guiding row for `session_id`, good-band by default."""
+    row = {
+        "session_id": session_id,
+        "rms_ra_arcsec": 0.63,
+        "rms_dec_arcsec": 0.67,
+        "rms_total_arcsec": 0.92,
+        "peak_arcsec": 3.41,
+        "p95_arcsec": 1.88,
+        "guide_frames": 4210,
+        "excluded_frames": 180,
+        "dropped_frames": 12,
+        "star_lost_events": 3,
+        "dither_count": 24,
+        "guided_sec": 12600,
+        "coverage": 0.94,
+        "pixel_scale_arcsec": 6.45,
+        "guide_camera": "ZWO ASI120MM Mini",
+        "guide_exposure_ms": 2000,
+        "source_logs": ["PHD2_GuideLog_2026-02-19_220000.txt"],
+    }
+    row.update(extra)
+    upsert_session_guiding(db_path, row)
+
+
+def test_target_page_embeds_guiding_per_night(tmp_path):
+    client, db_path = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db_path, _session(sid))
+    _guided(db_path, sid)
+    login(client)
+
+    night = _embedded_data(client.get("/targets/M%2081").text)[0]["nights"][0]
+    assert night["guiding"]["rms"] == pytest.approx(0.92)
+    assert night["guiding"]["ra"] == pytest.approx(0.63)
+    assert night["guiding"]["dec"] == pytest.approx(0.67)
+    assert night["guiding"]["peak"] == pytest.approx(3.41)
+    assert night["guiding"]["p95"] == pytest.approx(1.88)
+    assert night["guiding"]["cov"] == pytest.approx(0.94)
+    assert night["guiding"]["lost"] == 3
+    assert night["guiding"]["dropped"] == 12
+    # source_logs is stored as a JSON array; the client gets a real list.
+    assert night["guiding"]["logs"] == ["PHD2_GuideLog_2026-02-19_220000.txt"]
+
+
+def test_target_page_night_without_guiding_is_null_not_missing(tmp_path):
+    """Most sessions have no guide log. The key must still be there, as null —
+    the renderer shows an em-dash, which means "not measured", not "bad"."""
+    client, db_path = make_client(tmp_path)
+    upsert_session(db_path, _session("M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"))
+    login(client)
+
+    night = _embedded_data(client.get("/targets/M%2081").text)[0]["nights"][0]
+    assert "guiding" in night
+    assert night["guiding"] is None
+
+
+def test_target_page_guiding_only_lands_on_its_own_session(tmp_path):
+    client, db_path = make_client(tmp_path)
+    guided_sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    other_sid = "M81_20260220_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db_path, _session(guided_sid))
+    upsert_session(db_path, _session(other_sid, obs_date="2026-02-20"))
+    _guided(db_path, guided_sid)
+    login(client)
+
+    nights = {
+        n["sid"]: n
+        for n in _embedded_data(client.get("/targets/M%2081").text)[0]["nights"]
+    }
+    assert nights[guided_sid]["guiding"]["rms"] == pytest.approx(0.92)
+    assert nights[other_sid]["guiding"] is None
+
+
+def test_overview_does_not_compute_guiding(tmp_path):
+    """Same as calibration: the overview shows no guiding, so it shouldn't
+    query for it."""
+    client, db_path = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db_path, _session(sid))
+    _guided(db_path, sid)
+    login(client)
+
+    assert "guiding" not in _embedded_data(client.get("/").text)[0]["nights"][0]
+
+
+def test_build_aggregate_shape_unchanged_without_guiding_rows(tmp_path):
+    rows = [_session("M81_20260219_FRA400_ZWOASI585MCPro_L-Pro")]
+    rows[0]["processed_state"] = "unprocessed"
+    assert "guiding" not in _build_aggregate(rows)[0]["nights"][0]
+
+
+def test_guiding_summary_treats_a_row_without_rms_as_not_measured(tmp_path):
+    assert _guiding_summary(None) is None
+    assert _guiding_summary({"session_id": "s1", "rms_total_arcsec": None}) is None
+
+
+def test_session_page_renders_guiding_panel(tmp_path):
+    client, db_path = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db_path, _session(sid))
+    _guided(db_path, sid)
+    login(client)
+
+    html = client.get(f"/sessions/{sid}").text
+    assert "Guiding" in html
+    assert "0.92" in html
+    assert "94% of the session" in html
+    assert "PHD2_GuideLog_2026-02-19_220000.txt" in html
+    assert "partial log" not in html  # 94% coverage is not partial
+
+
+def test_session_page_flags_partial_coverage(tmp_path):
+    client, db_path = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db_path, _session(sid))
+    _guided(db_path, sid, coverage=0.42)
+    login(client)
+
+    html = client.get(f"/sessions/{sid}").text
+    assert "42% of the session" in html
+    assert "partial log" in html
+
+
+def test_session_page_without_guiding_omits_the_panel(tmp_path):
+    client, db_path = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db_path, _session(sid))
+    login(client)
+
+    html = client.get(f"/sessions/{sid}").text
+    assert "Total RMS" not in html
+
+
+def test_session_page_guiding_survives_a_validation_error(tmp_path):
+    client, db_path = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db_path, _session(sid))
+    _guided(db_path, sid)
+    login(client)
+
+    resp = client.post(f"/sessions/{sid}", data={"gain": "not-a-number"})
+    assert resp.status_code == 400
+    assert "Total RMS" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# spike-dominated marker (F4) — presentation only, nothing stored changes
+# ---------------------------------------------------------------------------
+
+# Real sessions from the live catalog, kept as the fixtures for this rule.
+SPIKED = dict(rms_total_arcsec=19.18, p95_arcsec=2.11, peak_arcsec=351.0)  # NGC 6888 2026-07-20
+UNIFORMLY_BAD = dict(rms_total_arcsec=35.30, p95_arcsec=28.30, peak_arcsec=96.4)  # M 45 2025-09-22
+
+
+def test_is_spike_dominated_rule_and_guards():
+    assert _is_spike_dominated(19.18, 2.11) is True        # rms/p95 = 9.1
+    assert _is_spike_dominated(35.30, 28.30) is False       # 1.2 — uniformly bad
+    assert _is_spike_dominated(0.92, 1.88) is False         # 0.5 — clean
+    assert _is_spike_dominated(4.0, 2.0) is True            # exactly 2× counts
+    assert _is_spike_dominated(19.18, 0.0) is False         # p95 <= 0 guard
+    assert _is_spike_dominated(19.18, None) is False
+    assert _is_spike_dominated(None, 2.11) is False
+
+
+def test_night_payload_flags_a_spike_dominated_session(tmp_path):
+    client, db_path = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db_path, _session(sid))
+    _guided(db_path, sid, **SPIKED)
+    login(client)
+
+    night = _embedded_data(client.get("/targets/M%2081").text)[0]["nights"][0]
+    assert night["guiding"]["spike"] is True
+    # the value and its band inputs are untouched — only the annotation is new
+    assert night["guiding"]["rms"] == pytest.approx(19.18)
+    assert night["guiding"]["p95"] == pytest.approx(2.11)
+    assert night["guiding"]["peak"] == pytest.approx(351.0)
+
+
+def test_night_payload_does_not_flag_a_uniformly_bad_session(tmp_path):
+    """High RMS *and* high p95 is a genuinely bad night — it must keep reading bad."""
+    client, db_path = make_client(tmp_path)
+    sid = "M45_20250922_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db_path, _session(sid, target="M 45", obs_date="2025-09-22"))
+    _guided(db_path, sid, **UNIFORMLY_BAD)
+    login(client)
+
+    night = _embedded_data(client.get("/targets/M%2045").text)[0]["nights"][0]
+    assert night["guiding"]["spike"] is False
+
+
+def test_night_payload_does_not_flag_a_clean_session(tmp_path):
+    client, db_path = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db_path, _session(sid))
+    _guided(db_path, sid)  # 0.92 RMS / 1.88 p95
+    login(client)
+
+    night = _embedded_data(client.get("/targets/M%2081").text)[0]["nights"][0]
+    assert night["guiding"]["spike"] is False
+
+
+def test_night_without_a_guiding_row_still_renders_the_em_dash(tmp_path):
+    """No guide log means "not measured", not "spiked" and not "bad": the payload
+    stays null and the renderer's null branch is the em-dash."""
+    client, db_path = make_client(tmp_path)
+    upsert_session(db_path, _session("M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"))
+    login(client)
+
+    night = _embedded_data(client.get("/targets/M%2081").text)[0]["nights"][0]
+    assert night["guiding"] is None
+    js = client.get("/static/app.js").text
+    assert 'if (!g || g.rms == null) return `<span class="guide none">—</span>`;' in js
+    # the marker is a straight read of the server flag — no threshold in the JS
+    assert "if (g.spike)" in js
+    assert re.search(r"g\.spike \? .*class=\\?\"spike\\?\"", js)
+
+
+def test_session_page_marks_a_spike_dominated_session(tmp_path):
+    client, db_path = make_client(tmp_path)
+    sid = "NGC6888_20260720_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db_path, _session(sid, target="NGC 6888", obs_date="2026-07-20"))
+    _guided(db_path, sid, **SPIKED)
+    login(client)
+
+    html = client.get(f"/sessions/{sid}").text
+    assert 'class="spike"' in html
+    assert "spike-dominated: most frames near 2.11" in html
+    assert "worst 351.00" in html
+    assert "a few bad subs rather than a bad night" in html
+    assert "19.18" in html  # the RMS itself is unchanged
+
+
+def test_session_page_does_not_mark_a_uniformly_bad_session(tmp_path):
+    client, db_path = make_client(tmp_path)
+    sid = "M45_20250922_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db_path, _session(sid, target="M 45", obs_date="2025-09-22"))
+    _guided(db_path, sid, **UNIFORMLY_BAD)
+    login(client)
+
+    html = client.get(f"/sessions/{sid}").text
+    assert "35.30" in html
+    assert 'class="spike"' not in html
+    assert "spike-dominated" not in html
+
+
+def test_session_page_does_not_mark_a_clean_session(tmp_path):
+    client, db_path = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db_path, _session(sid))
+    _guided(db_path, sid)
+    login(client)
+
+    html = client.get(f"/sessions/{sid}").text
+    assert 'class="spike"' not in html
+    assert "spike-dominated" not in html
