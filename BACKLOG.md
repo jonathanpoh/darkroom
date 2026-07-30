@@ -4,7 +4,7 @@ Captured 2026-06-30 from a whole-codebase review + a web-UI readiness assessment
 Line numbers are accurate as of commit `5c8936d`; re-grep before editing if the
 tree has moved on. Severity: **P1** = correctness, act first · **P2** = minor /
 docs · **R** = refactor · **W** = web-UI prep · **U** = CLI UX · **F** =
-features · **S** = observation sites / conditions.
+features · **S** = observation sites / conditions · **M** = mosaics.
 
 ---
 
@@ -1467,6 +1467,99 @@ site lat/lon, angular separation.
 
 ---
 
+## M — Mosaics
+
+### M1. Model mosaic panels as a session dimension, not as separate targets
+
+Queued 2026-07-30, out of Jonathan's question: the U2 cleanup queue flags
+`IC 4604_1-1` … `IC 4604_2-2` as a probable 4-panel mosaic — so how should a
+mosaic actually be laid out in the archive?
+
+**Decision: a panel is a fourth identity dimension on the session** (alongside
+obs_date / OTA / camera / filter), carried in a new nullable `sessions.panel`
+column and in the folder path. The base target stays the object designation
+(`IC 4604`), so target browsing, `--target IC 4604`, flat matching and
+duplicate detection all keep working unchanged.
+
+#### Layout
+
+```
+01_Deep Sky Objects/
+  IC 4604/                                    ← base target, one folder per object
+    2025-04-26_FRA400_Canon6D_NoFilter/       ← one folder per night, unchanged
+      Lights/
+        NoFilter/
+          P1-1/  P1-2/  P2-1/  P2-2/          ← lights_path points here, per panel
+    _Processed/
+      2025-05-29/
+        P1-1/ …                               ← already the manual convention on disk
+```
+
+One session row per **panel-night**: 4 panels × 2 nights = 8 rows, each with its
+own frame count and integration. That is the correct grain — panel `2-2`
+genuinely has less data than `1-1`, and panels accumulate across nights
+independently (live data: `1-1` was revisited on 2025-05-24, `2-1`/`2-2` were
+not).
+
+#### Why not the alternatives
+
+- **Panel as the target name** (`IC 4604_1-1`) — what the live catalog has today,
+  and what U2's Targets suggestions flag as broken. Loses object-level grouping,
+  pollutes the target list, breaks `--target IC 4604`.
+- **Panel in the session folder name** (`2025-04-26_FRA400_Canon6D_NoFilter_P1-1/`)
+  — duplicates the night folder 4×, so one night's work is no longer one
+  directory and that night's single flat set appears to belong to four sessions.
+- **All panels in one session row** — registration across non-overlapping panels
+  fails, and per-panel depth becomes invisible.
+- **A `mosaics` table with grid geometry** — overkill. Base target + a `panel`
+  string gives the grouping for free; the grid is implied by the `N-M` labels.
+
+#### Code touchpoints
+
+| Piece | Change |
+|---|---|
+| `cataloger.py:_SESSIONS_SCHEMA` | nullable `panel TEXT`, additive migration; NULL = ordinary single-pointing session (the overwhelming majority) |
+| `names.py:make_session_id` | append `_P1-1` when panel is set — **this is what fixes the same-night collision** `catalog_db.rename_target` currently reports as a per-row error |
+| `names.py:session_dest_rel` | append the panel dir under `Lights/<filter>/` |
+| `parse.py` | new `parse_panel()`: split a trailing `_N-M` off the ASIAir object name. The panel already arrives there — real frames are `Light_IC4604_1-1_120.0s_Bin1_ISO1600_20250427-041855_14.0C_0001.fit` |
+| `ingest.py` | use it at scan time so base target and panel are separated before anything is copied |
+| `ingest_review.py` | show panel in the summary block, editable like filter |
+| `prep.py` / `wbpp.py` | **the one real behaviour change** — panels must not be stacked together, so a mosaic prep emits one tree per panel: `~/WBPP/IC4604_P1-1/SESSION_1..N/`. Folding the panel into the WBPP slug keeps the `wbpp → finish` handoff working unchanged. Picker grows a panel step (or "all panels" → N trees in one go) |
+| `finish.py` | output to `_Processed/<date>/P1-1/` |
+| `webapi/ui.py` | the `_PANEL_SUFFIX_RE` suggestion must set target **and** panel in one edit (target-only hits the collision); target view shows "4 panels · 2.1h/panel" rather than implying that 8.4h of panel-time is 8.4h of depth |
+
+Nothing else moves: `parse.fits_files` is non-recursive by default (so the new
+nesting can't leak frames into a sibling panel's symlink set), and flat/dark
+matching never keys on target.
+
+#### Migrating the live IC 4604 rows (verified against the live catalog 2026-07-30)
+
+Nine rows carry `4604`. Eight are panels, and the panel name landed in **both**
+the target and the filter column (`target: 'IC 4604_1-1'`,
+`filter: 'IC4604_1-1'`) — these rows came from a scan that read
+`Lights/<subdir>` as a filter, so **the real filter for those two nights is not
+recorded anywhere** and Jonathan has to supply it.
+
+1. Per row: set target `IC 4604` + panel `1-1` + the real filter in **one** edit.
+2. That writes `pending_renames`; `darkroom catalog apply-renames` then moves
+   `Lights/IC4604_1-1/` → `Lights/<Filter>/P1-1/`.
+3. Unrelated oddities in the same data, for whoever does the pass: the
+   2023-07-15 row (21 frames, `ota: Unknown`, `lights_path` with no `Lights/`
+   level) is a genuine single-pointing legacy session — leave it alone; and
+   there is a stray 2-frame `IC 4604_1-2` row on obs_date 2025-04-27 that looks
+   like a tail past the night boundary.
+
+#### Do first / do later
+
+IC 4604 is the only mosaic in the archive, it is already sitting in a per-panel
+layout on disk, and nothing is currently broken by it. The part that actually
+earns priority is the **ingest side** (`parse_panel` + the `panel` column +
+`make_session_id`), because without it the next mosaic recreates this exact mess
+from scratch. The web-UI panel-aware totals and the per-panel WBPP prep can
+follow once there is a second mosaic to test against.
+
+---
+
 ## Suggested order for a future session
 1. **B1 + B2** (finish + flat-darks) — silent data-pipeline failures, with tests. ✅ DONE
    — **B12** (flat-morning ranking) ✅ DONE 2026-07-29 is the third of the same
@@ -1513,3 +1606,8 @@ site lat/lon, angular separation.
     **B7**/**R1–R5** leftovers. R1, R2, R4, R5 and B7 all landed 2026-07-29;
     only R3 remains from that block. Litestream (continuous DB replication)
     also lands here as an optional upgrade over the nightly backup.
+13. **M1** (mosaic panels as a session dimension) — design settled 2026-07-30,
+    unbuilt. Not urgent: IC 4604 is the archive's only mosaic and it isn't
+    breaking anything. Do the ingest half (`parse_panel` + `panel` column +
+    `make_session_id`) before the next mosaic is shot, and the WBPP/UI half
+    after. Also closes U2's known same-night panel-collision gap.
