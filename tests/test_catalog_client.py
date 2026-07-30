@@ -402,3 +402,121 @@ def test_http_backend_401_raises_runtime_error():
     with pytest.raises(RuntimeError):
         backend.query_sessions()
     backend.close()
+
+
+# ---------------------------------------------------------------------------
+# LocalBackend.query_sessions SQM enrichment (S2) + Local/HTTP parity
+# ---------------------------------------------------------------------------
+
+def test_local_backend_query_sessions_no_sites_weight_one(tmp_path):
+    """No sites configured → enrichment is a no-op (site=None, w=1.0)."""
+    backend = LocalBackend(tmp_path / "cat.db")
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    backend.upsert_session(_session(
+        sid, site_lat=38.5245, site_lon=-8.8926, frame_count=10,  # 0.5h
+    ))
+
+    rows = backend.query_sessions(target="M 81")
+    assert len(rows) == 1
+    assert rows[0]["site"] is None
+    assert rows[0]["w"] == 1.0
+    assert rows[0]["wh"] == pytest.approx(0.5)
+
+
+def test_local_backend_query_sessions_home_session_neutral(tmp_path):
+    backend = LocalBackend(tmp_path / "cat.db")
+    backend.add_site(_site("Home", lat=38.5245, lon=-8.8926, sqm=21.0, is_home=True))
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    backend.upsert_session(_session(
+        sid, site_lat=38.5245, site_lon=-8.8926, frame_count=10,  # 0.5h
+    ))
+
+    rows = backend.query_sessions(target="M 81")
+    assert rows[0]["site"] == "Home"
+    assert rows[0]["w"] == 1.0
+    assert rows[0]["wh"] == pytest.approx(0.5)
+
+
+def test_local_backend_query_sessions_away_darker_site_weighted(tmp_path):
+    backend = LocalBackend(tmp_path / "cat.db")
+    backend.add_site(_site("Home", lat=38.5245, lon=-8.8926, sqm=21.0, is_home=True))
+    backend.add_site(_site(
+        "Dark", lat=38.444, lon=-8.378, sqm=23.5, radius_m=50000,
+    ))
+    sid = "NGC281_20260726_FRA400_ZWOASI585MCPro_L-Pro"
+    backend.upsert_session(_session(
+        sid, target="NGC 281",
+        site_lat=38.444, site_lon=-8.378, frame_count=20,  # 1.0h
+    ))
+
+    rows = backend.query_sessions(target="NGC 281")
+    assert rows[0]["site"] == "Dark"
+    assert rows[0]["w"] == 10.0
+    assert rows[0]["wh"] == pytest.approx(10.0)
+
+
+def test_query_sessions_local_and_http_parity(tmp_path):
+    """S2: LocalBackend and HttpBackend must return identical site/w/wh for
+    the same catalog payload — that's the whole reason the helper is shared.
+
+    TestClient is an httpx.Client subclass, so an HttpBackend built on it
+    makes real calls through the full FastAPI stack — same request/response
+    shape as the deployed LXC, without mocking responses.
+    """
+    from fastapi.testclient import TestClient
+    from darkroom.webapi.app import create_app
+    from darkroom.webapi.auth import hash_password
+
+    token = "testtoken"
+    app = create_app(tmp_path / "server.db", token, hash_password("pw"))
+    tc = TestClient(app, headers={"Authorization": f"Bearer {token}"})
+    http_backend = HttpBackend("http://testserver", client=tc)
+    local_backend = LocalBackend(tmp_path / "local.db")
+
+    # Seed both backends identically: a home site, a darker away site, two
+    # sessions (one home, one away).
+    for backend in (http_backend, local_backend):
+        backend.add_site(_site(
+            "Home", lat=38.5245, lon=-8.8926, sqm=21.0, is_home=True,
+        ))
+        backend.add_site(_site(
+            "Dark", lat=38.444, lon=-8.378, sqm=23.5, radius_m=50000,
+        ))
+
+    sid_home = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    sid_away = "NGC281_20260726_FRA400_ZWOASI585MCPro_L-Pro"
+    for backend in (http_backend, local_backend):
+        backend.upsert_session(_session(
+            sid_home,
+            site_lat=38.5245, site_lon=-8.8926,
+            frame_count=20,  # 1.0h
+        ))
+        backend.upsert_session(_session(
+            sid_away, target="NGC 281",
+            site_lat=38.444, site_lon=-8.378,
+            frame_count=20,  # 1.0h raw
+        ))
+
+    local_rows = local_backend.query_sessions()
+    http_rows = http_backend.query_sessions()
+    http_backend.close()
+
+    local_by_sid = {r["session_id"]: r for r in local_rows}
+    http_by_sid = {r["session_id"]: r for r in http_rows}
+    assert set(local_by_sid) == set(http_by_sid)
+
+    for sid in (sid_home, sid_away):
+        local_row = local_by_sid[sid]
+        http_row = http_by_sid[sid]
+        assert local_row["site"] == http_row["site"]
+        assert local_row["w"] == http_row["w"]
+        assert local_row["wh"] == pytest.approx(http_row["wh"])
+
+    # The away session should actually be weighted (otherwise the test passed
+    # for the trivial reason), and the home session should be neutral —
+    # asserting the math is right, not just that the two paths agree.
+    assert local_by_sid[sid_home]["site"] == "Home"
+    assert local_by_sid[sid_home]["w"] == 1.0
+    assert local_by_sid[sid_away]["site"] == "Dark"
+    assert local_by_sid[sid_away]["w"] == 10.0
+    assert local_by_sid[sid_away]["wh"] == pytest.approx(10.0)

@@ -23,6 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from darkroom import catalog_db, config
+from darkroom.sites import annotate_sessions
 from darkroom.webapi import auth
 from darkroom.webapi.ui import COOKIE_NAME, SESSION_MAX_AGE_SECONDS, build_ui_router
 
@@ -194,7 +195,13 @@ def create_app(db_path: Path, api_token: str, ui_password_hash: str) -> FastAPI:
         offset: int = 0,
         conn=Depends(_get_conn),
     ):
-        return catalog_db.query_sessions(
+        # S2: resolve site + SQM weight per row so JSON consumers (scripts,
+        # the CLI's HttpBackend, future tooling) see home-equivalent hours,
+        # not just the server-rendered dashboard. `annotate_sessions` is
+        # additive — it never strips columns — so callers reading only the
+        # raw `site_lat`/`site_lon`/`total_integration_sec` fields are
+        # unaffected.
+        rows = catalog_db.query_sessions(
             conn,
             target=target,
             obs_date=obs_date,
@@ -208,6 +215,8 @@ def create_app(db_path: Path, api_token: str, ui_password_hash: str) -> FastAPI:
             limit=limit,
             offset=offset,
         )
+        sites = catalog_db.list_sites(conn)
+        return annotate_sessions(rows, sites)
 
     @app.get("/api/sessions/count", dependencies=[auth_dep])
     def get_sessions_count(

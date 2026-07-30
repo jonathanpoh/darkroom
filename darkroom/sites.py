@@ -128,3 +128,43 @@ def session_weight(site: dict | None, home: float | None) -> float:
     if site_sqm is None:
         return 1.0
     return 10 ** ((site_sqm - home) / 2.5)
+
+
+def annotate_sessions(
+    rows: list[dict],
+    sites: list[dict] | None = None,
+    *,
+    home: float | None = None,
+) -> list[dict]:
+    """Add SQM-derived fields to each session row, in place and returned.
+
+    Mirrors the per-row math `darkroom.webapi.ui._build_aggregate` already did
+    inline, lifted out so the JSON API (`GET /api/sessions`) and the
+    server-rendered HTML aggregate share one implementation — SQM weighting
+    was only ever reachable from the dashboard before this (S2).
+
+    Adds three additive keys (never reads them back, never removes anything):
+      * `site`  — resolved site's `name`, or None when coords are absent or
+                  no site's radius_m covers the position
+      * `w`     — `round(session_weight(site, home), 3)` (1.0 when site/home
+                  unknown)
+      * `wh`    — `h * w`, where `h = (total_integration_sec or 0) / 3600.0`
+
+    `home` defaults to `home_sqm(sites)` when None (computed once per call).
+    Pass it in to avoid re-deriving across batches. With `sites` empty/None
+    or no home SQM, every row gets `w=1.0`, `wh=h`, `site=None` — i.e. the
+    math is a no-op and callers that never configured sites see the same
+    `h` they always did, just under the `wh` key.
+    """
+    if sites is None:
+        sites = []
+    if home is None:
+        home = home_sqm(sites)
+    for row in rows:
+        h = (row.get("total_integration_sec") or 0) / 3600.0
+        site = resolve_site(row.get("site_lat"), row.get("site_lon"), sites)
+        w = session_weight(site, home)
+        row["site"] = site["name"] if site else None
+        row["w"] = round(w, 3)
+        row["wh"] = h * w
+    return rows

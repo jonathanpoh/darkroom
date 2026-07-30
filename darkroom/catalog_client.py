@@ -15,6 +15,7 @@ imported lazily inside HttpBackend.
 
 from __future__ import annotations
 
+import sqlite3
 import urllib.parse
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -202,11 +203,20 @@ class LocalBackend:
         limit: int | None = None,
         offset: int = 0,
     ) -> list[dict]:
-        from darkroom.catalog_db import query_sessions
+        from darkroom.catalog_db import list_sites, query_sessions
+        from darkroom.sites import annotate_sessions
 
+        # S2: enrich locally so LocalBackend and HttpBackend return the same
+        # weighted shape — without this, only consumers of the HTTP API
+        # would see `site`/`w`/`wh`, and `catalog_cli` paths synthesizing
+        # site resolution themselves would diverge. Unlike the write paths,
+        # we deliberately do NOT `_ensure_schema` here: procscan's read-only
+        # dry-run contract (and any other pure-read caller) must not migrate
+        # the schema, so a legacy pre-S1 file with no `sites` table degrades
+        # to "no sites → weight 1.0" — exactly the pre-S2 behaviour.
         conn = self._open()
         try:
-            return query_sessions(
+            rows = query_sessions(
                 conn,
                 target=target, obs_date=obs_date, session_id=session_id,
                 camera=camera, ota=ota, filter=filter,
@@ -214,8 +224,15 @@ class LocalBackend:
                 processed_state=processed_state,
                 limit=limit, offset=offset,
             )
+            try:
+                sites = list_sites(conn)
+            except sqlite3.OperationalError:
+                # Legacy DB predates the `sites` table — no sites means no
+                # weighting, which is the same as no sites configured.
+                sites = []
         finally:
             conn.close()
+        return annotate_sessions(rows, sites)
 
     def count_sessions(
         self,
