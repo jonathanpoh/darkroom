@@ -30,7 +30,7 @@ from darkroom import catalog_db
 from darkroom.catalog import match_session_calibration
 from darkroom.catalog_client import MemoryCalibrationBackend
 from darkroom.names import KNOWN_FILTERS, _normalize_target
-from darkroom.sites import home_sqm, resolve_site, session_weight
+from darkroom.sites import annotate_sessions
 from darkroom.webapi import auth
 from darkroom.webapi.common_names import common_name
 
@@ -130,8 +130,17 @@ def _build_aggregate(
     Optional for the same reason `sites` is — omit it and the night dicts keep
     their previous shape, which is what `/` does since the overview shows no
     calibration state and shouldn't pay to compute it.
+
+    SQM weighting is delegated to `darkroom.sites.annotate_sessions` (S2),
+    shared with the JSON API's `GET /api/sessions`. That helper returns copies
+    rather than mutating, so `rows` below is a local rebind and the caller's
+    list is left alone. It names its fields `weight`/`weighted_hours` for the
+    JSON API's benefit; the night dicts keep the short `w`/`wh` the embedded
+    dashboard JS already reads. With `sites` empty/None or no home SQM,
+    `annotate_sessions` is a no-op (weight=1.0, weighted_hours=h), so the
+    aggregate is unchanged for callers/fixtures that don't pass `sites`.
     """
-    home = home_sqm(sites) if sites else None
+    rows = annotate_sessions(rows, sites or [])
     # One backend for the whole page: the matchers hit it several times per
     # session, and LocalBackend would open a SQLite connection for each.
     cal_backend = MemoryCalibrationBackend(cal_rows) if cal_rows is not None else None
@@ -152,13 +161,7 @@ def _build_aggregate(
             hours[filt] = hours.get(filt, 0.0) + h
             state = s["processed_state"] or "unprocessed"
             states[state] = states.get(state, 0) + 1
-            site = (
-                resolve_site(s.get("site_lat"), s.get("site_lon"), sites)
-                if sites else None
-            )
-            w = session_weight(site, home)
-            wh = h * w
-            total_wh += wh
+            total_wh += s["weighted_hours"]
             night = {
                 "date": s["obs_date"],
                 "ota": s["ota"],
@@ -170,9 +173,9 @@ def _build_aggregate(
                 "h": h,
                 "state": state,
                 "sid": s["session_id"],
-                "site": site["name"] if site else None,
-                "w": round(w, 3),
-                "wh": wh,
+                "site": s["site"],
+                "w": s["weight"],
+                "wh": s["weighted_hours"],
             }
             if cal_backend is not None:
                 night["cal"] = match_session_calibration(cal_backend, s)

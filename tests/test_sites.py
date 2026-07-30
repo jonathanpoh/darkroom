@@ -1,6 +1,7 @@
 import pytest
 
 from darkroom.sites import (
+    annotate_sessions,
     describe_disagreement,
     haversine_m,
     home_sqm,
@@ -150,3 +151,143 @@ class TestDescribeDisagreement:
         assert len(lines) == 3
         # Busiest outlier listed first
         assert "3 frame(s)" in lines[1]
+
+
+def _site(name, lat, lon, *, sqm=None, is_home=False, radius_m=1000):
+    return {
+        "name": name, "lat": lat, "lon": lon, "radius_m": radius_m,
+        "sqm": sqm, "is_home": int(is_home),
+    }
+
+
+def _row(session_id, *, site_lat=None, site_lon=None, total_integration_sec=3600):
+    return {
+        "session_id": session_id,
+        "site_lat": site_lat,
+        "site_lon": site_lon,
+        "total_integration_sec": total_integration_sec,
+    }
+
+
+class TestAnnotateSessions:
+    """S2: per-row SQM weighting shared by the JSON API and the HTML aggregate."""
+
+    def test_returns_copies_and_leaves_input_untouched(self):
+        rows = [_row("s1", site_lat=PALMELA[0], site_lon=PALMELA[1])]
+        ret = annotate_sessions(rows, [_site("Home", *PALMELA, sqm=21.0, is_home=True)])
+        assert ret is not rows
+        assert ret[0] is not rows[0]
+        assert set(("site", "weight", "weighted_hours")).issubset(ret[0])
+        # The caller's rows must come back exactly as they went in — callers
+        # (`_build_aggregate`) annotate rows they don't own.
+        assert rows[0] == _row("s1", site_lat=PALMELA[0], site_lon=PALMELA[1])
+
+    def test_annotating_twice_is_stable(self):
+        sites = [_site("Home", *PALMELA, sqm=21.0, is_home=True)]
+        rows = [_row("s1", site_lat=PALMELA[0], site_lon=PALMELA[1])]
+        once = annotate_sessions(rows, sites)
+        twice = annotate_sessions(once, sites)
+        assert once == twice
+
+    def test_no_sites_is_noop_weight_one(self):
+        rows = [_row("s1", site_lat=PALMELA[0], site_lon=PALMELA[1])]
+        out = annotate_sessions(rows, [])
+        assert out[0]["site"] is None
+        assert out[0]["weight"] == 1.0
+        assert out[0]["weighted_hours"] == 1.0  # 3600s / 3600 = 1h, weight 1
+
+    def test_sites_none_defaults_to_empty(self):
+        rows = [_row("s1", site_lat=PALMELA[0], site_lon=PALMELA[1])]
+        out = annotate_sessions(rows, None)
+        assert out[0]["site"] is None
+        assert out[0]["weight"] == 1.0
+
+    def test_home_session_neutral_weight(self):
+        sites = [_site("Home", *PALMELA, sqm=21.0, is_home=True)]
+        rows = [_row("s1", site_lat=PALMELA[0], site_lon=PALMELA[1],
+                     total_integration_sec=5 * 3600)]
+        out = annotate_sessions(rows, sites)
+        assert out[0]["site"] == "Home"
+        assert out[0]["weight"] == 1.0
+        assert out[0]["weighted_hours"] == pytest.approx(5.0)
+
+    def test_away_session_darker_by_2_5_mag_weights_10x(self):
+        home = _site("Home", *PALMELA, sqm=21.0, is_home=True)
+        dark = _site("Dark", *SANTA_SUSANA, sqm=23.5, radius_m=50000)
+        rows = [_row("s1", site_lat=SANTA_SUSANA[0], site_lon=SANTA_SUSANA[1],
+                     total_integration_sec=2 * 3600)]
+        out = annotate_sessions(rows, [home, dark])
+        assert out[0]["site"] == "Dark"
+        assert out[0]["weight"] == 10.0  # round(10.0, 3)
+        assert out[0]["weighted_hours"] == pytest.approx(20.0)  # 2h * 10
+
+    def test_no_home_sqm_is_neutral(self):
+        # Site exists with SQM, but no is_home row → nothing to weight against.
+        sites = [_site("Away", *SANTA_SUSANA, sqm=21.0, is_home=False)]
+        rows = [_row("s1", site_lat=SANTA_SUSANA[0], site_lon=SANTA_SUSANA[1])]
+        out = annotate_sessions(rows, sites)
+        assert out[0]["site"] == "Away"
+        assert out[0]["weight"] == 1.0
+        assert out[0]["weighted_hours"] == 1.0
+
+    def test_null_coords_no_site_weight_one(self):
+        sites = [_site("Home", *PALMELA, sqm=21.0, is_home=True)]
+        rows = [_row("s1", site_lat=None, site_lon=None, total_integration_sec=3600)]
+        out = annotate_sessions(rows, sites)
+        assert out[0]["site"] is None
+        assert out[0]["weight"] == 1.0
+        assert out[0]["weighted_hours"] == 1.0
+
+    def test_total_integration_none_treated_as_zero(self):
+        sites = [_site("Home", *PALMELA, sqm=21.0, is_home=True)]
+        rows = [_row("s1", site_lat=PALMELA[0], site_lon=PALMELA[1],
+                     total_integration_sec=None)]
+        out = annotate_sessions(rows, sites)
+        # annotate_sessions adds no `h` key — only site/weight/weighted_hours.
+        assert "h" not in out[0]
+        assert out[0]["weighted_hours"] == 0.0
+        assert out[0]["weight"] == 1.0
+
+    def test_home_passed_in_skips_rederivation(self):
+        # Passing `home` avoids the home_sqm scan; even an empty sites list
+        # then weights against that explicit home value.
+        rows = [_row("s1", site_lat=PALMELA[0], site_lon=PALMELA[1],
+                     total_integration_sec=3600)]
+        # No resolveable site, so weight is 1.0 regardless of home — just
+        # exercises the `home=None` default path vs explicit.
+        out = annotate_sessions(rows, [], home=21.0)
+        assert out[0]["weight"] == 1.0
+
+    def test_does_not_clobber_pre_existing_keys(self):
+        # Additive-only: annotate must not drop any column the row already has.
+        rows = [_row("s1", site_lat=PALMELA[0], site_lon=PALMELA[1])]
+        rows[0]["target"] = "M 81"
+        rows[0]["frame_count"] = 100
+        out = annotate_sessions(rows, [_site("Home", *PALMELA, sqm=21.0, is_home=True)])
+        assert out[0]["target"] == "M 81"
+        assert out[0]["frame_count"] == 100
+        assert set(("site", "weight", "weighted_hours")).issubset(out[0].keys())
+
+    def test_empty_rows_is_noop(self):
+        assert annotate_sessions([], [_site("H", *PALMELA)]) == []
+
+    def test_rounds_weight_to_three_decimals(self):
+        # SQM delta of 1.0 → 10**(0.4) ≈ 2.5119, rounded to 2.512.
+        home = _site("Home", *PALMELA, sqm=21.0, is_home=True)
+        dark = _site("Dark", *SANTA_SUSANA, sqm=22.0, radius_m=50000)
+        rows = [_row("s1", site_lat=SANTA_SUSANA[0], site_lon=SANTA_SUSANA[1])]
+        out = annotate_sessions(rows, [home, dark])
+        assert out[0]["weight"] == 2.512
+
+    def test_weighted_hours_uses_the_published_rounded_weight(self):
+        # A consumer recomputing h * weight from the JSON must land exactly on
+        # weighted_hours; multiplying by the unrounded weight instead left the
+        # two disagreeing in the last decimals (2.512 vs 2.5118864...).
+        home = _site("Home", *PALMELA, sqm=21.0, is_home=True)
+        dark = _site("Dark", *SANTA_SUSANA, sqm=22.0, radius_m=50000)
+        rows = [_row("s1", site_lat=SANTA_SUSANA[0], site_lon=SANTA_SUSANA[1],
+                     total_integration_sec=3 * 3600)]
+        out = annotate_sessions(rows, [home, dark])
+        h = 3.0
+        assert out[0]["weighted_hours"] == h * out[0]["weight"]
+        assert out[0]["weighted_hours"] == pytest.approx(7.536)

@@ -668,6 +668,106 @@ def test_patch_session_site_lat_updates(tmp_path):
     assert row["site_lat"] == 38.5245
 
 
+# ---------------------------------------------------------------------------
+# /api/sessions SQM weighting (S2)
+# ---------------------------------------------------------------------------
+
+def test_get_sessions_no_sites_weight_one_and_site_none(tmp_path):
+    """No sites configured → every session is neutral: site=None, w=1.0, wh=h."""
+    client = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    client.post(
+        "/api/sessions",
+        json=_session(sid, site_lat=38.5245, site_lon=-8.8926,
+                      frame_count=20),  # 20 * 180s = 1h
+        headers=AUTH,
+    )
+
+    row = client.get("/api/sessions", params={"session_id": sid}, headers=AUTH).json()[0]
+    assert row["site"] is None
+    assert row["weight"] == 1.0
+    assert row["weighted_hours"] == pytest.approx(1.0)  # 20 * 180 / 3600 = 1.0h
+
+
+def test_get_sessions_home_session_neutral_weight(tmp_path):
+    client = make_client(tmp_path)
+    client.post("/api/sites", json=_site(
+        "Home", lat=38.5245, lon=-8.8926, sqm=21.0, is_home=True,
+    ), headers=AUTH)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    client.post(
+        "/api/sessions",
+        json=_session(sid, site_lat=38.5245, site_lon=-8.8926,
+                      frame_count=20),  # 1h
+        headers=AUTH,
+    )
+
+    row = client.get("/api/sessions", params={"session_id": sid}, headers=AUTH).json()[0]
+    assert row["site"] == "Home"
+    assert row["weight"] == 1.0
+    assert row["weighted_hours"] == pytest.approx(1.0)
+
+
+def test_get_sessions_away_session_weighted_by_sqm_ratio(tmp_path):
+    """Darker site (SQM +2.5) → 10x home-equivalent hours (S2's whole point)."""
+    client = make_client(tmp_path)
+    client.post("/api/sites", json=_site(
+        "Home", lat=38.5245, lon=-8.8926, sqm=21.0, is_home=True,
+    ), headers=AUTH)
+    # Santa Susana area, ~45km from Home — needs a wider radius to resolve.
+    client.post("/api/sites", json=_site(
+        "Dark", lat=38.444, lon=-8.378, sqm=23.5, radius_m=50000,
+    ), headers=AUTH)
+    sid = "NGC281_20260726_FRA400_ZWOASI585MCPro_L-Pro"
+    client.post(
+        "/api/sessions",
+        json=_session(sid, site_lat=38.444, site_lon=-8.378,
+                      frame_count=20),  # 1h raw
+        headers=AUTH,
+    )
+
+    row = client.get("/api/sessions", params={"session_id": sid}, headers=AUTH).json()[0]
+    assert row["site"] == "Dark"
+    assert row["weight"] == 10.0
+    assert row["weighted_hours"] == pytest.approx(10.0)
+
+
+def test_get_sessions_null_coords_weight_one_site_none(tmp_path):
+    """Sessions with no GPS coordinates stay neutral even when sites exist."""
+    client = make_client(tmp_path)
+    client.post("/api/sites", json=_site(
+        "Home", lat=38.5245, lon=-8.8926, sqm=21.0, is_home=True,
+    ), headers=AUTH)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    client.post("/api/sessions", json=_session(sid), headers=AUTH)  # no coords
+
+    row = client.get("/api/sessions", params={"session_id": sid}, headers=AUTH).json()[0]
+    assert row["site"] is None
+    assert row["weight"] == 1.0
+
+
+def test_get_sessions_additive_keys_do_not_drop_columns(tmp_path):
+    """Enrichment is additive — the raw site_lat/site_lon/total_integration_sec
+    fields consumed by existing callers must still be present."""
+    client = make_client(tmp_path)
+    client.post("/api/sites", json=_site(
+        "Home", lat=38.5245, lon=-8.8926, sqm=21.0, is_home=True,
+    ), headers=AUTH)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    payload = _session(sid, site_lat=38.5245, site_lon=-8.8926, frame_count=20)
+    client.post("/api/sessions", json=payload, headers=AUTH)
+
+    row = client.get("/api/sessions", params={"session_id": sid}, headers=AUTH).json()[0]
+    # Original columns preserved.
+    assert row["session_id"] == sid
+    assert row["site_lat"] == 38.5245
+    assert row["site_lon"] == -8.8926
+    assert row["total_integration_sec"] == 20 * 180
+    assert row["target"] == "M 81"
+    # New S2 keys present.
+    assert {"site", "weight", "weighted_hours"}.issubset(row.keys())
+
+
 def test_create_app_from_env_missing_token_raises(monkeypatch):
     monkeypatch.delenv("DARKROOM_API_TOKEN", raising=False)
     monkeypatch.setenv("DARKROOM_UI_PASSWORD_HASH", UI_HASH)
