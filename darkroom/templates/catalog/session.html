@@ -60,6 +60,38 @@
 </div>
 {% endif %}
 
+{% if guiding %}
+{% set band = "good" if guiding.rms_total_arcsec < 1.0 else ("fair" if guiding.rms_total_arcsec <= 2.0 else "poor") %}
+<div class="readonly-block guideblock">
+  <h3>Guiding</h3>
+  <div class="field-row"><label>Total RMS</label>
+    <span class="guide {{ band }}">{{ "%.2f"|format(guiding.rms_total_arcsec) }}&#8243;</span></div>
+  <div class="field-row"><label>RA / Dec RMS</label>
+    <span>{{ "%.2f"|format(guiding.rms_ra_arcsec) }}&#8243; / {{ "%.2f"|format(guiding.rms_dec_arcsec) }}&#8243;</span></div>
+  <div class="field-row"><label>Peak / p95</label>
+    <span>{{ "%.2f"|format(guiding.peak_arcsec) }}&#8243; / {{ "%.2f"|format(guiding.p95_arcsec) }}&#8243;</span></div>
+  <div class="field-row"><label>Coverage</label>
+    <span>{% if guiding.coverage is not none %}{{ "%.0f"|format(guiding.coverage * 100) }}% of the session
+      ({{ guiding.guided_sec }}s guided){% if guiding.coverage < 0.8 %}
+      <span class="guidewarn">partial log — not the whole night</span>{% endif %}
+      {% else %}—{% endif %}</span></div>
+  <div class="field-row"><label>Frames</label>
+    <span>{{ guiding.guide_frames }} used · {{ guiding.excluded_frames }} settling ·
+      {{ guiding.dropped_frames }} dropped · {{ guiding.star_lost_events }} star-loss ·
+      {{ guiding.dither_count }} dithers</span></div>
+  <div class="field-row"><label>Guide scope</label>
+    <span>{{ guiding.guide_camera or '—' }}{% if guiding.pixel_scale_arcsec %} ·
+      {{ "%.2f"|format(guiding.pixel_scale_arcsec) }}&#8243;/px{% endif %}{% if guiding.guide_exposure_ms %} ·
+      {{ guiding.guide_exposure_ms }}ms{% endif %}</span></div>
+  <div class="field-row"><label>Source logs</label>
+    <span>{% for log in guiding.logs %}<span class="calset">{{ log }}</span>{% else %}—{% endfor %}</span></div>
+  <p class="footnote">Measured from the PHD2 guide logs, matched to this session by time — its UTC
+    wall-clock span ({{ session.start_utc or '?' }} → {{ session.end_utc or '?' }}), never by target
+    name. Rows within the settle window (15s by default, <code>--settle-exclude</code>) of a
+    segment start or a dither are excluded. Computed {{ guiding.computed_at or '—' }}.</p>
+</div>
+{% endif %}
+
 <div class="readonly-block">
   <h3>Read-only</h3>
   <div class="field-row"><label>Frame count</label><span>{{ session.frame_count }}</span></div>

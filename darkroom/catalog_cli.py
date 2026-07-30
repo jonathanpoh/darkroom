@@ -8,6 +8,7 @@ from collections import Counter
 from itertools import groupby
 from pathlib import Path
 
+from darkroom import guidelog
 from darkroom.catalog import query_all_sessions
 from darkroom.catalog_client import resolve_backend
 from darkroom.cataloger import (
@@ -134,6 +135,10 @@ def _scan_guiding_run(args: argparse.Namespace) -> None:
     Both halves of what didn't match are reported and never guessed at: a
     whole date range failing to match means the ASIAir clock/timezone was not
     what the parser assumes, which is the user's call, not the scanner's.
+
+    `--settle-exclude` tunes how much post-dither settling is discarded. It is
+    left at guidelog.DEFAULT_SETTLE_EXCLUDE_SEC by default because the stored
+    numbers are only comparable across sessions at one setting.
     """
     from darkroom import guidescan, logs
 
@@ -152,7 +157,9 @@ def _scan_guiding_run(args: argparse.Namespace) -> None:
     if not logs_dir.is_dir():
         sys.exit(f"Error: guide log directory not found: {logs_dir}")
 
-    result = guidescan.scan(logs_dir, backend)
+    result = guidescan.scan(
+        logs_dir, backend, settle_exclude_sec=args.settle_exclude
+    )
 
     for line in _guiding_report(result):
         print(line)
@@ -727,6 +734,16 @@ def add_subparser(subparsers) -> None:
     )
     sg.add_argument("--logs", metavar="PATH",
                     help="Guide log directory (default: <archive>/00_Logs/ASIAir)")
+    sg.add_argument("--settle-exclude", type=float, metavar="SECONDS",
+                    default=guidelog.DEFAULT_SETTLE_EXCLUDE_SEC,
+                    help="Seconds of guiding discarded after a segment start or a "
+                         f"dither (default: {guidelog.DEFAULT_SETTLE_EXCLUDE_SEC:g}). "
+                         "A good night barely moves (NGC 281 0.92\" -> 0.90\" going "
+                         "from 15s to 120s); a bad one moves a lot (M 45 15.04\" -> "
+                         "5.60\"), since on a poor night the dither recoveries ARE "
+                         "much of the error. Leave it at the default unless you are "
+                         "deliberately probing that sensitivity — the stored numbers "
+                         "are only comparable across sessions at one setting.")
     sg.add_argument("--apply", action="store_true",
                     help="Write guiding stats to the catalog (default: dry run, read-only)")
     sg.set_defaults(func=_scan_guiding_run)

@@ -22,6 +22,7 @@ from darkroom import guidescan
 from darkroom.catalog_cli import _scan_guiding_run
 from darkroom.catalog_client import LocalBackend
 from darkroom.cataloger import init_db, upsert_session
+from darkroom.guidelog import DEFAULT_SETTLE_EXCLUDE_SEC
 
 _HEADER = (
     "Frame,Time,mount,dx,dy,RARawDistance,DECRawDistance,RAGuideDistance,"
@@ -371,8 +372,12 @@ def test_rescan_replaces_rather_than_duplicating(tmp_path):
 # CLI
 # ---------------------------------------------------------------------------
 
-def _args(db: Path, logs_dir: Path, *, apply: bool) -> argparse.Namespace:
-    return argparse.Namespace(catalog=str(db), logs=str(logs_dir), apply=apply)
+def _args(db: Path, logs_dir: Path, *, apply: bool,
+          settle_exclude: float = DEFAULT_SETTLE_EXCLUDE_SEC) -> argparse.Namespace:
+    return argparse.Namespace(
+        catalog=str(db), logs=str(logs_dir), apply=apply,
+        settle_exclude=settle_exclude,
+    )
 
 
 def test_cli_dry_run_reports_without_writing(tmp_path, capsys):
@@ -411,6 +416,34 @@ def test_cli_apply_writes_and_reports(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "Applied guiding stats to 1 session(s)" in out
     assert len(_guiding_rows(db)) == 1
+
+
+def test_cli_settle_exclude_is_plumbed_through_to_the_scan(tmp_path):
+    """A wider settle window must drop more rows — the flag has to reach scan().
+
+    Measured on real data: a good night barely moves (NGC 281 0.92" -> 0.90"
+    from 15s to 120s) but a bad one moves a lot (M 45 15.04" -> 5.60"), which
+    is exactly why it is tunable and why the default is pinned.
+    """
+    logs_dir = tmp_path / "logs"
+    # A row a second for 200 s, so widening the window has rows to remove.
+    write_log(logs_dir, "PHD2_GuideLog_2026-07-28_220000.txt", [
+        segment("2026-07-28 22:00:00", rows(200, t0=1.0, step=1.0),
+                "2026-07-28 23:00:00"),
+    ])
+    db = _build_catalog(tmp_path, [
+        _session("s1", "2026-07-28T21:00:00", "2026-07-28T22:00:00"),
+    ])
+
+    _scan_guiding_run(_args(db, logs_dir, apply=True))
+    default_frames = _guiding_rows(db)[0]["guide_frames"]
+
+    _scan_guiding_run(_args(db, logs_dir, apply=True, settle_exclude=60.0))
+    widened_frames = _guiding_rows(db)[0]["guide_frames"]
+
+    assert default_frames == 200 - 14   # t=1..14 inside the default 15 s
+    assert widened_frames == 200 - 59   # t=1..59 inside a 60 s window
+    assert widened_frames < default_frames
 
 
 def test_cli_missing_logs_dir_exits(tmp_path):

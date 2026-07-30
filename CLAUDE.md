@@ -168,6 +168,66 @@ window; `find_flats` was the outlier.
 > finish`, and which built archive paths differently via `_normalize_target`)
 > has been removed — `finish.py` is the only finish surface now.
 
+## `darkroom logs` + guide-log stats (F4)
+
+ASIAir logs live on the SD card, which gets rotated and cleared, so they are
+archived before anything reads them:
+
+```
+darkroom logs import [--source DIR] [--apply]   # -> <archive>/00_Logs/ASIAir/
+```
+
+Copies `Autorun_Log_*.txt` and `PHD2_GuideLog_*.txt`, skipping `*_CHN.txt`
+(Chinese translations of identical content) and names already archived at the
+same size. Dry run by default; never touches the source. Autorun logs are
+archived but not parsed — only the PHD2 guide logs are.
+
+Two catalog passes then turn those into per-session guiding quality:
+
+```
+darkroom catalog backfill-times [--archive P] [--apply]
+darkroom catalog scan-guiding   [--logs DIR] [--settle-exclude SEC] [--apply]
+```
+
+- `backfill-times` fills `sessions.start_utc`/`end_utc` — the session's UTC
+  wall-clock span — from `DATE-OBS`/`EXPTIME`. Only frames whose imaging night
+  (`cataloger.compute_imaging_night`) equals the session's `obs_date` count: a
+  `lights_path` folder can hold several nights, and legacy layouts have two
+  session rows sharing one folder. Ingest populates the span for free
+  (`scanner.py` already groups by night), so this is a one-off for old rows.
+- `scan-guiding` parses every guide log, intersects its guiding segments with
+  each session's span, and writes one `session_guiding` row per session
+  (`guidescan.py` → `catalog_client.upsert_session_guiding`). `--settle-exclude`
+  (default 15s) is how much post-dither settling is discarded; leave it alone
+  unless you are deliberately probing the sensitivity, since the stored numbers
+  are only comparable across sessions at one setting.
+
+### Guide logs are matched by TIME ONLY, never by target name
+
+The logs carry target names. **Do not use them.** They are messy (`NGC7000` vs
+`NGC 7000`, 147 `FOV` framing blocks) and, worse, sometimes simply wrong: the
+name recorded at acquisition is whatever was typed then, while filenames, FITS
+headers and the catalog were corrected afterwards. The catalog is the corrected
+truth; a log is trusted only for *when* it was guiding. Time-span intersection
+is the entire matching strategy.
+
+Two consequences worth knowing:
+
+- **Window filtering is what makes the numbers mean anything.** Whole-log RMS is
+  garbage — framing, plate-solving and slews sit inside "guiding" segments
+  (IC 5070 2026-07-10: 84.39" whole-log vs **0.97"** windowed).
+- **Coverage is the honest guard.** `coverage` = guided seconds ÷ session wall
+  span. Anything under 0.8 means a partial log, and the UI says so rather than
+  letting it look authoritative.
+
+A whole date range matching nothing means the ASIAir clock/timezone wasn't
+`guidelog.LOCAL_TZ`. `scan-guiding` **reports** that (unmatched logs and
+unmatched sessions, both ways) and never auto-corrects it.
+
+Settle failures are normal on this rig (`Settling failed` outnumbers `Settling
+complete` 10,706 : 1,350) — they are excluded statistically, never surfaced as
+an alarm.
+
 ## Relationship to `asiair-ingestion`
 
 `asiair-ingestion` is a **data repository** for the Feb 2026 imaging run. Its

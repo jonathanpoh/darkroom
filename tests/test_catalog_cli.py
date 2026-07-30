@@ -19,6 +19,7 @@ from darkroom.catalog_cli import (
 )
 from darkroom.catalog_client import LocalBackend
 from darkroom.cataloger import init_db, upsert_session
+from darkroom.guidelog import DEFAULT_SETTLE_EXCLUDE_SEC
 
 
 # ---------------------------------------------------------------------------
@@ -425,6 +426,13 @@ def test_argparse_registration_scan_guiding():
     args = p.parse_args(["catalog", "scan-guiding"])
     assert args.logs is None
     assert args.apply is False
+    # The stored numbers are only comparable at one setting, so the default
+    # is pinned to the parser's — the regression anchors are calibrated to it.
+    assert args.settle_exclude == pytest.approx(DEFAULT_SETTLE_EXCLUDE_SEC)
+
+    args = p.parse_args(["catalog", "scan-guiding", "--settle-exclude", "120"])
+    assert args.settle_exclude == pytest.approx(120.0)
+    assert isinstance(args.settle_exclude, float)
 
 
 # ---------------------------------------------------------------------------
