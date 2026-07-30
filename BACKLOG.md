@@ -1246,14 +1246,40 @@ Queued 2026-07-07, shipped 2026-07-30.
 > place the `.caldot` "don't borrow `--safelight`" rule is deliberately broken:
 > a 3" night is exactly what the column exists to make you look at.
 >
+> **Spike marker (added 2026-07-30, after F4 shipped).** RMS squares each error,
+> so a handful of wrecked subs drags an otherwise excellent night into `poor`.
+> When `rms_total >= 2 * p95` the UI appends a dim ▲ and the tooltip names p95 as
+> the typical frame (`ui.py:_is_spike_dominated`); the value and its colour band
+> are untouched — this is presentation only, nothing stored changed. The ratio is
+> what separates the two cases, measured across all 141 live sessions: clean
+> nights ≤1.0, a *uniformly* bad night ~1.2 (M 45 2025-09-22, 35.30"/28.30" —
+> correctly NOT marked), spike-dominated nights 4–12 (NGC 6888 2026-07-20,
+> 19.18"/2.11"). 24 of 141 marked; highest unmarked ratio is 1.98, so the
+> threshold sits in a real gap rather than through a cluster. Jonathan's framing
+> when he asked for it: *don't fix it just to make the numbers look better* — the
+> point is not mislabelling a good night, not flattering a bad one.
+>
 > **Deferred, filed here rather than done:**
 > - **Autorun log parsing** — autofocus runs, focuser temperature drift,
 >   `Download failed` events. The logs are archived now, parseable later.
 > - **Per-frame windowing** instead of the session envelope. Measured better
 >   (M 45 15.70" → 12.65", M 31 2.26" → 1.67") because it excludes inter-exposure
 >   settle, but it needs every frame's `DATE-OBS` at scan time, which would tie
->   the scan to a mounted archive. Envelope + settle exclusion is the right
->   default; revisit only if the numbers must be defensible to a decimal.
+>   the scan to a mounted archive (the LXC has none). Envelope + settle exclusion
+>   is the right default; revisit only if the numbers must be defensible to a
+>   decimal.
+>
+>   **The case that would justify it, measured 2026-07-30 on NGC 6888
+>   2026-07-20:** culling bad subs currently changes *nothing*. `scan-guiding`
+>   never opens a FITS file, `backfill-times` only considers sessions whose
+>   `start_utc IS NULL`, and — the real blocker — the envelope runs
+>   first-frame-start → last-frame-end, so deleting *interior* subs cannot shrink
+>   it (verified: span stayed `23:15:10 → 03:46:26` after culling 10 of 48).
+>   That night reads 19.18" on the envelope, 18.05" per-frame over all 48 subs,
+>   and **1.10" per-frame over the 38 subs worth keeping**. So per-frame
+>   windowing is what makes "cull the bad subs and rescore" work at all. Until
+>   then the spike marker above carries the practical value: it says *this night
+>   has cullable subs* without needing the cull first.
 > - **Scale-relative colour bands** — 1" RMS means something different at FRA400
 >   (~1.5"/px) than FMA180 (~3.3"/px). Needs a camera pixel-size table the repo
 >   doesn't have. Absolute bands are good enough to rank nights.
