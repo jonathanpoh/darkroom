@@ -136,35 +136,48 @@ def annotate_sessions(
     *,
     home: float | None = None,
 ) -> list[dict]:
-    """Add SQM-derived fields to each session row, in place and returned.
+    """Return copies of each session row with SQM-derived fields added.
 
     Mirrors the per-row math `darkroom.webapi.ui._build_aggregate` already did
     inline, lifted out so the JSON API (`GET /api/sessions`) and the
     server-rendered HTML aggregate share one implementation — SQM weighting
     was only ever reachable from the dashboard before this (S2).
 
-    Adds three additive keys (never reads them back, never removes anything):
-      * `site`  — resolved site's `name`, or None when coords are absent or
-                  no site's radius_m covers the position
-      * `w`     — `round(session_weight(site, home), 3)` (1.0 when site/home
-                  unknown)
-      * `wh`    — `h * w`, where `h = (total_integration_sec or 0) / 3600.0`
+    Pure: the input rows are never mutated, so a caller can annotate rows it
+    does not own (and annotate the same list twice) without surprising whoever
+    else holds a reference. Each output row is a shallow copy carrying every
+    original key plus three new ones:
+      * `site`           — resolved site's `name`, or None when coords are
+                           absent or no site's radius_m covers the position
+      * `weight`         — `round(session_weight(site, home), 3)` (1.0 when
+                           site or home SQM is unknown)
+      * `weighted_hours` — `h * weight`, where
+                           `h = (total_integration_sec or 0) / 3600.0`
+
+    `weighted_hours` deliberately multiplies by the *rounded* weight, so a
+    consumer that recomputes `h * weight` from the published fields gets the
+    published `weighted_hours` back exactly. Rounding one and not the other
+    left the two disagreeing in the last few decimals.
 
     `home` defaults to `home_sqm(sites)` when None (computed once per call).
     Pass it in to avoid re-deriving across batches. With `sites` empty/None
-    or no home SQM, every row gets `w=1.0`, `wh=h`, `site=None` — i.e. the
-    math is a no-op and callers that never configured sites see the same
-    `h` they always did, just under the `wh` key.
+    or no home SQM, every row gets `weight=1.0`, `weighted_hours=h`,
+    `site=None` — i.e. the math is a no-op and callers that never configured
+    sites see the same `h` they always did, under `weighted_hours`.
     """
     if sites is None:
         sites = []
     if home is None:
         home = home_sqm(sites)
+    annotated = []
     for row in rows:
         h = (row.get("total_integration_sec") or 0) / 3600.0
         site = resolve_site(row.get("site_lat"), row.get("site_lon"), sites)
-        w = session_weight(site, home)
-        row["site"] = site["name"] if site else None
-        row["w"] = round(w, 3)
-        row["wh"] = h * w
-    return rows
+        weight = round(session_weight(site, home), 3)
+        annotated.append({
+            **row,
+            "site": site["name"] if site else None,
+            "weight": weight,
+            "weighted_hours": h * weight,
+        })
+    return annotated

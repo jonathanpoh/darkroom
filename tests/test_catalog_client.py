@@ -408,8 +408,48 @@ def test_http_backend_401_raises_runtime_error():
 # LocalBackend.query_sessions SQM enrichment (S2) + Local/HTTP parity
 # ---------------------------------------------------------------------------
 
+def test_local_backend_query_sessions_legacy_db_without_sites_table(tmp_path):
+    """A pre-S1 catalog file has no `sites` table — degrade, don't crash.
+
+    `query_sessions` is a pure read: procscan's read-only dry-run contract
+    means it must not `_ensure_schema` its way out of this, so `list_sites`
+    raising OperationalError has to fall back to "no sites → weight 1.0",
+    which is exactly the pre-S2 behaviour. Unreachable through the webapi
+    (create_app runs init_db at construction), so a local backend against a
+    hand-made legacy file is the only way in.
+    """
+    import sqlite3
+
+    db = tmp_path / "legacy.db"
+    backend = LocalBackend(db)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    backend.upsert_session(_session(
+        sid, site_lat=38.5245, site_lon=-8.8926, frame_count=10,  # 0.5h
+    ))
+
+    # Drop the table out from under it, simulating a catalog that predates S1.
+    conn = sqlite3.connect(db)
+    conn.execute("DROP TABLE sites")
+    conn.commit()
+    conn.close()
+
+    rows = backend.query_sessions(target="M 81")
+    assert len(rows) == 1
+    assert rows[0]["site"] is None
+    assert rows[0]["weight"] == 1.0
+    assert rows[0]["weighted_hours"] == pytest.approx(0.5)
+
+    # And the read really was read-only — no schema migration as a side effect.
+    conn = sqlite3.connect(db)
+    tables = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    )}
+    conn.close()
+    assert "sites" not in tables
+
+
 def test_local_backend_query_sessions_no_sites_weight_one(tmp_path):
-    """No sites configured → enrichment is a no-op (site=None, w=1.0)."""
+    """No sites configured → enrichment is a no-op (site=None, weight=1.0)."""
     backend = LocalBackend(tmp_path / "cat.db")
     sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
     backend.upsert_session(_session(
@@ -419,8 +459,8 @@ def test_local_backend_query_sessions_no_sites_weight_one(tmp_path):
     rows = backend.query_sessions(target="M 81")
     assert len(rows) == 1
     assert rows[0]["site"] is None
-    assert rows[0]["w"] == 1.0
-    assert rows[0]["wh"] == pytest.approx(0.5)
+    assert rows[0]["weight"] == 1.0
+    assert rows[0]["weighted_hours"] == pytest.approx(0.5)
 
 
 def test_local_backend_query_sessions_home_session_neutral(tmp_path):
@@ -433,8 +473,8 @@ def test_local_backend_query_sessions_home_session_neutral(tmp_path):
 
     rows = backend.query_sessions(target="M 81")
     assert rows[0]["site"] == "Home"
-    assert rows[0]["w"] == 1.0
-    assert rows[0]["wh"] == pytest.approx(0.5)
+    assert rows[0]["weight"] == 1.0
+    assert rows[0]["weighted_hours"] == pytest.approx(0.5)
 
 
 def test_local_backend_query_sessions_away_darker_site_weighted(tmp_path):
@@ -451,8 +491,8 @@ def test_local_backend_query_sessions_away_darker_site_weighted(tmp_path):
 
     rows = backend.query_sessions(target="NGC 281")
     assert rows[0]["site"] == "Dark"
-    assert rows[0]["w"] == 10.0
-    assert rows[0]["wh"] == pytest.approx(10.0)
+    assert rows[0]["weight"] == 10.0
+    assert rows[0]["weighted_hours"] == pytest.approx(10.0)
 
 
 def test_query_sessions_local_and_http_parity(tmp_path):
@@ -509,14 +549,14 @@ def test_query_sessions_local_and_http_parity(tmp_path):
         local_row = local_by_sid[sid]
         http_row = http_by_sid[sid]
         assert local_row["site"] == http_row["site"]
-        assert local_row["w"] == http_row["w"]
-        assert local_row["wh"] == pytest.approx(http_row["wh"])
+        assert local_row["weight"] == http_row["weight"]
+        assert local_row["weighted_hours"] == pytest.approx(http_row["weighted_hours"])
 
     # The away session should actually be weighted (otherwise the test passed
     # for the trivial reason), and the home session should be neutral —
     # asserting the math is right, not just that the two paths agree.
     assert local_by_sid[sid_home]["site"] == "Home"
-    assert local_by_sid[sid_home]["w"] == 1.0
+    assert local_by_sid[sid_home]["weight"] == 1.0
     assert local_by_sid[sid_away]["site"] == "Dark"
-    assert local_by_sid[sid_away]["w"] == 10.0
-    assert local_by_sid[sid_away]["wh"] == pytest.approx(10.0)
+    assert local_by_sid[sid_away]["weight"] == 10.0
+    assert local_by_sid[sid_away]["weighted_hours"] == pytest.approx(10.0)

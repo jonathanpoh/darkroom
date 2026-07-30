@@ -806,7 +806,7 @@ POST   /api/sessions                       → cataloger.upsert_session
 POST   /api/calibration-sets               → cataloger.upsert_calibration_set
 PATCH  /api/sessions/{session_id}          → catalog_db.update_session_fields   (UI edits + CLI)
 POST   /api/sessions/{session_id}/state    → cataloger.set_processed_state
-GET    /api/sessions            [+filters] → catalog_db.query_sessions
+GET    /api/sessions            [+filters] → catalog_db.query_sessions + sites.annotate_sessions (S2)
 GET    /api/sessions/count      [+filters] → catalog_db.count_sessions
 GET    /api/calibration-sets    [+keys]    → calibration rows (wbpp matching stays client-side)
 GET    /  ...                              → Jinja2 edit UI (the web UI itself)
@@ -1417,7 +1417,42 @@ Filed and shipped 2026-07-30, off the back of F3's UI round.
 - Site radius is a flat `radius_m` per site (default 1000 m). Fine so far;
   revisit only if two genuinely distinct sites ever fall inside one radius.
 
-### S2. Expose SQM/dark-site weighting on the JSON API, not just the HTML dashboard
+### S2. Expose SQM/dark-site weighting on the JSON API, not just the HTML dashboard — ✅ DONE
+
+> Shipped 2026-07-30 (`3cfed19` + review follow-up): took the "fold it into the
+> main payload" option, not the separate endpoint. New shared helper
+> `darkroom.sites.annotate_sessions(rows, sites, *, home=None)` returns copies
+> of each row with three added keys — `site` (resolved name or None), `weight`
+> (`round(session_weight, 3)`), `weighted_hours` (`h * weight`). Wired into
+> `GET /api/sessions` (`app.py`) **and** `LocalBackend.query_sessions`, so the
+> two backends return the same weighted shape rather than the weighting being
+> an HTTP-only artifact. `_build_aggregate` now delegates to the same helper
+> instead of carrying its own inline copy, and maps the verbose keys onto the
+> short `w`/`wh` the embedded dashboard JS already reads — app.js and the
+> aggregate tests are unchanged.
+>
+> Three decisions worth remembering:
+> - **Verbose names on the API, short names in the aggregate.** The first cut
+>   used `w`/`wh` everywhere for symmetry; the aggregate is terse because it's
+>   an embedded JS payload where bytes matter, which is not a pressure a JSON
+>   API shares. `weight`/`weighted_hours` are self-explanatory to anyone
+>   hitting the endpoint with curl.
+> - **`weighted_hours` multiplies by the *rounded* weight**, so a consumer
+>   recomputing `h * weight` from the published fields lands exactly on the
+>   published `weighted_hours`. Rounding one and not the other left the two
+>   disagreeing in the last decimals (2.512 vs 2.5118864…).
+> - **`annotate_sessions` is pure** — returns copies, never mutates its input.
+>   `_build_aggregate` annotates rows it doesn't own, so in-place mutation
+>   would have been a side effect visible to its caller.
+>
+> `LocalBackend` deliberately does **not** `_ensure_schema` on this read path
+> (procscan's read-only dry-run contract), so a pre-S1 file with no `sites`
+> table catches `OperationalError` and degrades to "no sites → weight 1.0" —
+> exactly the pre-S2 behaviour. Unreachable via the webapi, since `create_app`
+> runs `init_db` at construction; covered by a local-backend test that drops
+> the table and asserts the read didn't migrate it back. Suite 924 → 948.
+> Not yet deployed to the LXC.
+
 Queued 2026-07-29. Checked against the live code: `session_weight`/`resolve_site`
 (`darkroom/sites.py`) are only ever called from `_build_aggregate`
 (`darkroom/webapi/ui.py:105-169`), which feeds the server-rendered dashboard

@@ -685,8 +685,8 @@ def test_get_sessions_no_sites_weight_one_and_site_none(tmp_path):
 
     row = client.get("/api/sessions", params={"session_id": sid}, headers=AUTH).json()[0]
     assert row["site"] is None
-    assert row["w"] == 1.0
-    assert row["wh"] == pytest.approx(1.0)  # 20 * 180 / 3600 = 1.0h
+    assert row["weight"] == 1.0
+    assert row["weighted_hours"] == pytest.approx(1.0)  # 20 * 180 / 3600 = 1.0h
 
 
 def test_get_sessions_home_session_neutral_weight(tmp_path):
@@ -704,8 +704,8 @@ def test_get_sessions_home_session_neutral_weight(tmp_path):
 
     row = client.get("/api/sessions", params={"session_id": sid}, headers=AUTH).json()[0]
     assert row["site"] == "Home"
-    assert row["w"] == 1.0
-    assert row["wh"] == pytest.approx(1.0)
+    assert row["weight"] == 1.0
+    assert row["weighted_hours"] == pytest.approx(1.0)
 
 
 def test_get_sessions_away_session_weighted_by_sqm_ratio(tmp_path):
@@ -728,8 +728,8 @@ def test_get_sessions_away_session_weighted_by_sqm_ratio(tmp_path):
 
     row = client.get("/api/sessions", params={"session_id": sid}, headers=AUTH).json()[0]
     assert row["site"] == "Dark"
-    assert row["w"] == 10.0
-    assert row["wh"] == pytest.approx(10.0)
+    assert row["weight"] == 10.0
+    assert row["weighted_hours"] == pytest.approx(10.0)
 
 
 def test_get_sessions_null_coords_weight_one_site_none(tmp_path):
@@ -743,7 +743,7 @@ def test_get_sessions_null_coords_weight_one_site_none(tmp_path):
 
     row = client.get("/api/sessions", params={"session_id": sid}, headers=AUTH).json()[0]
     assert row["site"] is None
-    assert row["w"] == 1.0
+    assert row["weight"] == 1.0
 
 
 def test_get_sessions_additive_keys_do_not_drop_columns(tmp_path):
@@ -765,7 +765,7 @@ def test_get_sessions_additive_keys_do_not_drop_columns(tmp_path):
     assert row["total_integration_sec"] == 20 * 180
     assert row["target"] == "M 81"
     # New S2 keys present.
-    assert {"site", "w", "wh"}.issubset(row.keys())
+    assert {"site", "weight", "weighted_hours"}.issubset(row.keys())
 
 
 def test_create_app_from_env_missing_token_raises(monkeypatch):

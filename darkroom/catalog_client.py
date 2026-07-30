@@ -207,8 +207,8 @@ class LocalBackend:
         from darkroom.sites import annotate_sessions
 
         # S2: enrich locally so LocalBackend and HttpBackend return the same
-        # weighted shape — without this, only consumers of the HTTP API
-        # would see `site`/`w`/`wh`, and `catalog_cli` paths synthesizing
+        # weighted shape — without this, only consumers of the HTTP API would
+        # see `site`/`weight`/`weighted_hours`, and `catalog_cli` paths synthesizing
         # site resolution themselves would diverge. Unlike the write paths,
         # we deliberately do NOT `_ensure_schema` here: procscan's read-only
         # dry-run contract (and any other pure-read caller) must not migrate

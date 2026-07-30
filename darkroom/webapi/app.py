@@ -197,10 +197,10 @@ def create_app(db_path: Path, api_token: str, ui_password_hash: str) -> FastAPI:
     ):
         # S2: resolve site + SQM weight per row so JSON consumers (scripts,
         # the CLI's HttpBackend, future tooling) see home-equivalent hours,
-        # not just the server-rendered dashboard. `annotate_sessions` is
-        # additive — it never strips columns — so callers reading only the
-        # raw `site_lat`/`site_lon`/`total_integration_sec` fields are
-        # unaffected.
+        # not just the server-rendered dashboard. Adds `site`/`weight`/
+        # `weighted_hours`; additive — it never strips columns — so callers
+        # reading only the raw `site_lat`/`site_lon`/`total_integration_sec`
+        # fields are unaffected.
         rows = catalog_db.query_sessions(
             conn,
             target=target,

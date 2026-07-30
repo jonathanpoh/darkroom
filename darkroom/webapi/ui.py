@@ -132,13 +132,15 @@ def _build_aggregate(
     calibration state and shouldn't pay to compute it.
 
     SQM weighting is delegated to `darkroom.sites.annotate_sessions` (S2),
-    shared with the JSON API's `GET /api/sessions`. The `site`/`w`/`wh` keys
-    on each row below mirror that function's output exactly — keep them in
-    sync. With `sites` empty/None or no home SQM, `annotate_sessions` is a
-    no-op (w=1.0, wh=h), so the aggregate is unchanged for callers/fixtures
-    that don't pass `sites`.
+    shared with the JSON API's `GET /api/sessions`. That helper returns copies
+    rather than mutating, so `rows` below is a local rebind and the caller's
+    list is left alone. It names its fields `weight`/`weighted_hours` for the
+    JSON API's benefit; the night dicts keep the short `w`/`wh` the embedded
+    dashboard JS already reads. With `sites` empty/None or no home SQM,
+    `annotate_sessions` is a no-op (weight=1.0, weighted_hours=h), so the
+    aggregate is unchanged for callers/fixtures that don't pass `sites`.
     """
-    annotate_sessions(rows, sites or [])
+    rows = annotate_sessions(rows, sites or [])
     # One backend for the whole page: the matchers hit it several times per
     # session, and LocalBackend would open a SQLite connection for each.
     cal_backend = MemoryCalibrationBackend(cal_rows) if cal_rows is not None else None
@@ -159,7 +161,7 @@ def _build_aggregate(
             hours[filt] = hours.get(filt, 0.0) + h
             state = s["processed_state"] or "unprocessed"
             states[state] = states.get(state, 0) + 1
-            total_wh += s["wh"]
+            total_wh += s["weighted_hours"]
             night = {
                 "date": s["obs_date"],
                 "ota": s["ota"],
@@ -172,8 +174,8 @@ def _build_aggregate(
                 "state": state,
                 "sid": s["session_id"],
                 "site": s["site"],
-                "w": s["w"],
-                "wh": s["wh"],
+                "w": s["weight"],
+                "wh": s["weighted_hours"],
             }
             if cal_backend is not None:
                 night["cal"] = match_session_calibration(cal_backend, s)
