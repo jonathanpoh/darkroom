@@ -47,6 +47,8 @@ class SessionIn(BaseModel):
     dec_deg: float | None = None
     site_lat: float | None = None
     site_lon: float | None = None
+    start_utc: str | None = None
+    end_utc: str | None = None
     lights_path: str | None = None
     notes: str | None = None
 

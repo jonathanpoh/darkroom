@@ -792,3 +792,52 @@ def test_create_app_from_env_with_token_returns_app(tmp_path, monkeypatch):
     client = TestClient(app)
     resp = client.get("/api/sessions", headers={"Authorization": "Bearer envtoken"})
     assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# session wall-clock span (F4)
+# ---------------------------------------------------------------------------
+
+def test_post_session_accepts_and_returns_the_span(tmp_path):
+    client = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    resp = client.post(
+        "/api/sessions",
+        json=_session(sid, start_utc="2026-02-19T22:00:00", end_utc="2026-02-20T02:30:00"),
+        headers=AUTH,
+    )
+    assert resp.status_code == 204
+
+    row = client.get("/api/sessions", params={"session_id": sid}, headers=AUTH).json()[0]
+    assert row["start_utc"] == "2026-02-19T22:00:00"
+    assert row["end_utc"] == "2026-02-20T02:30:00"
+
+
+def test_post_session_without_span_leaves_it_null(tmp_path):
+    client = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    client.post("/api/sessions", json=_session(sid), headers=AUTH)
+
+    row = client.get("/api/sessions", params={"session_id": sid}, headers=AUTH).json()[0]
+    assert row["start_utc"] is None
+    assert row["end_utc"] is None
+
+
+def test_patch_session_span_updates_without_touching_identity(tmp_path):
+    """The `catalog backfill-times --apply` path when catalog_url is set."""
+    client = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    client.post("/api/sessions", json=_session(sid), headers=AUTH)
+
+    resp = client.patch(
+        f"/api/sessions/{sid}",
+        json={"start_utc": "2026-02-19T22:00:00", "end_utc": "2026-02-20T02:30:00"},
+        headers=AUTH,
+    )
+    assert resp.status_code == 200
+
+    row = client.get("/api/sessions", params={"session_id": sid}, headers=AUTH).json()[0]
+    assert row["start_utc"] == "2026-02-19T22:00:00"
+    assert row["end_utc"] == "2026-02-20T02:30:00"
+    assert row["session_id"] == sid
+    assert row["lights_path"].endswith("2026-02-19_FRA400_ZWOASI585MCPro/Lights/L-Pro")

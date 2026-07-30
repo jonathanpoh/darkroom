@@ -397,6 +397,124 @@ def _backfill_sites_run(args: argparse.Namespace) -> None:
     print(", ".join(parts))
 
 
+def _backfill_times_run(args: argparse.Namespace) -> None:
+    """Backfill start_utc/end_utc on sessions from archive FITS DATE-OBS/EXPTIME.
+
+    start_utc is the earliest frame's DATE-OBS; end_utc is the latest frame's
+    DATE-OBS plus *that* frame's exposure, so the span covers the final
+    sub-exposure (F4 intersects guide-log segments against it).
+
+    Dry run (default) is pure-read: it never writes to the catalog. --apply
+    writes via update_session_fields, through the catalog backend (local file
+    or webapi, per catalog_url — W9). Only sessions with a NULL start_utc are
+    ever candidates, so re-running is a no-op once applied (idempotent by
+    construction).
+    """
+    from astropy.io import fits
+
+    from darkroom.cataloger import compute_session_span
+
+    backend = resolve_backend(
+        args.catalog, url_flag=args.catalog_url, token_flag=args.api_token
+    )
+    archive = resolve_path(args.archive, "DARKROOM_ARCHIVE", "archive_path")
+    if archive is None:
+        sys.exit("Error: --archive / DARKROOM_ARCHIVE / darkroom.toml archive_path required")
+
+    rows = backend.query_sessions()
+    candidates = [r for r in rows if r.get("lights_path") and r.get("start_utc") is None]
+
+    found = []  # list[(row, start_utc, end_utc)]
+    no_headers = 0
+    missing = 0
+    read_errors = 0
+
+    for row in candidates:
+        folder = archive / row["lights_path"]
+        if not folder.is_dir():
+            missing += 1
+            continue
+
+        frames = [
+            p
+            for p in sorted(folder.rglob("*"))
+            if p.suffix.lower() in (".fit", ".fits") and "thumbnail" not in p.name.lower()
+        ]
+        if not frames:
+            no_headers += 1
+            continue
+
+        # Every frame: the span's endpoints are the min and the max, and
+        # sorted() above is filename order, which is not guaranteed
+        # chronological. Read errors are skipped per-frame so one bad file
+        # doesn't cost the session its span.
+        stamps = []
+        unreadable = 0
+        for frame in frames:
+            try:
+                header = fits.getheader(frame)
+            except Exception:
+                unreadable += 1
+                continue
+            stamps.append(
+                (
+                    header.get("DATE-OBS", ""),
+                    header.get("EXPOSURE", header.get("EXPTIME", 0.0)),
+                )
+            )
+
+        if unreadable:
+            read_errors += 1
+
+        start_utc, end_utc = compute_session_span(stamps)
+        if start_utc is None:
+            no_headers += 1
+            continue
+        found.append((row, start_utc, end_utc))
+
+    if not args.apply:
+        for tgt, group in groupby(
+            sorted(found, key=lambda f: (f[0]["target"], f[0]["session_id"])),
+            key=lambda f: f[0]["target"],
+        ):
+            print(f"\n{tgt}")
+            for row, start_utc, end_utc in group:
+                print(f"  {row['session_id']}: {start_utc} -> {end_utc}")
+        parts = [
+            f"{len(found)} would be set",
+            f"{no_headers} no date headers",
+            f"{missing} missing on disk",
+        ]
+        if read_errors:
+            parts.append(f"{read_errors} read errors")
+        print(f"\n{', '.join(parts)}; run with --apply to write")
+        return
+
+    try:
+        written = 0
+        for row, start_utc, end_utc in found:
+            if backend.update_session_fields(
+                row["session_id"], start_utc=start_utc, end_utc=end_utc
+            ):
+                written += 1
+    except sqlite3.OperationalError as e:
+        sys.exit(
+            f"Error writing to catalog: {e}\n"
+            "Hint: run any `darkroom catalog` command against this catalog once "
+            "(e.g. `catalog list`) to ensure it's migrated to the current schema, "
+            "then retry --apply."
+        )
+
+    parts = [
+        f"{written} set",
+        f"{no_headers} no date headers",
+        f"{missing} missing on disk",
+    ]
+    if read_errors:
+        parts.append(f"{read_errors} read errors")
+    print(", ".join(parts))
+
+
 def add_subparser(subparsers) -> None:
     p = subparsers.add_parser(
         "catalog",
@@ -543,3 +661,18 @@ def add_subparser(subparsers) -> None:
     bf.add_argument("--apply", action="store_true",
                      help="Write proposed changes to the catalog (default: dry run, read-only)")
     bf.set_defaults(func=_backfill_sites_run)
+
+    bt = sub.add_parser(
+        "backfill-times", parents=site_flags,
+        help="Backfill start_utc/end_utc on sessions from archive FITS headers",
+        description="Read DATE-OBS/EXPTIME from every FITS frame of each session with "
+                    "a NULL start_utc and propose setting the session's UTC wall-clock "
+                    "span: start_utc = earliest DATE-OBS, end_utc = latest DATE-OBS "
+                    "plus that frame's exposure. Dry run by default (prints proposed "
+                    "changes, writes nothing); pass --apply to write them. Idempotent: "
+                    "only NULL start_utc sessions are ever candidates.",
+    )
+    bt.add_argument("--archive", metavar="PATH", help="Archive root (env: DARKROOM_ARCHIVE)")
+    bt.add_argument("--apply", action="store_true",
+                     help="Write proposed changes to the catalog (default: dry run, read-only)")
+    bt.set_defaults(func=_backfill_times_run)

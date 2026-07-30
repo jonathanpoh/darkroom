@@ -798,3 +798,21 @@ def test_load_catalog_rows_degrades_when_the_catalog_is_unreachable(monkeypatch,
 
     assert ir._load_catalog_rows(Args("x")) == []
     assert "catalog unavailable" in capsys.readouterr().err
+
+
+def test_recompute_entry_leaves_the_session_span_untouched(tmp_path):
+    """start_utc/end_utc are derived from frames, not from identity fields.
+
+    An identity edit rewrites session_id/lights_rel_path/dsts; the wall-clock
+    span describes when the frames were shot and must survive unchanged.
+    """
+    sess = make_session_entry()
+    sess["start_utc"] = "2026-06-21T22:00:00"
+    sess["end_utc"] = "2026-06-22T02:30:00"
+
+    sess["target"] = "M 82"
+    recompute_entry(sess, {}, tmp_path)
+
+    assert sess["session_id"].startswith("M82_")
+    assert sess["start_utc"] == "2026-06-21T22:00:00"
+    assert sess["end_utc"] == "2026-06-22T02:30:00"

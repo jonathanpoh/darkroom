@@ -252,3 +252,76 @@ def test_scan_calibration_groups_same_params():
 
     assert len(result.calibration) == 1
     assert len(result.calibration[0].files) == 2
+
+
+# ── F4: session wall-clock span ──────────────────────────────────────────────
+
+def test_scan_source_populates_session_span():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        source = Path(tmpdir)
+        light_dir = source / "Light" / "M 81"
+        light_dir.mkdir(parents=True)
+        stems = [
+            "Light_M 81_180.0s_Bin1_585MC_gain200_20260219-220000_-20.0C_L-Pro_0001",
+            "Light_M 81_180.0s_Bin1_585MC_gain200_20260219-220300_-20.0C_L-Pro_0002",
+        ]
+        for stem in stems:
+            (light_dir / f"{stem}.fit").touch()
+
+        def mock_extract(path):
+            date_obs = (
+                "2026-02-19T22:00:00" if path.name.endswith("0001.fit")
+                else "2026-02-19T22:03:00"
+            )
+            return {**light_meta(path.stem, date_obs), "file_path": str(path)}
+
+        with patch("darkroom.scanner.FITSHeaderExtractor.extract_metadata", side_effect=mock_extract):
+            result = scan_source(source)
+
+    s = result.sessions[0]
+    assert s.start_utc == "2026-02-19T22:00:00"
+    # end covers the last sub-exposure, not just when it started
+    assert s.end_utc == "2026-02-19T22:06:00"
+
+
+def test_scan_source_span_ignores_file_iteration_order():
+    """Frames are collected in filename order, which need not be chronological.
+
+    Regression guard for using frames[0] as "the first frame" (the live bug
+    BACKLOG F5 records for temperature_c).
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        source = Path(tmpdir)
+        light_dir = source / "Light" / "M 81"
+        light_dir.mkdir(parents=True)
+        # _0001 sorts first but was shot *last*, and with a longer exposure.
+        (light_dir / "Light_M 81_300.0s_Bin1_585MC_gain200_20260219-233000_-20.0C_L-Pro_0001.fit").touch()
+        (light_dir / "Light_M 81_180.0s_Bin1_585MC_gain200_20260219-220000_-20.0C_L-Pro_0002.fit").touch()
+
+        def mock_extract(path):
+            if path.name.endswith("0001.fit"):
+                return {**light_meta(path.stem, "2026-02-19T23:30:00"),
+                        "file_path": str(path), "exposure": 300.0}
+            return {**light_meta(path.stem, "2026-02-19T22:00:00"), "file_path": str(path)}
+
+        with patch("darkroom.scanner.FITSHeaderExtractor.extract_metadata", side_effect=mock_extract):
+            result = scan_source(source)
+
+    s = result.sessions[0]
+    assert s.start_utc == "2026-02-19T22:00:00"
+    assert s.end_utc == "2026-02-19T23:35:00"
+
+
+def test_scan_source_span_is_none_without_date_obs():
+    """A session can only exist with a resolvable night, but guard the shape."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        source = Path(tmpdir)
+        light_dir = source / "Light" / "M 81"
+        light_dir.mkdir(parents=True)
+        (light_dir / "Light_M 81_180.0s_Bin1_585MC_gain200_20260219-220000_-20.0C_L-Pro_0001.fit").touch()
+
+        with patch("darkroom.scanner.FITSHeaderExtractor.extract_metadata",
+                   side_effect=lambda p: {**light_meta(p.stem), "file_path": str(p), "date_obs": ""}):
+            result = scan_source(source)
+
+    assert result.sessions == []

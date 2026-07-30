@@ -26,6 +26,9 @@ _EDITABLE_FIELDS = frozenset({
     "gain", "temperature_c", "exposure_sec", "focal_length",
     "ra_deg", "dec_deg", "site_lat", "site_lon", "notes",
     "processed_state", "processed_path", "processed_date",
+    # F4: derived wall-clock span, written by `catalog backfill-times`. Not an
+    # identity component — editing it never touches session_id/lights_path.
+    "start_utc", "end_utc",
 })
 
 # Identity components: changing any of these changes the derived session_id.
