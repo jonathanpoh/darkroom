@@ -195,6 +195,24 @@ def query_calibration_sets(
     return [dict(r) for r in rows]
 
 
+def query_session_guiding(
+    conn: sqlite3.Connection, *, session_id: str | None = None
+) -> list[dict]:
+    """Return session_guiding rows (F4), optionally for one session.
+
+    A session with no guide-log match simply has no row — that is the common
+    case (guide logs only cover part of the archive's history), so callers
+    treat "absent" as "not measured", never as "guided badly".
+    """
+    if session_id is not None:
+        rows = conn.execute(
+            "SELECT * FROM session_guiding WHERE session_id = ?", (session_id,)
+        ).fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM session_guiding").fetchall()
+    return [dict(r) for r in rows]
+
+
 def _record_pending_rename(
     conn: sqlite3.Connection,
     session_row_id: int,

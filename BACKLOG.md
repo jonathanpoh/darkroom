@@ -1189,8 +1189,81 @@ attention state). Design the exposure-tolerance/flat-window parameters to
 match `darkroom wbpp`'s defaults so the indicator predicts what WBPP prep
 will actually find.
 
-### F4. Scan and match ASIAir guiding logs → per-session guiding conditions
-Queued 2026-07-07. ASIAir writes PHD2-style guide logs; scan them (ingest-time
+### F4. Scan and match ASIAir guiding logs → per-session guiding conditions — ✅ DONE
+Queued 2026-07-07, shipped 2026-07-30.
+
+> **Matched by time, never by target name.** The open question "match by imaging
+> night" resolved into intersecting each session's UTC wall span with the guide
+> segments. Log target names are messy (`NGC7000` vs `NGC 7000`, 147 `FOV`
+> framing blocks, `Sun`/`Moon`) *and* sometimes simply wrong at acquisition —
+> filenames/FITS/catalog were corrected afterwards, the logs weren't. The
+> catalog is the truth; a log is trusted only for *when* it was guiding.
+>
+> Shape: `guidelog.py` parses (pure, stdlib-only — calibration blocks with their
+> different column header, `DROP` rows, non-zero `ErrorCode`, per-segment pixel
+> scale, truncated final segments, local→UTC via `ZoneInfo`); `guidescan.py`
+> matches and reduces (`scan()`/`apply()`, mirroring `procscan`); `logs.py`
+> archives the files to `<archive>/00_Logs/ASIAir/`. Storage is the side table
+> `session_guiding`, one row per session — "no guiding data" is simply
+> row-absent, which is the common case (141 of 231 sessions).
+>
+> **Windowing is what makes the numbers mean anything.** Whole-log RMS is
+> garbage because framing/plate-solving/slews sit inside guiding segments:
+> IC 5070 2026-07-10 reads 84.39" whole-log, **0.97"** windowed. Regression
+> anchors, all reproduced on real data: NGC 281 2026-07-28 **0.92"**,
+> IC 5070 **0.97"**, Sadr 2025-07-29 **2.57"**, M 45 2025-09-25 **15.04"**,
+> M 33 **2.35"**. M 45's number is real signal, not a bug — same night, M 31
+> 1.67" and M 33 2.28"; that night genuinely guided at ~2px. Anything above
+> ~50" means the window filter is broken.
+>
+> Three rules the implementation turns on, each of which was got wrong first:
+> settle exclusion is **per segment** (dither offsets are relative to that
+> segment's start); RMS is **pooled over the surviving rows**, never averaged
+> across segments (which would weight a 3-minute segment like a 3-hour one);
+> and `guided_sec` is the **union** of overlaps, not the sum, so a duplicated
+> log can't push coverage past 1.0.
+>
+> **A folder is not a session.** Real-data validation caught `backfill-times`
+> spanning every light under `lights_path`: M 81 2025-03-25 and 2025-03-28
+> share a folder (legacy layout) and both got the same 76-hour window, then
+> both swallowed the same guide rows for an identical bogus 49.59". Same for
+> IC 4604_1-2 2025-04-26/27 and NGC 7000 2025-07-30/31; it dragged the median
+> to 3.96". Fixed by keeping only frames whose `compute_imaging_night` equals
+> the session's `obs_date`, skipping rather than falling back when none match.
+>
+> Settle timeouts are this rig's norm (`Settling failed` 10,706 : 1,350
+> `complete`; the Autorun log agrees) — excluded statistically, never surfaced
+> as an alarm. `--settle-exclude` makes the window tunable: a good night barely
+> moves (NGC 281 0.92" → 0.90" from 15s to 120s), a bad one moves a lot
+> (M 45 15.04" → 5.60"), which is why the default stays pinned at 15s — the
+> anchors above are calibrated to it.
+>
+> UI: a Guiding column on the night row (`app.js:guidingCell`) showing total RMS
+> — good <1", fair 1–2", poor >2" — em-dash where no log covers the night, which
+> means *not measured*, never *guided badly*. Tooltip carries RA/Dec, peak, p95,
+> coverage %, star-loss/dropped counts and the source logs, and says so outright
+> when coverage < 80%. Verbose panel on the session page. `poor` is the one
+> place the `.caldot` "don't borrow `--safelight`" rule is deliberately broken:
+> a 3" night is exactly what the column exists to make you look at.
+>
+> **Deferred, filed here rather than done:**
+> - **Autorun log parsing** — autofocus runs, focuser temperature drift,
+>   `Download failed` events. The logs are archived now, parseable later.
+> - **Per-frame windowing** instead of the session envelope. Measured better
+>   (M 45 15.70" → 12.65", M 31 2.26" → 1.67") because it excludes inter-exposure
+>   settle, but it needs every frame's `DATE-OBS` at scan time, which would tie
+>   the scan to a mounted archive. Envelope + settle exclusion is the right
+>   default; revisit only if the numbers must be defensible to a decimal.
+> - **Scale-relative colour bands** — 1" RMS means something different at FRA400
+>   (~1.5"/px) than FMA180 (~3.3"/px). Needs a camera pixel-size table the repo
+>   doesn't have. Absolute bands are good enough to rank nights.
+>
+> Incidental, not F4's to fix: M 33's `obs_date` is `2025-09-25` (correct —
+> frames run 04:29–06:15 local on the 26th) but its archive folder is named
+> `2025-09-26_FMA180_ZWOASI585MCPro`. A triage/W10 concern; worth a grep for
+> others.
+
+Original entry: ASIAir writes PHD2-style guide logs; scan them (ingest-time
 or a backfill pass over the SD-card copies/archive), match log time-ranges to
 sessions by imaging night, and store per-session guiding stats (RMS RA/Dec,
 worst excursions, guide-star loss events). Surface in the web UI on the night
@@ -1625,8 +1698,12 @@ follow once there is a second mosaic to test against.
 9. **S1** observation sites + SQM-weighted depth — ✅ DONE 2026-07-16,
    hardened 2026-07-29 (modal-across-frames site attribution). Only the
    61 coordinate-less legacy sessions are left as a manual pass.
-10. **F3** (calibration-match indicator) — ✅ DONE 2026-07-30. Next is **F4**
-    (guide-log stats, which first needs `ingest` to archive the logs at all).
+10. **F3** (calibration-match indicator) — ✅ DONE 2026-07-30. **F4**
+    (guide-log stats) followed it — ✅ DONE 2026-07-30: `darkroom logs import`
+    archives the logs, `catalog backfill-times` + `scan-guiding` fill
+    `session_guiding`, and the night row grew a Guiding column. Three
+    follow-ups deferred inside the F4 entry (Autorun parsing, per-frame
+    windowing, scale-relative bands).
 11. **B11** (`wbpp` symlinks every dark master at every temperature) — ✅ DONE
     2026-07-29. The last of the B1/B2/B12 family of calibration matchers that
     looked right and quietly picked the wrong set. Two follow-ups came out of

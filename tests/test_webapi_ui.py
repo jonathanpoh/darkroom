@@ -8,11 +8,20 @@ import pytest
 from fastapi.testclient import TestClient
 
 from darkroom import catalog_db
-from darkroom.cataloger import upsert_calibration_set, upsert_session
+from darkroom.cataloger import (
+    upsert_calibration_set,
+    upsert_session,
+    upsert_session_guiding,
+)
 from darkroom.webapi import auth
 from darkroom.webapi.app import create_app
 from darkroom.webapi.auth import hash_password
-from darkroom.webapi.ui import _build_aggregate, reset_login_rate_limit, _target_suggestions
+from darkroom.webapi.ui import (
+    _build_aggregate,
+    _guiding_summary,
+    _target_suggestions,
+    reset_login_rate_limit,
+)
 
 TOKEN = "testtoken"
 UI_PASSWORD = "test-password"
@@ -1241,3 +1250,154 @@ def test_unknown_ota_session_is_not_reported_as_calibrated(tmp_path):
 
     night = _embedded_data(client.get("/targets/M%2081").text)[0]["nights"][0]
     assert night["cal"]["flats"]["status"] == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# guiding indicator (F4)
+# ---------------------------------------------------------------------------
+
+
+def _guided(db_path, session_id, **extra):
+    """A session_guiding row for `session_id`, good-band by default."""
+    row = {
+        "session_id": session_id,
+        "rms_ra_arcsec": 0.63,
+        "rms_dec_arcsec": 0.67,
+        "rms_total_arcsec": 0.92,
+        "peak_arcsec": 3.41,
+        "p95_arcsec": 1.88,
+        "guide_frames": 4210,
+        "excluded_frames": 180,
+        "dropped_frames": 12,
+        "star_lost_events": 3,
+        "dither_count": 24,
+        "guided_sec": 12600,
+        "coverage": 0.94,
+        "pixel_scale_arcsec": 6.45,
+        "guide_camera": "ZWO ASI120MM Mini",
+        "guide_exposure_ms": 2000,
+        "source_logs": ["PHD2_GuideLog_2026-02-19_220000.txt"],
+    }
+    row.update(extra)
+    upsert_session_guiding(db_path, row)
+
+
+def test_target_page_embeds_guiding_per_night(tmp_path):
+    client, db_path = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db_path, _session(sid))
+    _guided(db_path, sid)
+    login(client)
+
+    night = _embedded_data(client.get("/targets/M%2081").text)[0]["nights"][0]
+    assert night["guiding"]["rms"] == pytest.approx(0.92)
+    assert night["guiding"]["ra"] == pytest.approx(0.63)
+    assert night["guiding"]["dec"] == pytest.approx(0.67)
+    assert night["guiding"]["peak"] == pytest.approx(3.41)
+    assert night["guiding"]["p95"] == pytest.approx(1.88)
+    assert night["guiding"]["cov"] == pytest.approx(0.94)
+    assert night["guiding"]["lost"] == 3
+    assert night["guiding"]["dropped"] == 12
+    # source_logs is stored as a JSON array; the client gets a real list.
+    assert night["guiding"]["logs"] == ["PHD2_GuideLog_2026-02-19_220000.txt"]
+
+
+def test_target_page_night_without_guiding_is_null_not_missing(tmp_path):
+    """Most sessions have no guide log. The key must still be there, as null —
+    the renderer shows an em-dash, which means "not measured", not "bad"."""
+    client, db_path = make_client(tmp_path)
+    upsert_session(db_path, _session("M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"))
+    login(client)
+
+    night = _embedded_data(client.get("/targets/M%2081").text)[0]["nights"][0]
+    assert "guiding" in night
+    assert night["guiding"] is None
+
+
+def test_target_page_guiding_only_lands_on_its_own_session(tmp_path):
+    client, db_path = make_client(tmp_path)
+    guided_sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    other_sid = "M81_20260220_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db_path, _session(guided_sid))
+    upsert_session(db_path, _session(other_sid, obs_date="2026-02-20"))
+    _guided(db_path, guided_sid)
+    login(client)
+
+    nights = {
+        n["sid"]: n
+        for n in _embedded_data(client.get("/targets/M%2081").text)[0]["nights"]
+    }
+    assert nights[guided_sid]["guiding"]["rms"] == pytest.approx(0.92)
+    assert nights[other_sid]["guiding"] is None
+
+
+def test_overview_does_not_compute_guiding(tmp_path):
+    """Same as calibration: the overview shows no guiding, so it shouldn't
+    query for it."""
+    client, db_path = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db_path, _session(sid))
+    _guided(db_path, sid)
+    login(client)
+
+    assert "guiding" not in _embedded_data(client.get("/").text)[0]["nights"][0]
+
+
+def test_build_aggregate_shape_unchanged_without_guiding_rows(tmp_path):
+    rows = [_session("M81_20260219_FRA400_ZWOASI585MCPro_L-Pro")]
+    rows[0]["processed_state"] = "unprocessed"
+    assert "guiding" not in _build_aggregate(rows)[0]["nights"][0]
+
+
+def test_guiding_summary_treats_a_row_without_rms_as_not_measured(tmp_path):
+    assert _guiding_summary(None) is None
+    assert _guiding_summary({"session_id": "s1", "rms_total_arcsec": None}) is None
+
+
+def test_session_page_renders_guiding_panel(tmp_path):
+    client, db_path = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db_path, _session(sid))
+    _guided(db_path, sid)
+    login(client)
+
+    html = client.get(f"/sessions/{sid}").text
+    assert "Guiding" in html
+    assert "0.92" in html
+    assert "94% of the session" in html
+    assert "PHD2_GuideLog_2026-02-19_220000.txt" in html
+    assert "partial log" not in html  # 94% coverage is not partial
+
+
+def test_session_page_flags_partial_coverage(tmp_path):
+    client, db_path = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db_path, _session(sid))
+    _guided(db_path, sid, coverage=0.42)
+    login(client)
+
+    html = client.get(f"/sessions/{sid}").text
+    assert "42% of the session" in html
+    assert "partial log" in html
+
+
+def test_session_page_without_guiding_omits_the_panel(tmp_path):
+    client, db_path = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db_path, _session(sid))
+    login(client)
+
+    html = client.get(f"/sessions/{sid}").text
+    assert "Total RMS" not in html
+
+
+def test_session_page_guiding_survives_a_validation_error(tmp_path):
+    client, db_path = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db_path, _session(sid))
+    _guided(db_path, sid)
+    login(client)
+
+    resp = client.post(f"/sessions/{sid}", data={"gain": "not-a-number"})
+    assert resp.status_code == 400
+    assert "Total RMS" in resp.text

@@ -193,8 +193,13 @@ details[open] .rigsum .strip { visibility: hidden; }
 
 /* Filter gives up 30px ("L-Extreme" never needed 150) to pay for the wider
    Hours cell, so the 1fr Site track keeps enough room for "Santa Susana" plus
-   its weight badge inside .wrap's 1100px measure. */
-.nightcols { grid-template-columns: 36px 100px 120px 150px 110px 1fr 68px 130px; }
+   its weight badge inside .wrap's 1100px measure. F4 adds Guiding at 62px —
+   sized by the GUIDING header, not the 15.04″ figure — and the flexible Site
+   track pays for it (1fr goes 235px -> 158px at a 1280px viewport, still ~35px
+   more than that longest name plus badge needs). Taking it from Exposure
+   instead was tried and measured: "100 × 300s · gain252" wraps to two lines
+   below ~150px and the row grows from 50px to 56px. */
+.nightcols { grid-template-columns: 36px 100px 120px 150px 110px 1fr 68px 62px 130px; }
 .night { align-items: center; cursor: default; }
 .night:hover { background: none; }
 .night .fchip { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
@@ -251,6 +256,35 @@ details[open] .rigsum .strip { visibility: hidden; }
 .caldot.missing { color: var(--ink-3); border-color: var(--hairline); }
 .caldot.na { opacity: .35; }
 .caldot.unknown { border-style: dashed; }
+
+/* ── guiding (F4) ────────────────────────────
+   One number per night: total guide RMS in arcsec.
+
+   The .caldot rules above deliberately avoid --safelight because on that row
+   it means *doneness*, and a missing flat has nothing to do with how far along
+   a target is. Guiding is the one exception, and only at the `poor` end: a
+   night that guided at 3″ is the thing this column exists to make you look at,
+   and --safelight is the palette's only "look here". Good and fair stay on the
+   same brightness ladder the chips use (lit, then plain), so the three bands
+   read as one scale rather than three hues.
+
+   `none` (no guide log covers the night — most sessions) is the dimmest, and
+   not a band: it must not read as a bad measurement. `partial` reuses the
+   dashed border .caldot.unknown already means "can't fully trust this by". */
+.guide {
+  font-size: 12px; font-variant-numeric: tabular-nums;
+  color: var(--ink-2); cursor: help;
+}
+.guide.good { color: var(--ink); }
+.guide.fair { color: var(--ink-2); }
+.guide.poor { color: var(--safelight); }
+.guide.partial { border-bottom: 1px dashed var(--hairline); }
+.guide.none { color: var(--ink-3); cursor: default; }
+
+/* session detail page — the verbose form of the same measurement */
+.guideblock .guide { font-size: 13px; }
+.guidewarn { color: var(--safelight); font-size: 11px; }
+.guideblock .footnote { margin-top: 14px; }
 
 /* session detail page — the verbose form of the same match */
 .calblock .calrow > span { display: flex; flex-direction: column; gap: 2px; }
