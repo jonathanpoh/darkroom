@@ -1298,6 +1298,34 @@ does not model: an uncooled session is not *at* a temperature, it spans one.
     (unprocessed → stacked → processed is monotonic, but a re-run shouldn't
     downgrade a hand-set `skipped`).
 
+### F6. Web UI: home-equivalent hours on the row, not in a tooltip — ✅ DONE
+Filed and shipped 2026-07-30, off the back of F3's UI round.
+
+> The target page's Hours column showed **raw** integration hours, with the
+> SQM-weighted home-equivalent figure — the one that says how much usable depth a
+> night actually bought — reachable only by hovering the gauge. A 2.2h night from
+> Santa Susana is worth 20.2h from home and the page said "2.2h".
+>
+> `app.js:hoursHTML` now renders weighted-first with the raw figure alongside in
+> `.rawh` (`--ink-3`, the site-name grey), on both the night row and the rig
+> summary. The raw figure appears only when the site's sky quality actually moves
+> the number (the 0.05h threshold `gaugeHTML` already used), so home sessions
+> still read as a bare `5.5h`. The gauge tooltip, no longer the only place those
+> numbers live, drops to zone + range (`deep — 20h+`) on the target page; the
+> overview keeps its numbers, since nothing else on that page shows them.
+>
+> The zone ladder moved into one `ZONES` table that also generates the footnote
+> text. Both footnotes previously read `<2h needs data · 5–10h workable · 20h+
+> deep` — a 5h floor that doesn't exist in the code, and no `solid` zone at all.
+> Thresholds are unchanged; only the labels were wrong.
+>
+> **Watch the row width.** F3's Cal column and this wider Hours cell both come out
+> of the 1fr Site track inside `.wrap`'s 1100px measure; Filter gave back 30px to
+> pay for it. "Santa Susana" plus its weight badge still fits, but the longest
+> site names ("Mount Pico (Pico Island, Azores)") now ellipsise where they didn't
+> pre-F3. If a third column ever lands on this row, widen `.wrap` for the detail
+> view rather than squeezing Site again.
+
 ---
 
 ## S — Observation sites & conditions

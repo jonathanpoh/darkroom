@@ -162,7 +162,7 @@ header {
 
 details.rig { border-bottom: 1px solid var(--hairline); }
 .rigsum {
-  display: grid; grid-template-columns: 26px 270px 170px 1fr 90px 104px; gap: 16px; align-items: center;
+  display: grid; grid-template-columns: 26px 270px 170px 1fr 140px 104px; gap: 16px; align-items: center;
   padding: 12px 10px; cursor: pointer; list-style: none;
 }
 .rigsum::-webkit-details-marker { display: none; }
@@ -186,13 +186,22 @@ details[open] .rigsum .strip { visibility: hidden; }
 .gword { font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); }
 .gword.deep { color: var(--safelight); }
 
-.nightcols { grid-template-columns: 36px 100px 150px 150px 110px 1fr 68px 76px; }
+/* Filter gives up 30px ("L-Extreme" never needed 150) to pay for the wider
+   Hours cell, so the 1fr Site track keeps enough room for "Santa Susana" plus
+   its weight badge inside .wrap's 1100px measure. */
+.nightcols { grid-template-columns: 36px 100px 120px 150px 110px 1fr 68px 130px; }
 .night { align-items: center; cursor: default; }
 .night:hover { background: none; }
 .night .fchip { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
 .night .fchip i { width: 9px; height: 9px; border-radius: 2px; flex: none; }
 .night .exp { color: var(--ink-3); font-size: 12px; font-variant-numeric: tabular-nums; }
 .night .h { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink); }
+/* hoursHTML emits <b> for the rig summary's sake (.hnum b is the emphasis
+   there); on a night row the figure stays the same weight it always was. */
+.night .h b { font-weight: inherit; color: inherit; }
+/* raw hours ride along with the home-equivalent figure — same grey as the site
+   name, so the weighted number stays the one the eye lands on. */
+.rawh { color: var(--ink-3); font-size: 11.5px; }
 .night .date { font-variant-numeric: tabular-nums; }
 .night .date a { color: inherit; text-decoration: none; }
 .night .date a:hover { color: var(--safelight-hi); text-decoration: underline; }
