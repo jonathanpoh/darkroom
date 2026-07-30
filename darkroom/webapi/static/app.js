@@ -190,8 +190,12 @@ function guidingCell(g) {
                       : `coverage ${pct}%`);
   }
   bits.push(`${g.frames ?? "?"} frames · ${g.lost ?? 0} star-loss · ${g.dropped ?? 0} dropped`);
+  /* rms >= 2 * p95 (computed server-side): the number is real, but it is a few
+     wrecked subs rather than a bad night. Keep the value and its band, mark it. */
+  if (g.spike) bits.push(`spike-dominated: most frames near ${as(g.p95)}, worst ${as(g.peak)} — a few bad subs rather than a bad night`);
   if (g.logs && g.logs.length) bits.push(esc(g.logs.join(", ")));
-  return `<span class="guide ${band}${partial ? " partial" : ""}" data-tip="${bits.join(" · ")}">${as(g.rms)}</span>`;
+  const mark = g.spike ? `<span class="spike" aria-label="spike-dominated">▲</span>` : "";
+  return `<span class="guide ${band}${partial ? " partial" : ""}" data-tip="${bits.join(" · ")}">${as(g.rms)}${mark}</span>`;
 }
 
 const backlogH = t => t.nights.filter(n => n.state === "unprocessed" || n.state === "in_progress")

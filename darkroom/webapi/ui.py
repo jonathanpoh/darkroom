@@ -105,6 +105,23 @@ def _safe_next(next_: str | None) -> str:
     return "/"
 
 
+def _is_spike_dominated(rms: float | None, p95: float | None) -> bool:
+    """True when the total RMS is carried by a few catastrophic frames.
+
+    RMS squares each error, so ten wrecked subs out of fifty can push an
+    otherwise excellent night into the `poor` band. p95 is what a typical frame
+    actually did, so `rms >= 2 * p95` separates the two cases: measured across
+    the live catalog, clean nights sit at or below 1.0, a uniformly bad night
+    (M 45 2025-09-22, rms 35.3″ / p95 28.3″) at ~1.2, and spike-dominated
+    nights (NGC 6888 2026-07-20, rms 19.18″ / p95 2.11″) at 6–12.
+
+    Presentation only — nothing here changes the stored numbers or the band.
+    """
+    if rms is None or p95 is None or p95 <= 0:
+        return False
+    return rms >= 2 * p95
+
+
 def _guiding_summary(row: dict | None) -> dict | None:
     """Compact a `session_guiding` row into the shape the safelight JS reads.
 
@@ -125,6 +142,7 @@ def _guiding_summary(row: dict | None) -> dict | None:
         "peak": row.get("peak_arcsec"),
         "p95": row.get("p95_arcsec"),
         "cov": row.get("coverage"),
+        "spike": _is_spike_dominated(row["rms_total_arcsec"], row.get("p95_arcsec")),
         "frames": row.get("guide_frames"),
         "lost": row.get("star_lost_events"),
         "dropped": row.get("dropped_frames"),
@@ -259,6 +277,7 @@ def _session_guiding(conn, session: dict) -> dict | None:
     except (TypeError, ValueError):
         logs = []
     row["logs"] = logs if isinstance(logs, list) else []
+    row["spike"] = _is_spike_dominated(row.get("rms_total_arcsec"), row.get("p95_arcsec"))
     return row
 
 

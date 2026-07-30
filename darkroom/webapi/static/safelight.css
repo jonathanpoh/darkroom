@@ -281,8 +281,20 @@ details[open] .rigsum .strip { visibility: hidden; }
 .guide.partial { border-bottom: 1px dashed var(--hairline); }
 .guide.none { color: var(--ink-3); cursor: default; }
 
+/* rms >= 2 * p95: the RMS is carried by a handful of wrecked subs, so the
+   number is true but the verdict isn't. The marker annotates rather than
+   alarms — it inherits nothing from the band's colour and takes no new hue,
+   just the dim end of the same ink ladder, so a `poor` night still reads poor
+   while the ▲ says "look at the spread, not the total". */
+.guide .spike {
+  font-size: 8px; color: var(--ink-3);
+  margin-left: 3px; vertical-align: 2px;
+}
+
 /* session detail page — the verbose form of the same measurement */
 .guideblock .guide { font-size: 13px; }
+.guideblock .guide .spike { font-size: 9px; }
+.guidespike { color: var(--ink-2); font-size: 11px; }
 .guidewarn { color: var(--safelight); font-size: 11px; }
 .guideblock .footnote { margin-top: 14px; }
 
