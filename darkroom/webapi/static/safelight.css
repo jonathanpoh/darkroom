@@ -166,7 +166,12 @@ details.rig { border-bottom: 1px solid var(--hairline); }
   padding: 12px 10px; cursor: pointer; list-style: none;
 }
 .rigsum::-webkit-details-marker { display: none; }
-.rigsum:hover { background: var(--panel); }
+/* The rig header carries a panel fill so it reads as a header rather than
+   another data row — with the Cal chips and the raw-hours suffix the table
+   below it got dense enough that a hairline alone stopped separating them,
+   most visibly on targets with four or five rigs. Hover steps up one rung. */
+.rigsum { background: var(--panel); }
+.rigsum:hover { background: var(--panel-hi); }
 .rigsum .tri { color: var(--ink-3); transition: transform .12s; display: block;
                justify-self: center;
                line-height: 1; align-self: center; }
@@ -223,10 +228,13 @@ details[open] .rigsum .strip { visibility: hidden; }
 
 /* ── calibration match (F3) ──────────────────
    Same outlined micro-pill recipe as .wbadge above, one per calibration class.
-   Missing is the attention state and takes --safelight, matching how the rest
-   of the UI spends that colour; "not used" (this camera has no sets of that
-   type at all) has to read as quieter than a real miss, hence --ink-3 at low
-   opacity rather than a border colour of its own. */
+
+   Deliberately no --safelight here. On this row that colour means *doneness* —
+   the grease-pencil mark and the PROCESSED label — and a missing flat has
+   nothing to do with how far along a target is; borrowing it made the two read
+   as one scale. So the four states are a brightness ladder instead: matched is
+   lit, missing is plain dim, "not used" fades further, and "can't tell" is the
+   only one that changes the border, to dashed. */
 .caldots { display: inline-flex; align-items: center; gap: 4px; }
 .caldot {
   font-style: normal; font-size: 9.5px; letter-spacing: .06em;
@@ -235,7 +243,7 @@ details[open] .rigsum .strip { visibility: hidden; }
   color: var(--ink-3); cursor: help; flex: none;
 }
 .caldot.ok { color: var(--ink); border-color: var(--ink-3); }
-.caldot.missing { color: var(--safelight); border-color: var(--safelight); }
+.caldot.missing { color: var(--ink-3); border-color: var(--hairline); }
 .caldot.na { opacity: .35; }
 .caldot.unknown { border-style: dashed; }
 

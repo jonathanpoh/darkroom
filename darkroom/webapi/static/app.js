@@ -79,9 +79,15 @@ function hoursOf(nights) {
 function stripHTML(hours, totalMax) {
   const total = Object.values(hours).reduce((a, b) => a + b, 0);
   const pct = totalMax ? (total / totalMax) * 100 : 100;
-  const segs = Object.entries(hours).sort((a, b) => a[0].localeCompare(b[0])).map(([f, h]) =>
-    `<div class="seg" data-tip="<b>${fname(f)}</b> · ${h.toFixed(1)}h" style="flex:${h} ${h} 0; background:${fcolor(f)}"></div>`
-  ).join("");
+  // Grow factors are each filter's *share* of the strip, scaled to sum to 100 —
+  // not the raw hours. Raw hours as flex-grow silently under-fills whenever the
+  // total is below 1h: flex distributes only `sum(grow)` of the free space when
+  // that sum is < 1, so a 0.95h rig drew a bar 95% of its cell and looked
+  // misaligned against every rig beside it.
+  const segs = Object.entries(hours).sort((a, b) => a[0].localeCompare(b[0])).map(([f, h]) => {
+    const grow = total > 0 ? (h / total) * 100 : 0;
+    return `<div class="seg" data-tip="<b>${fname(f)}</b> · ${h.toFixed(1)}h" style="flex:${grow} 1 0; background:${fcolor(f)}"></div>`;
+  }).join("");
   return `<div class="strip" style="width:${Math.max(pct, 4)}%">${segs}</div>`;
 }
 
@@ -327,7 +333,7 @@ function renderDetail() {
       gauge = integration banked per rig: ${zoneLadder()}, weighted by site sky quality.
       Hours are home-equivalent — what the integration would have been worth from home — with the raw figure alongside when the site's sky quality moves it.
       Site column: named observing site the session's coordinates matched, if any; a ×badge shows its SQM weight relative to home when it isn't 1×.
-      Cal: what <b>wbpp</b> would find for Darks / Flats / FlatDarks — lit = matched, orange = missing, dim = that camera doesn't use them. Hover for the matched set. Catalog only: this server can't see the archive.</p>`;
+      Cal: what <b>wbpp</b> would find for Darks / Flats / FlatDarks — lit = matched, dim = missing, faded = that camera doesn't use them, dashed = can't tell. Hover for the matched set. Catalog only: this server can't see the archive.</p>`;
   document.querySelectorAll("details.rig").forEach(d => d.addEventListener("toggle", () => {
     if (d.open) detail.closed.delete(d.dataset.rig); else detail.closed.add(d.dataset.rig);
   }));
