@@ -1262,7 +1262,8 @@ Queued 2026-07-07, shipped 2026-07-30.
 > **Deferred, filed here rather than done:**
 > - **Autorun log parsing** — autofocus runs, focuser temperature drift,
 >   `Download failed` events. The logs are archived now, parseable later.
-> - **Per-frame windowing** instead of the session envelope. Measured better
+> - **Per-frame windowing** instead of the session envelope — now filed
+>   separately as **F7**, which carries the full scoping. Measured better
 >   (M 45 15.70" → 12.65", M 31 2.26" → 1.67") because it excludes inter-exposure
 >   settle, but it needs every frame's `DATE-OBS` at scan time, which would tie
 >   the scan to a mounted archive (the LXC has none). Envelope + settle exclusion
@@ -1432,6 +1433,52 @@ Filed and shipped 2026-07-30, off the back of F3's UI round.
 > site names ("Mount Pico (Pico Island, Azores)") now ellipsise where they didn't
 > pre-F3. If a third column ever lands on this row, widen `.wrap` for the detail
 > view rather than squeezing Site again.
+
+### F7. Score guiding per *frame* instead of per session envelope
+
+Filed 2026-07-30, out of F4. **Scoping item — decide whether it earns its cost
+before building.** Promoted from an F4 deferral bullet because a real question
+("if I cull the bad subs and re-run `scan-guiding`, do the numbers update?")
+turned out to have a surprising answer: **no, and nothing short of this changes
+that.**
+
+- **Why culling does nothing today**, all verified in code: `guidescan.py` never
+  opens a FITS file (it reads `sessions.start_utc`/`end_utc` and intersects
+  those with the guide logs); `_backfill_times_run` filters to
+  `r.get("start_utc") is None`, so it won't recompute a span that already
+  exists; and — the real blocker — the envelope runs first-frame-start →
+  last-frame-end, so deleting *interior* subs cannot shrink it. Measured on
+  NGC 6888 2026-07-20: after culling 10 of 48 subs the span stayed exactly
+  `23:15:10 → 03:46:26`.
+
+- **What it would buy**, same session: 19.18" on the envelope, 18.05" per-frame
+  over all 48 subs, **1.10" per-frame over the 38 subs worth keeping**. The
+  middle number is the honest measure of the change in isolation — most of the
+  gain comes from *combining* per-frame windowing with a cull. Earlier
+  side-by-sides without a cull were more modest (M 45 15.70" → 12.65",
+  M 31 2.26" → 1.67"), which is the fairer expectation for a normal night.
+
+- **The cost, and the actual design question:** per-frame windows need every
+  frame's `DATE-OBS` at scan time, so `scan-guiding` would stop being pure
+  catalog+logs and start needing a mounted archive — which **the LXC does not
+  have**. Either the scan becomes Mac-only (like `backfill-times`), or per-frame
+  intervals get precomputed and stored so the scan stays archive-free. Storing
+  them is the more interesting option: a `session_frames` table (or a packed
+  interval blob per session) would also give F5 its per-frame temperature series
+  and would make the "cull then rescan" loop work without re-reading the archive
+  each time. Scope that before writing any matcher code.
+
+- **Interaction to respect:** if frames become the unit, `guided_sec` and
+  `coverage` must be redefined against summed exposure time rather than wall
+  span, or coverage silently becomes ~duty-cycle and stops meaning what the F4
+  tooltip says it means.
+
+- **Don't do it just for prettier numbers.** Jonathan's standing instruction
+  when the spike marker was proposed: the goal is not mislabelling a good night,
+  not flattering a bad one. The spike marker (`rms >= 2 * p95`) already flags
+  *this night has cullable subs* without any of this machinery, which is most of
+  the practical value. Revisit F7 only if culling-then-rescoring becomes a real
+  part of the workflow.
 
 ---
 
@@ -1727,9 +1774,10 @@ follow once there is a second mosaic to test against.
 10. **F3** (calibration-match indicator) — ✅ DONE 2026-07-30. **F4**
     (guide-log stats) followed it — ✅ DONE 2026-07-30: `darkroom logs import`
     archives the logs, `catalog backfill-times` + `scan-guiding` fill
-    `session_guiding`, and the night row grew a Guiding column. Three
-    follow-ups deferred inside the F4 entry (Autorun parsing, per-frame
-    windowing, scale-relative bands).
+    `session_guiding`, and the night row grew a Guiding column. Autorun parsing
+    and scale-relative bands stay deferred inside the F4 entry; per-frame
+    windowing was promoted out to **F7** (a scoping item — decide before
+    building, since it would cost `scan-guiding` its archive independence).
 11. **B11** (`wbpp` symlinks every dark master at every temperature) — ✅ DONE
     2026-07-29. The last of the B1/B2/B12 family of calibration matchers that
     looked right and quietly picked the wrong set. Two follow-ups came out of
