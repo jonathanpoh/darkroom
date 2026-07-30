@@ -108,6 +108,27 @@ function gaugeHTML(h, withWord = true, rawH) {
 const nameCell = (t) =>
   `<span><span class="tname display">${t.target}</span>${t.cname ? `<span class="cname">${t.cname}</span>` : ""}</span>`;
 
+/* ── calibration match (F3) ────────────────────
+   One letter-chip per calibration class, coloured by whether `wbpp` would find
+   a matching set. Server-computed (darkroom.catalog.match_session_calibration)
+   so the chips and the prep run agree; `detail` carries the why, via the shared
+   data-tip tooltip. */
+const CAL_CLASSES = [["darks", "D", "Darks"], ["flats", "F", "Flats"], ["flat_darks", "FD", "Flat darks"]];
+const CAL_WORD = { ok: "matched", missing: "missing", na: "not used", unknown: "can't tell" };
+/* data-tip is assigned with innerHTML and deliberately allows <b>, so anything
+   interpolated from the catalog (set ids, folder paths, camera names) is escaped. */
+const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+                          .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+function calCell(cal) {
+  if (!cal) return `<span class="caldots"></span>`;
+  const chips = CAL_CLASSES.map(([key, abbr, title]) => {
+    const c = cal[key] || { status: "unknown", detail: "not computed" };
+    const head = esc(`${title}: ${c.label || CAL_WORD[c.status] || c.status}`);
+    return `<i class="caldot ${c.status}" data-tip="<b>${head}</b> · ${esc(c.detail)}">${abbr}</i>`;
+  }).join("");
+  return `<span class="caldots">${chips}</span>`;
+}
+
 const backlogH = t => t.nights.filter(n => n.state === "unprocessed" || n.state === "in_progress")
                               .reduce((a, n) => a + n.h, 0);
 const backlogWH = t => t.nights.filter(n => n.state === "unprocessed" || n.state === "in_progress")
@@ -241,6 +262,7 @@ function renderDetail() {
         <span class="exp">${n.frames || "?"} × ${n.exp ? n.exp.toFixed(0) + "s" : "?"}${n.gain ? " · gain" + n.gain : ""}</span>
         <span class="statelabel ${n.state}">${STATE_LABEL[n.state]}</span>
         <span class="sitecell"><span class="sitechip">${n.site || ""}</span>${n.w !== undefined && n.w !== 1 ? `<span class="wbadge">×${n.w}</span>` : ""}</span>
+        ${calCell(n.cal)}
         <span class="h">${n.h.toFixed(1)}h</span>
       </div>`).join("");
     const gs = (key, label, extra="") => {
@@ -259,7 +281,7 @@ function renderDetail() {
       <div class="rigbody">
         <div class="cols nightcols headrow">
           <span class="colhead"></span>${gs("date", "Night")}<span class="colhead">Filter</span>
-          <span class="colhead">Exposure</span>${gs("state", "State")}<span class="colhead">Site</span>${gs("h", "Hours", "num")}
+          <span class="colhead">Exposure</span>${gs("state", "State")}<span class="colhead">Site</span><span class="colhead">Cal</span>${gs("h", "Hours", "num")}
         </div>
         ${rows}
       </div>
@@ -277,7 +299,8 @@ function renderDetail() {
     <p class="footnote">grease-pencil marks: <span class="lamp">○</span> processed · half-circle in progress · strike skipped · dotted = open.
       click a mark to cycle state — updates the catalog.
       gauge = integration banked per rig: &lt;2h needs data · 5–10h workable · 20h+ deep, weighted by site sky quality.
-      Site column: named observing site the session's coordinates matched, if any; a ×badge shows its SQM weight relative to home when it isn't 1×.</p>`;
+      Site column: named observing site the session's coordinates matched, if any; a ×badge shows its SQM weight relative to home when it isn't 1×.
+      Cal: what <b>wbpp</b> would find for Darks / Flats / FlatDarks — lit = matched, orange = missing, dim = that camera doesn't use them. Hover for the matched set. Catalog only: this server can't see the archive.</p>`;
   document.querySelectorAll("details.rig").forEach(d => d.addEventListener("toggle", () => {
     if (d.open) detail.closed.delete(d.dataset.rig); else detail.closed.add(d.dataset.rig);
   }));

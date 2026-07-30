@@ -472,3 +472,245 @@ def test_find_flats_picks_morning_after_over_previous_night(tmp_path):
     rows = find_flats(LocalBackend(db), camera="ZWOASI585MCPro", ota="FRA400",
                       filter_="L-Synergy", obs_date="2026-07-28")
     assert [r["capture_date"] for r in rows] == ["2026-07-29", "2026-07-27"]
+
+
+# ── per-session calibration summary (F3) ─────────────────────────────────────
+
+import inspect
+
+from darkroom.catalog import (
+    CAL_MISSING,
+    CAL_NA,
+    CAL_OK,
+    CAL_UNKNOWN,
+    DEFAULT_DARK_TEMP_TOLERANCE,
+    DEFAULT_FLAT_WINDOW_DAYS,
+    match_session_calibration,
+)
+from darkroom.catalog_client import MemoryCalibrationBackend
+
+# The fixture session: ZWO, gain 200, 180s, -20C, FRA400 + L-Pro on 2026-02-19,
+# with a raw dark set at -20C, L-Pro flats on 02-19 and 02-20, and flat darks
+# matching the 02-20 flats. Everything matches out of the box, so each test
+# below perturbs exactly one thing.
+SESSION = {
+    "camera": "ZWO ASI585MC Pro", "gain": 200, "exposure_sec": 180.0,
+    "temperature_c": -20.0, "ota": "FRA400", "filter": "L-Pro",
+    "obs_date": "2026-02-19",
+}
+
+
+def cal_backend(db: Path) -> MemoryCalibrationBackend:
+    return MemoryCalibrationBackend(LocalBackend(db).query_calibration_sets())
+
+
+def execute(db: Path, sql: str, params=()) -> None:
+    conn = sqlite3.connect(db)
+    conn.execute(sql, params)
+    conn.commit()
+    conn.close()
+
+
+# ── MemoryCalibrationBackend parity with the SQL it replaces ─────────────────
+
+FILTER_MATRIX = [
+    {},
+    {"frame_type": "Dark"},
+    {"frame_type": "Flat"},
+    {"frame_type": "Flat", "camera": "ZWO ASI585MC Pro"},
+    {"frame_type": "Flat", "ota": "FRA400", "filter": "L-Pro"},
+    {"frame_type": "Flat", "filter": "L-Extreme"},
+    {"camera": "ZWO ASI585MC Pro", "gain": 200},
+    {"exposure_sec": 1.35},
+    {"frame_type": "Dark", "camera": "Canon EOS 6D"},
+]
+
+
+@pytest.mark.parametrize("kwargs", FILTER_MATRIX)
+def test_memory_backend_matches_the_sql_backend(tmp_path, kwargs):
+    """Same rows, same order — the whole point is that swapping the backend
+    under the matchers changes nothing about what they see."""
+    db = make_db(tmp_path)
+    insert_dark(db, "Dark_master_-20", temperature_c=-20.0, is_master=1)
+    local = LocalBackend(db)
+    memory = MemoryCalibrationBackend(local.query_calibration_sets())
+    assert memory.query_calibration_sets(**kwargs) == local.query_calibration_sets(**kwargs)
+
+
+def test_memory_backend_none_means_no_constraint(tmp_path):
+    """filter=None is "no filter constraint", not "filter IS NULL" — the same
+    trap catalog_db documents. Darks carry a NULL filter, flats don't; asking
+    without a filter must return both."""
+    db = make_db(tmp_path)
+    rows = cal_backend(db).query_calibration_sets(camera="ZWO ASI585MC Pro")
+    assert {r["frame_type"] for r in rows} == {"Dark", "Flat", "FlatDark"}
+
+
+def test_memory_backend_preserves_masters_first_order(tmp_path):
+    db = make_db(tmp_path)
+    insert_dark(db, "Dark_master", temperature_c=-20.0, is_master=1)
+    rows = cal_backend(db).query_calibration_sets(frame_type="Dark")
+    assert [r["set_id"] for r in rows][0] == "Dark_master"
+
+
+# ── match_session_calibration ────────────────────────────────────────────────
+
+def test_match_defaults_are_wbpps_defaults(tmp_path):
+    """If these drift, the indicator silently stops predicting the prep run."""
+    params = inspect.signature(match_session_calibration).parameters
+    assert params["flat_window"].default == DEFAULT_FLAT_WINDOW_DAYS
+    assert params["dark_temp_tolerance"].default == DEFAULT_DARK_TEMP_TOLERANCE
+
+
+def test_match_all_three_matched(tmp_path):
+    db = make_db(tmp_path)
+    cal = match_session_calibration(cal_backend(db), SESSION)
+    assert [cal[k]["status"] for k in ("darks", "flats", "flat_darks")] == [CAL_OK] * 3
+    # flats follow the flat-morning rule: 02-20 (+1) over 02-19 (same evening)
+    assert cal["flats"]["sets"][0]["capture_date"] == "2026-02-20"
+    assert cal["flat_darks"]["sets"][0]["capture_date"] == "2026-02-20"
+
+
+def test_match_prefers_a_master_dark_over_raw_sets(tmp_path):
+    db = make_db(tmp_path)
+    insert_dark(db, "Dark_master_-20", temperature_c=-20.0, is_master=1)
+    cal = match_session_calibration(cal_backend(db), SESSION)
+    assert cal["darks"]["status"] == CAL_OK
+    assert cal["darks"]["sets"][0]["set_id"] == "Dark_master_-20"
+    assert cal["darks"]["label"].startswith("master")
+
+
+def test_match_falls_back_to_raw_dark_sets(tmp_path):
+    """No master at this temperature — wbpp combines every matching raw set,
+    so the label says how many rather than naming one."""
+    db = make_db(tmp_path)
+    cal = match_session_calibration(cal_backend(db), SESSION)
+    assert cal["darks"]["label"] == "raw · 1 set"
+
+
+def test_match_dark_outside_tolerance_names_the_nearest(tmp_path):
+    """The near-miss case: a warmer session with the same darks on file. This
+    is the distinction that makes the badge worth hovering."""
+    db = make_db(tmp_path)
+    cal = match_session_calibration(cal_backend(db), {**SESSION, "temperature_c": -5.0})
+    assert cal["darks"]["status"] == CAL_MISSING
+    assert "nearest" in cal["darks"]["detail"]
+    assert "-20C" in cal["darks"]["detail"]
+
+
+def test_match_dark_tolerance_boundary_is_inclusive(tmp_path):
+    db = make_db(tmp_path)
+    backend = cal_backend(db)
+    at_edge = match_session_calibration(backend, {**SESSION, "temperature_c": -17.0})
+    past_edge = match_session_calibration(backend, {**SESSION, "temperature_c": -16.9})
+    assert at_edge["darks"]["status"] == CAL_OK
+    assert past_edge["darks"]["status"] == CAL_MISSING
+
+
+def test_match_na_when_the_camera_has_no_sets_of_that_type(tmp_path):
+    """"Not used" rather than "missing" — the ZWO/flat-darks case, decided from
+    the catalog rather than a hardcoded per-camera registry."""
+    db = make_db(tmp_path)
+    execute(db, "DELETE FROM calibration_sets WHERE frame_type = 'FlatDark'")
+    cal = match_session_calibration(cal_backend(db), SESSION)
+    assert cal["flat_darks"]["status"] == CAL_NA
+
+
+def test_match_missing_when_the_camera_has_sets_that_do_not_match(tmp_path):
+    db = make_db(tmp_path)
+    execute(db, "UPDATE calibration_sets SET capture_date = '2025-01-01' "
+                "WHERE frame_type = 'FlatDark'")
+    cal = match_session_calibration(cal_backend(db), SESSION)
+    assert cal["flat_darks"]["status"] == CAL_MISSING
+
+
+def test_match_flat_darks_unknown_without_a_matched_flat(tmp_path):
+    """Flat darks are matched off the *flat's* exposure and date, so with no
+    flat there is no question to answer — that isn't the same as missing."""
+    db = make_db(tmp_path)
+    execute(db, "DELETE FROM calibration_sets WHERE frame_type = 'Flat'")
+    cal = match_session_calibration(cal_backend(db), SESSION)
+    assert cal["flats"]["status"] == CAL_NA
+    assert cal["flat_darks"]["status"] == CAL_UNKNOWN
+
+
+def test_match_flats_missing_outside_the_window(tmp_path):
+    db = make_db(tmp_path)
+    cal = match_session_calibration(cal_backend(db), {**SESSION, "obs_date": "2026-03-30"})
+    assert cal["flats"]["status"] == CAL_MISSING
+    assert "±3 days" in cal["flats"]["detail"]
+
+
+def test_match_unknown_ota_is_not_a_wildcard(tmp_path):
+    """ota=None reaches query_calibration_sets as "no OTA constraint", which
+    would match flats from every scope and show a confident green chip. An
+    unmatchable session must say so instead."""
+    db = make_db(tmp_path)
+    backend = cal_backend(db)
+    for ota in (None, "", "Unknown"):
+        cal = match_session_calibration(backend, {**SESSION, "ota": ota})
+        assert cal["flats"]["status"] == CAL_UNKNOWN, ota
+
+
+def test_match_missing_gain_is_not_a_wildcard(tmp_path):
+    """Same trap on the darks side: gain=None would match darks at any gain."""
+    db = make_db(tmp_path)
+    backend = cal_backend(db)
+    assert match_session_calibration(
+        backend, {**SESSION, "gain": None})["darks"]["status"] == CAL_UNKNOWN
+    assert match_session_calibration(
+        backend, {**SESSION, "exposure_sec": None})["darks"]["status"] == CAL_UNKNOWN
+
+
+def test_match_gain_zero_is_a_real_value(tmp_path):
+    """gain 0 is falsy but legitimate — it must be matched, not called unknown."""
+    db = make_db(tmp_path)
+    insert_dark(db, "Dark_gain0", gain=0, temperature_c=-20.0)
+    cal = match_session_calibration(cal_backend(db), {**SESSION, "gain": 0})
+    assert cal["darks"]["status"] == CAL_OK
+
+
+def test_match_null_filter_session_is_matchable(tmp_path):
+    """A NULL filter is a real value find_flats matches client-side, unlike a
+    NULL OTA — it must not be treated as unmatchable."""
+    db = make_db(tmp_path)
+    cal = match_session_calibration(cal_backend(db), {**SESSION, "filter": None})
+    assert cal["flats"]["status"] == CAL_MISSING
+    assert "NoFilter" in cal["flats"]["detail"]
+
+
+def test_match_unparseable_date_is_unknown(tmp_path):
+    db = make_db(tmp_path)
+    for obs_date in ("not-a-date", "", None):
+        cal = match_session_calibration(cal_backend(db), {**SESSION, "obs_date": obs_date})
+        assert cal["flats"]["status"] == CAL_UNKNOWN, obs_date
+
+
+def test_match_session_with_no_temperature_still_matches(tmp_path):
+    """wbpp takes the first master when a session has no recorded temperature;
+    the summary says so rather than reporting a miss."""
+    db = make_db(tmp_path)
+    insert_dark(db, "Dark_master_-20", temperature_c=-20.0, is_master=1)
+    cal = match_session_calibration(cal_backend(db), {**SESSION, "temperature_c": None})
+    assert cal["darks"]["status"] == CAL_OK
+    assert "no recorded temperature" in cal["darks"]["detail"]
+
+
+def test_match_reports_ambiguous_dark_setpoints(tmp_path):
+    """Session exactly between two masters — dark_temp_ties' case, surfaced."""
+    db = make_db(tmp_path)
+    insert_dark(db, "Dark_master_-20", temperature_c=-20.0, is_master=1)
+    insert_dark(db, "Dark_master_-18", temperature_c=-18.0, is_master=1)
+    cal = match_session_calibration(cal_backend(db), {**SESSION, "temperature_c": -19.0})
+    assert "ambiguous" in cal["darks"]["detail"]
+
+
+def test_match_untemperatured_master_is_flagged_as_a_fallback(tmp_path):
+    """Canon6D masters carry no CCD-TEMP, so they match any session — the
+    summary has to say that rather than implying a temperature match."""
+    db = make_db(tmp_path)
+    insert_dark(db, "Dark_master_notemp", temperature_c=None, is_master=1)
+    cal = match_session_calibration(cal_backend(db), SESSION)
+    assert cal["darks"]["status"] == CAL_OK
+    assert "no recorded temperature" in cal["darks"]["detail"]
+    assert "fallback" in cal["darks"]["detail"]

@@ -186,7 +186,7 @@ details[open] .rigsum .strip { visibility: hidden; }
 .gword { font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); }
 .gword.deep { color: var(--safelight); }
 
-.nightcols { grid-template-columns: 36px 100px 150px 150px 110px 1fr 76px; }
+.nightcols { grid-template-columns: 36px 100px 150px 150px 110px 1fr 68px 76px; }
 .night { align-items: center; cursor: default; }
 .night:hover { background: none; }
 .night .fchip { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
@@ -211,6 +211,33 @@ details[open] .rigsum .strip { visibility: hidden; }
 .statelabel { font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); }
 .statelabel.processed { color: var(--safelight); }
 .statelabel.in_progress { color: var(--ink-2); }
+
+/* ── calibration match (F3) ──────────────────
+   Same outlined micro-pill recipe as .wbadge above, one per calibration class.
+   Missing is the attention state and takes --safelight, matching how the rest
+   of the UI spends that colour; "not used" (this camera has no sets of that
+   type at all) has to read as quieter than a real miss, hence --ink-3 at low
+   opacity rather than a border colour of its own. */
+.caldots { display: inline-flex; align-items: center; gap: 4px; }
+.caldot {
+  font-style: normal; font-size: 9.5px; letter-spacing: .06em;
+  line-height: 15px; min-width: 15px; padding: 0 3px; text-align: center;
+  border: 1px solid var(--hairline); border-radius: 2px;
+  color: var(--ink-3); cursor: help; flex: none;
+}
+.caldot.ok { color: var(--ink); border-color: var(--ink-3); }
+.caldot.missing { color: var(--safelight); border-color: var(--safelight); }
+.caldot.na { opacity: .35; }
+.caldot.unknown { border-style: dashed; }
+
+/* session detail page — the verbose form of the same match */
+.calblock .calrow > span { display: flex; flex-direction: column; gap: 2px; }
+.calstatus { font-size: 11px; color: var(--ink); }
+.calstatus.missing { color: var(--safelight); }
+.calstatus.na, .calstatus.unknown { color: var(--ink-3); }
+.caldetail { font-size: 11px; color: var(--ink-2); }
+.calset { font-size: 10.5px; color: var(--ink-3); word-break: break-all; }
+.calblock .footnote { margin-top: 14px; }
 
 /* ── cleanup tease + footer ──────────────── */
 .cleanup {

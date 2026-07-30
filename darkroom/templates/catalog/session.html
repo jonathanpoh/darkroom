@@ -37,6 +37,29 @@
   <button type="submit">Save</button>
 </form>
 
+{% if cal %}
+{% set status_word = {"ok": "matched", "missing": "missing", "na": "not used", "unknown": "can't tell"} %}
+<div class="readonly-block calblock">
+  <h3>Calibration match</h3>
+  {% for key, title in [("darks", "Darks"), ("flats", "Flats"), ("flat_darks", "Flat darks")] %}
+  {% set c = cal[key] %}
+  <div class="field-row calrow">
+    <label>{{ title }}</label>
+    <span>
+      <span class="calstatus {{ c.status }}">{{ c.label or status_word[c.status] }}</span>
+      <span class="caldetail">{{ c.detail }}</span>
+      {% for s in c.sets %}
+      <span class="calset">{{ s.set_id }}{% if s.folder_path %} — {{ s.folder_path }}{% endif %}</span>
+      {% endfor %}
+    </span>
+  </div>
+  {% endfor %}
+  <p class="footnote">What <code>darkroom wbpp</code> would find for this session, using its default
+    flat window and dark temperature tolerance. Catalog only: this server has no archive mount, so a
+    set listed here can still turn out to be missing on disk.</p>
+</div>
+{% endif %}
+
 <div class="readonly-block">
   <h3>Read-only</h3>
   <div class="field-row"><label>Frame count</label><span>{{ session.frame_count }}</span></div>

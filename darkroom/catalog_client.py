@@ -322,6 +322,57 @@ class LocalBackend:
             conn.close()
 
 
+class MemoryCalibrationBackend:
+    """Read-only calibration source over rows already in memory (F3).
+
+    darkroom.catalog's find_* matchers issue one query_calibration_sets call per
+    session per frame type. That's fine for `wbpp`, which runs them for one night
+    at a time, but the web UI matches every session on a target page at once, and
+    LocalBackend opens a fresh SQLite connection per call — a 30-night page would
+    be ~90 connections for data that fits in a single query. Load the calibration
+    table once, apply the same six equality filters in Python, and the matchers
+    themselves stay untouched.
+
+    **Row-order contract:** callers must pass rows in the order
+    catalog_db.query_calibration_sets returns them (`is_master DESC,
+    capture_date, set_id`); filtering here preserves relative order, and a
+    subsequence of that ordering is exactly what SQLite would return for the same
+    subset. Re-sorting here instead would mean re-deriving SQLite's collation for
+    the `capture_date = ""` masters — this sidesteps that entirely.
+
+    Read-only on purpose: this exists to feed matchers, so it implements only
+    query_calibration_sets and is not a full CatalogBackend.
+    """
+
+    def __init__(self, rows: list[dict]):
+        # Indexed by frame_type — every matcher filters on it, and it is the
+        # only column that meaningfully partitions the table.
+        self._by_type: dict[str | None, list[dict]] = {}
+        for row in rows:
+            self._by_type.setdefault(row.get("frame_type"), []).append(row)
+        self._all = list(rows)
+
+    def query_calibration_sets(
+        self,
+        *,
+        frame_type: str | None = None,
+        camera: str | None = None,
+        ota: str | None = None,
+        filter: str | None = None,
+        gain: int | None = None,
+        exposure_sec: float | None = None,
+    ) -> list[dict]:
+        """Equality filters, None meaning "no constraint" — as in catalog_db."""
+        rows = self._all if frame_type is None else self._by_type.get(frame_type, [])
+        constraints = [
+            (col, val) for col, val in (
+                ("camera", camera), ("ota", ota), ("filter", filter),
+                ("gain", gain), ("exposure_sec", exposure_sec),
+            ) if val is not None
+        ]
+        return [r for r in rows if all(r.get(col) == val for col, val in constraints)]
+
+
 class HttpBackend:
     """Thin httpx client for the catalog webapi server (darkroom/webapi/).
 

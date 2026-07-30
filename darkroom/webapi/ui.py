@@ -27,6 +27,8 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from darkroom import catalog_db
+from darkroom.catalog import match_session_calibration
+from darkroom.catalog_client import MemoryCalibrationBackend
 from darkroom.names import KNOWN_FILTERS, _normalize_target
 from darkroom.sites import home_sqm, resolve_site, session_weight
 from darkroom.webapi import auth
@@ -102,7 +104,11 @@ def _safe_next(next_: str | None) -> str:
     return "/"
 
 
-def _build_aggregate(rows: list[dict], sites: list[dict] | None = None) -> list[dict]:
+def _build_aggregate(
+    rows: list[dict],
+    sites: list[dict] | None = None,
+    cal_rows: list[dict] | None = None,
+) -> list[dict]:
     """Group session rows by target into the shape the safelight JS expects.
 
     Mirrors the mock's `catalog_agg` structure: one entry per target with
@@ -117,8 +123,18 @@ def _build_aggregate(rows: list[dict], sites: list[dict] | None = None) -> list[
     sites, no home sqm, or NULL session coords, weight is always 1.0 and
     `wh`/`total_wh` equal `h`/`total_h` exactly — this keeps the aggregate
     unchanged for callers/fixtures that don't pass `sites`.
+
+    `cal_rows` (every row from `catalog_db.query_calibration_sets`, in that
+    function's order — see MemoryCalibrationBackend's row-order contract) adds a
+    `cal` key to each night: what `wbpp` would find for darks/flats/flat-darks.
+    Optional for the same reason `sites` is — omit it and the night dicts keep
+    their previous shape, which is what `/` does since the overview shows no
+    calibration state and shouldn't pay to compute it.
     """
     home = home_sqm(sites) if sites else None
+    # One backend for the whole page: the matchers hit it several times per
+    # session, and LocalBackend would open a SQLite connection for each.
+    cal_backend = MemoryCalibrationBackend(cal_rows) if cal_rows is not None else None
 
     groups: dict[str, list[dict]] = {}
     for row in rows:
@@ -143,7 +159,7 @@ def _build_aggregate(rows: list[dict], sites: list[dict] | None = None) -> list[
             w = session_weight(site, home)
             wh = h * w
             total_wh += wh
-            nights.append({
+            night = {
                 "date": s["obs_date"],
                 "ota": s["ota"],
                 "camera": s["camera"],
@@ -157,7 +173,10 @@ def _build_aggregate(rows: list[dict], sites: list[dict] | None = None) -> list[
                 "site": site["name"] if site else None,
                 "w": round(w, 3),
                 "wh": wh,
-            })
+            }
+            if cal_backend is not None:
+                night["cal"] = match_session_calibration(cal_backend, s)
+            nights.append(night)
         total_h = sum(hours.values())
         last = max((s["obs_date"] for s in sessions if s["obs_date"]), default=None)
         aggregate.append({
@@ -172,6 +191,12 @@ def _build_aggregate(rows: list[dict], sites: list[dict] | None = None) -> list[
             "nights": nights,
         })
     return aggregate
+
+
+def _session_calibration(conn, session: dict) -> dict:
+    """The calibration match for one session, for the session detail page."""
+    backend = MemoryCalibrationBackend(catalog_db.query_calibration_sets(conn))
+    return match_session_calibration(backend, session)
 
 
 def _date_diff(a: str | None, b: str | None) -> int | None:
@@ -479,12 +504,13 @@ def build_ui_router(db_path: Path, ui_password_hash: str) -> APIRouter:
         try:
             rows = catalog_db.query_sessions(conn, target=target)
             sites = catalog_db.list_sites(conn)
+            cal_rows = catalog_db.query_calibration_sets(conn)
         finally:
             conn.close()
         if not rows:
             raise HTTPException(status_code=404, detail="target not found")
 
-        aggregate = _build_aggregate(rows, sites)
+        aggregate = _build_aggregate(rows, sites, cal_rows)
         # query_sessions normalises `target` case/spacing-insensitively, so
         # aggregate[0]["target"] is the canonical form even if the URL segment
         # wasn't (e.g. "m81" -> "M 81") — scope strictly to that one entry.
@@ -702,6 +728,7 @@ def build_ui_router(db_path: Path, ui_password_hash: str) -> APIRouter:
         conn = _get_conn()
         try:
             rows = catalog_db.query_sessions(conn, session_id=session_id)
+            cal = _session_calibration(conn, rows[0]) if rows else None
         finally:
             conn.close()
         if not rows:
@@ -713,6 +740,7 @@ def build_ui_router(db_path: Path, ui_password_hash: str) -> APIRouter:
             {
                 "session": rows[0],
                 "processed_states": _PROCESSED_STATES,
+                "cal": cal,
                 "error": error,
             },
         )
@@ -756,6 +784,7 @@ def build_ui_router(db_path: Path, ui_password_hash: str) -> APIRouter:
                     conn = _get_conn()
                     try:
                         rows = catalog_db.query_sessions(conn, session_id=session_id)
+                        cal = _session_calibration(conn, rows[0] if rows else current)
                     finally:
                         conn.close()
                     return templates.TemplateResponse(
@@ -764,6 +793,7 @@ def build_ui_router(db_path: Path, ui_password_hash: str) -> APIRouter:
                         {
                             "session": rows[0] if rows else current,
                             "processed_states": _PROCESSED_STATES,
+                            "cal": cal,
                             "error": f"Invalid numeric value for {key!r}: {raw!r}",
                         },
                         status_code=400,
@@ -784,6 +814,9 @@ def build_ui_router(db_path: Path, ui_password_hash: str) -> APIRouter:
                         {
                             "session": rows[0] if rows else current,
                             "processed_states": _PROCESSED_STATES,
+                            "cal": _session_calibration(
+                                conn, rows[0] if rows else current
+                            ),
                             "error": str(e),
                         },
                         status_code=400,

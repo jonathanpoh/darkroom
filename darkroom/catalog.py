@@ -23,6 +23,9 @@ def query_all_sessions(backend: CatalogBackend) -> list[dict]:
 
 
 DEFAULT_DARK_TEMP_TOLERANCE = 3.0
+# Shared by find_flats and `wbpp --flat-window`, so the web UI's calibration
+# indicator can't silently predict a different window than the prep run.
+DEFAULT_FLAT_WINDOW_DAYS = 3
 
 
 def dark_temp_sort_key(set_temp: float | None, session_temp: float) -> tuple[int, float]:
@@ -100,6 +103,29 @@ def find_darks(
     return rows
 
 
+def nearest_dark(
+    backend: CatalogBackend, *, camera: str, gain: int, exposure_sec: float,
+    temperature_c: float,
+) -> dict | None:
+    """Nearest dark set at this gain/exposure *ignoring* the temperature window.
+
+    The near-miss case reads very differently from having no darks at all, and
+    the fix differs too (raise the tolerance vs. go and shoot darks). Callers
+    phrase it for their own surface — prep._no_darks_note names the CLI flag,
+    the web UI's indicator doesn't. Returns None when nothing at this
+    gain/exposure carries a temperature.
+    """
+    rows = [
+        r for r in find_darks(
+            backend, camera=camera, gain=gain, exposure_sec=exposure_sec,
+        )
+        if r["temperature_c"] is not None
+    ]
+    if not rows:
+        return None
+    return min(rows, key=lambda r: abs(r["temperature_c"] - temperature_c))
+
+
 def find_bias(backend: CatalogBackend, *, camera: str, gain: int) -> list[dict]:
     """Return Bias calibration sets matching camera+gain, masters first."""
     return backend.query_calibration_sets(frame_type="Bias", camera=camera, gain=gain)
@@ -140,9 +166,23 @@ def flat_sort_key(capture_date: str, obs_date: str) -> tuple[int, int, int]:
     return (in_run, abs(delta) if in_run else 0, -delta)
 
 
+def flat_offset_label(capture_date: str, obs_date: str) -> str:
+    """e.g. '+1 day (morning after)', 'same evening', '-2 days'.
+
+    Makes the ranking checkable at a glance: the whole point of the flat-morning
+    rule is that ±1 day are *not* equivalent, which a bare date doesn't show.
+    """
+    delta = flat_offset_days(capture_date, obs_date)
+    if delta == 0:
+        return "same evening"
+    if delta == 1:
+        return "+1 day (morning after)"
+    return f"{delta:+d} days"
+
+
 def find_flats(
     backend: CatalogBackend, *, camera: str, ota: str, filter_: str | None,
-    obs_date: str, window_days: int = 3,
+    obs_date: str, window_days: int = DEFAULT_FLAT_WINDOW_DAYS,
 ) -> list[dict]:
     """Return Flat calibration sets within ±window_days, best match first.
 
@@ -177,3 +217,245 @@ def find_flat_darks(
         r for r in rows
         if lo <= r["exposure_sec"] <= hi and r["capture_date"] in (flat_capture_date, d1)
     ]
+
+
+# ── per-session calibration summary (F3) ─────────────────────────────────────
+#
+# One shared answer to "what would `wbpp` find for this session?", so the web
+# UI's indicator and the prep run can't disagree. Everything here is a thin
+# orchestration of the find_* matchers above plus presentation — no new matching
+# rules, and the defaults are wbpp's defaults.
+#
+# Two deliberate divergences from prep._build_night, both toward being *more*
+# correct than it is today:
+#
+#   * Per session, not per night. _build_night takes dark params from
+#     sessions[0] for the whole night (open bug B13); matching each session on
+#     its own camera/gain/exposure/temperature is what B13 will make it do.
+#   * No disk check. _build_night only uses a set whose folder_path exists on
+#     disk; a caller with no archive mount (the webapi host has none) can't
+#     check that, so this reports catalog-level truth only. A stale folder_path
+#     can still leave the prep run with nothing.
+
+CAL_OK = "ok"            # a set matched
+CAL_MISSING = "missing"  # no match, but this camera does use this frame type
+CAL_NA = "na"            # this camera has no sets of this type at all
+CAL_UNKNOWN = "unknown"  # the session lacks the fields needed to match
+
+
+def _temp(value: float | None) -> str:
+    return "unknown temperature" if value is None else f"{value:g}C"
+
+
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}" if n == 1 else f"{n} {word}s"
+
+
+def _cal_set(row: dict) -> dict:
+    """The identifying fields of a matched set, JSON-safe for a template/JS."""
+    return {
+        key: row.get(key) for key in (
+            "set_id", "frame_type", "camera", "ota", "filter", "gain",
+            "exposure_sec", "temperature_c", "capture_date", "frame_count",
+            "folder_path", "is_master",
+        )
+    }
+
+
+def _cal(status: str, detail: str, *, label: str | None = None, sets=()) -> dict:
+    return {
+        "status": status,
+        "label": label,
+        "detail": detail,
+        "sets": [_cal_set(r) for r in sets],
+    }
+
+
+def _camera_uses(backend: CatalogBackend, frame_type: str, camera: str) -> bool:
+    """Does this camera have any set of this frame type at all?
+
+    Distinguishes "missing" from "not part of this camera's workflow" —
+    ZWOASI585MCPro needs no flat darks, Canon6D does — without a per-camera
+    registry, which the codebase does not have. Data-driven, so it corrects
+    itself the day a camera's first set of that type is ingested.
+    """
+    return bool(backend.query_calibration_sets(frame_type=frame_type, camera=camera))
+
+
+def _match_darks(
+    backend: CatalogBackend, session: dict, tolerance: float
+) -> dict:
+    camera = session.get("camera")
+    gain = session.get("gain")
+    exposure_sec = session.get("exposure_sec")
+    # gain 0 is a legitimate value — check for None, not falsiness.
+    if not camera or gain is None or exposure_sec is None:
+        return _cal(CAL_UNKNOWN, "session has no camera, gain or exposure to match on")
+
+    session_temp = session.get("temperature_c")
+    rows = find_darks(
+        backend, camera=camera, gain=gain, exposure_sec=exposure_sec,
+        temperature_c=session_temp, temp_tolerance=tolerance,
+    )
+    params = f"{exposure_sec:g}s gain{gain}"
+
+    masters = [r for r in rows if r.get("is_master")]
+    if masters:
+        best = masters[0]
+        bits = [f"master dark, {params}, {_temp(best['temperature_c'])}"]
+        if session_temp is None:
+            bits.append("session has no recorded temperature — wbpp takes the first master")
+        elif best["temperature_c"] is not None:
+            delta = abs(best["temperature_c"] - session_temp)
+            bits.append(f"{delta:g}C from the session's {session_temp:g}C")
+            tied = dark_temp_ties(masters, session_temp)
+            if tied:
+                temps = ", ".join(_temp(r["temperature_c"]) for r in tied)
+                bits.append(f"ambiguous — masters at {temps} are equally near")
+        else:
+            # A set with no recorded temperature matches anything, but only once
+            # every temperatured set has been ruled out (dark_temp_sort_key).
+            # This is the common Canon6D case — its masters carry no CCD-TEMP.
+            bits.append(
+                f"set has no recorded temperature — accepted as a fallback for"
+                f" the session's {session_temp:g}C"
+            )
+        return _cal(
+            CAL_OK, "; ".join(bits),
+            label=f"master · {_temp(best['temperature_c'])}", sets=[best],
+        )
+
+    if rows:
+        # No master at this temperature — wbpp falls back to raw subs, and
+        # combines every matching set rather than choosing one.
+        return _cal(
+            CAL_OK,
+            f"no master — {_plural(len(rows), 'raw set')} at {params} would be combined",
+            label=f"raw · {_plural(len(rows), 'set')}", sets=rows,
+        )
+
+    if not _camera_uses(backend, "Dark", camera):
+        return _cal(CAL_NA, f"no dark sets for {camera} in the catalog")
+
+    if session_temp is not None:
+        near = nearest_dark(
+            backend, camera=camera, gain=gain, exposure_sec=exposure_sec,
+            temperature_c=session_temp,
+        )
+        if near is not None:
+            delta = abs(near["temperature_c"] - session_temp)
+            kind = "master" if near.get("is_master") else "raw set"
+            return _cal(
+                CAL_MISSING,
+                f"no darks within ±{tolerance:g}C of {session_temp:g}C — nearest"
+                f" {kind} is {_temp(near['temperature_c'])}, {delta:g}C away",
+            )
+    return _cal(CAL_MISSING, f"no darks at {params}")
+
+
+def _match_flats(
+    backend: CatalogBackend, session: dict, window_days: int
+) -> tuple[dict, dict | None]:
+    """Returns (summary, chosen row) — flat darks are matched off the chosen flat."""
+    camera = session.get("camera")
+    ota = session.get("ota")
+    obs_date = session.get("obs_date")
+    # ota=None would reach query_calibration_sets as "no OTA constraint" and
+    # quietly match flats from every scope, so an unknown OTA is unmatchable
+    # rather than a wildcard. A None *filter* is different: find_flats compares
+    # it client-side, where None correctly means "filter IS NULL".
+    if not camera or not ota or ota == "Unknown" or not obs_date:
+        return _cal(CAL_UNKNOWN, "session has no camera, OTA or date to match on"), None
+    try:
+        date.fromisoformat(obs_date)
+    except ValueError:
+        return _cal(CAL_UNKNOWN, f"session date {obs_date!r} is not a valid date"), None
+
+    filter_name = session.get("filter") or "NoFilter"
+    rows = find_flats(
+        backend, camera=camera, ota=ota, filter_=session.get("filter"),
+        obs_date=obs_date, window_days=window_days,
+    )
+    if rows:
+        best = rows[0]
+        bits = [
+            f"{filter_name} flats, {best['capture_date']}"
+            f" ({flat_offset_label(best['capture_date'], obs_date)})",
+            f"{best.get('frame_count') or '?'} frames",
+        ]
+        if best.get("exposure_sec") is not None:
+            bits.append(f"{best['exposure_sec']:g}s")
+        if len(rows) > 1:
+            bits.append(
+                f"{len(rows) - 1} other set(s) in the ±{window_days}d window rank lower"
+            )
+        return _cal(
+            CAL_OK, "; ".join(bits),
+            label=f"{best['capture_date']}", sets=[best],
+        ), best
+
+    if not _camera_uses(backend, "Flat", camera):
+        return _cal(CAL_NA, f"no flat sets for {camera} in the catalog"), None
+    return _cal(
+        CAL_MISSING,
+        f"no {filter_name} flats for {ota} within ±{window_days} days of {obs_date}",
+    ), None
+
+
+def _match_flat_darks(
+    backend: CatalogBackend, session: dict, chosen_flat: dict | None
+) -> dict:
+    camera = session.get("camera")
+    if not camera:
+        return _cal(CAL_UNKNOWN, "session has no camera to match on")
+    if chosen_flat is None:
+        return _cal(CAL_UNKNOWN, "no matched flat to take an exposure and date from")
+    if chosen_flat.get("exposure_sec") is None or not chosen_flat.get("capture_date"):
+        return _cal(CAL_UNKNOWN, "the matched flat set has no exposure or capture date")
+
+    rows = find_flat_darks(
+        backend, camera=camera,
+        flat_exposure_sec=chosen_flat["exposure_sec"],
+        flat_capture_date=chosen_flat["capture_date"],
+    )
+    if rows:
+        dates = ", ".join(sorted({r["capture_date"] for r in rows}))
+        return _cal(
+            CAL_OK,
+            f"{_plural(len(rows), 'set')} matching the flats'"
+            f" {chosen_flat['exposure_sec']:g}s (±10%) on {dates}",
+            label=_plural(len(rows), "set"), sets=rows,
+        )
+
+    if not _camera_uses(backend, "FlatDark", camera):
+        return _cal(CAL_NA, f"{camera} has no flat darks in the catalog — not used")
+    return _cal(
+        CAL_MISSING,
+        f"no flat darks near {chosen_flat['exposure_sec']:g}s"
+        f" on {chosen_flat['capture_date']} (or the morning after)",
+    )
+
+
+def match_session_calibration(
+    backend: CatalogBackend,
+    session: dict,
+    *,
+    flat_window: int = DEFAULT_FLAT_WINDOW_DAYS,
+    dark_temp_tolerance: float = DEFAULT_DARK_TEMP_TOLERANCE,
+) -> dict:
+    """What darks/flats/flat-darks `wbpp` would find for one session.
+
+    Returns {"darks": …, "flats": …, "flat_darks": …}, each a dict of
+    {status, label, detail, sets} where status is one of CAL_OK / CAL_MISSING /
+    CAL_NA / CAL_UNKNOWN. Defaults match `wbpp`'s, so the answer predicts a prep
+    run. See the module-section comment above for the two divergences from
+    prep._build_night (per-session params, and no on-disk check).
+
+    `backend` is called with equality filters only, so a
+    catalog_client.MemoryCalibrationBackend loaded once is the right thing to
+    pass when matching many sessions at a time.
+    """
+    darks = _match_darks(backend, session, dark_temp_tolerance)
+    flats, chosen_flat = _match_flats(backend, session, flat_window)
+    flat_darks = _match_flat_darks(backend, session, chosen_flat)
+    return {"darks": darks, "flats": flats, "flat_darks": flat_darks}

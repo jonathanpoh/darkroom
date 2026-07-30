@@ -1130,8 +1130,47 @@ bursty imaging runs, and mismatches fail with a shrug instead of showing what
   integration log specifically. A single edit may also combine multiple WBPP runs
   or hand-added frames not in any one log.
 
-### F3. Web UI: show whether a session has matching calibration frames
-Queued 2026-07-07 (front-end feedback round). Per session (night row in the
+### F3. Web UI: show whether a session has matching calibration frames — ✅ DONE
+Queued 2026-07-07, shipped 2026-07-30.
+
+> `darkroom/catalog.py:match_session_calibration` is the shared answer to "what
+> would `wbpp` find for this session", returning `{darks, flats, flat_darks}`
+> with a `status` of `ok` / `missing` / `na` / `unknown`, a label, a `detail`
+> line and the matched rows. It orchestrates the existing `find_*` matchers with
+> their own defaults — `DEFAULT_FLAT_WINDOW_DAYS` is now shared with
+> `wbpp --flat-window` so the two can't drift — and `nearest_dark` was lifted out
+> of `prep._no_darks_note` so the near-miss line ("nearest master is -20C, 4C
+> away") is written once and phrased per surface.
+>
+> `catalog_client.MemoryCalibrationBackend` feeds the matchers a page's worth of
+> calibration rows from one query; without it a target page would open one
+> SQLite connection per session per frame type. It preserves the caller's row
+> order rather than re-deriving `ORDER BY is_master DESC, capture_date, set_id`
+> (masters store `capture_date = ""`, so re-sorting means re-deriving SQLite's
+> collation). Matching all 231 live sessions takes 45 ms.
+>
+> UI: a Cal column of D/F/FD chips on each night row (`app.js:calCell`), tooltips
+> carrying the `detail`, plus a verbose panel on the session page naming the
+> exact sets. `/` deliberately doesn't compute it — the overview shows no
+> calibration state.
+>
+> **Two things it is not.** It has no disk check: `_build_night` only uses a set
+> whose `folder_path` exists, and the webapi host has no NAS mount, so this is
+> catalog-level truth and says so in the footnote. And it matches **per session**
+> where `_build_night` takes dark params from `sessions[0]` for the whole night
+> — that's **B13**, and per-session is where B13 lands anyway.
+>
+> Ground-truthed against `darkroom wbpp` on two real M 101 nights: the
+> fully-matched night's chips agreed with the symlink counts and the flat pick
+> (2026-02-26, +1 morning after), and the missing-darks night produced a `wbpp`
+> note character-identical to the chip's tooltip.
+>
+> Note for **F5**: `na` never fires on the live catalog — every camera has some
+> sets of every type, including ZWOASI585MCPro flat darks (49 sessions match,
+> 82 miss). The "ZWO doesn't need flat darks" note in CLAUDE.md isn't what the
+> catalog says.
+
+Original entry: per session (night row in the
 target detail view), indicate whether matching darks/flats/flat-darks exist in
 the catalog — the matching logic already exists client-side of the API in
 `darkroom/catalog.py` (`find_darks`/`find_flats`/`find_flat_darks`, fed from
@@ -1422,9 +1461,8 @@ site lat/lon, angular separation.
 9. **S1** observation sites + SQM-weighted depth — ✅ DONE 2026-07-16,
    hardened 2026-07-29 (modal-across-frames site attribution). Only the
    61 coordinate-less legacy sessions are left as a manual pass.
-10. **F3** (calibration-match indicator — matchers already exist, so it's a
-    server-side aggregate + a night-row badge) then **F4** (guide-log stats,
-    which first needs `ingest` to archive the logs at all).
+10. **F3** (calibration-match indicator) — ✅ DONE 2026-07-30. Next is **F4**
+    (guide-log stats, which first needs `ingest` to archive the logs at all).
 11. **B11** (`wbpp` symlinks every dark master at every temperature) — ✅ DONE
     2026-07-29. The last of the B1/B2/B12 family of calibration matchers that
     looked right and quietly picked the wrong set. Two follow-ups came out of
