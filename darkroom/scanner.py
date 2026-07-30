@@ -5,7 +5,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from astropy.time import Time
-from darkroom.cataloger import FITSHeaderExtractor, compute_imaging_night
+from darkroom.cataloger import (
+    FITSHeaderExtractor,
+    compute_imaging_night,
+    compute_session_span,
+)
 from darkroom.names import _normalize_camera, _round_exposure
 from darkroom.parse import fits_files, parse_filter, parse_ota, reclassify_flat_dark
 from darkroom.sites import describe_disagreement, modal_site
@@ -26,6 +30,8 @@ class Session:
     dec_deg: float | None
     site_lat: float | None = None
     site_lon: float | None = None
+    start_utc: str | None = None   # earliest frame DATE-OBS (ISO UTC)
+    end_utc: str | None = None     # latest frame DATE-OBS + that frame's exposure
     files: list[Path] = field(default_factory=list)
 
 
@@ -123,6 +129,12 @@ def _scan_lights(light_root: Path) -> list[Session]:
             first_meta = frames[0][0]
 
             focallen = first_meta.get("focallen")
+            # Not first_meta: `frames` is in directory-walk order, not
+            # chronological, so the span has to be derived from all of them
+            # (compute_session_span sorts by DATE-OBS itself).
+            start_utc, end_utc = compute_session_span(
+                (meta.get("date_obs", ""), meta.get("exposure")) for meta, _ in frames
+            )
             site_lat, site_lon = _session_site(
                 [meta for meta, _ in frames],
                 f"{target_dir.name} {night} {filter_ or 'no-filter'}",
@@ -141,6 +153,8 @@ def _scan_lights(light_root: Path) -> list[Session]:
                 dec_deg=first_meta.get("dec_deg"),
                 site_lat=site_lat,
                 site_lon=site_lon,
+                start_utc=start_utc,
+                end_utc=end_utc,
                 files=[path for _, path in frames],
             ))
 

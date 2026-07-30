@@ -362,6 +362,8 @@ def build_session_entry(
         "dec_deg": session.dec_deg,
         "site_lat": session.site_lat,
         "site_lon": session.site_lon,
+        "start_utc": session.start_utc,
+        "end_utc": session.end_utc,
         "needs_review": needs_review,
         "status": status,
         "lights_rel_path": str(dest_rel),
@@ -658,6 +660,8 @@ def cmd_commit(args: argparse.Namespace) -> None:
             "dec_deg": entry.get("dec_deg"),
             "site_lat": entry.get("site_lat"),
             "site_lon": entry.get("site_lon"),
+            "start_utc": entry.get("start_utc"),
+            "end_utc": entry.get("end_utc"),
             "lights_path": entry["lights_rel_path"],
             "notes": "",
         })
