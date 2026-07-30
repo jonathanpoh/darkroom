@@ -10,6 +10,7 @@ Two commands for ingestion:
 """
 
 import argparse
+import json
 import os
 import re
 import sqlite3
@@ -434,6 +435,33 @@ def init_db(db_path: Path) -> None:
                 created_at  TEXT,
                 updated_at  TEXT
             );
+            -- F4: per-session guiding quality, derived by intersecting PHD2
+            -- guide-log segments with the session's start_utc/end_utc span
+            -- (`darkroom catalog scan-guiding`). A side table, not columns on
+            -- sessions: "no guiding data" is simply row-absent, and re-scans
+            -- can INSERT OR REPLACE a whole row without touching the session.
+            -- `coverage` = guided seconds / session wall span — the guard
+            -- against a partial log looking authoritative.
+            CREATE TABLE IF NOT EXISTS session_guiding (
+                session_id         TEXT PRIMARY KEY,
+                rms_ra_arcsec      REAL,
+                rms_dec_arcsec     REAL,
+                rms_total_arcsec   REAL,
+                peak_arcsec        REAL,
+                p95_arcsec         REAL,
+                guide_frames       INTEGER,
+                excluded_frames    INTEGER,
+                dropped_frames     INTEGER,
+                star_lost_events   INTEGER,
+                dither_count       INTEGER,
+                guided_sec         INTEGER,
+                coverage           REAL,
+                pixel_scale_arcsec REAL,
+                guide_camera       TEXT,
+                guide_exposure_ms  INTEGER,
+                source_logs        TEXT,   -- JSON array of log basenames
+                computed_at        TEXT
+            );
         """
         )
         # Additive migrations for existing (pre-W3) sessions tables. These must
@@ -629,6 +657,47 @@ def upsert_calibration_set(db_path: Path, cal_set: dict) -> None:
                 updated_at   = excluded.updated_at
             """,
             cal_set,
+        )
+
+
+_GUIDING_COLUMNS = (
+    "session_id",
+    "rms_ra_arcsec", "rms_dec_arcsec", "rms_total_arcsec",
+    "peak_arcsec", "p95_arcsec",
+    "guide_frames", "excluded_frames", "dropped_frames",
+    "star_lost_events", "dither_count",
+    "guided_sec", "coverage",
+    "pixel_scale_arcsec", "guide_camera", "guide_exposure_ms",
+    "source_logs", "computed_at",
+)
+
+
+def upsert_session_guiding(db_path: Path, guiding: dict) -> None:
+    """Insert or replace one session's guiding stats (F4).
+
+    INSERT OR REPLACE, not an ON CONFLICT update: the row is wholly derived
+    from the guide logs, so a re-scan should replace it outright — a field
+    that no longer has a value must go back to NULL rather than keep a stale
+    one. Unknown keys are ignored and missing ones become NULL, so callers
+    (`darkroom.guidescan.apply`, the webapi) can pass whatever they have.
+
+    Args:
+        db_path: Path to SQLite database file
+        guiding: Dictionary with keys matching the session_guiding schema;
+            `source_logs` may be a list, which is stored as a JSON array.
+    """
+    row = {col: guiding.get(col) for col in _GUIDING_COLUMNS}
+    if isinstance(row["source_logs"], (list, tuple)):
+        row["source_logs"] = json.dumps(list(row["source_logs"]))
+    row["computed_at"] = row["computed_at"] or datetime.now(timezone.utc).strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+    placeholders = ", ".join(f":{col}" for col in _GUIDING_COLUMNS)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            f"INSERT OR REPLACE INTO session_guiding ({', '.join(_GUIDING_COLUMNS)}) "
+            f"VALUES ({placeholders})",
+            row,
         )
 
 

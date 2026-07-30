@@ -11,6 +11,7 @@ from astropy.io import fits
 from darkroom.catalog_cli import (
     _backfill_sites_run,
     _backfill_times_run,
+    _scan_guiding_run,
     _sites_add_run,
     _sites_list_run,
     _sites_set_run,
@@ -408,6 +409,22 @@ def test_argparse_registration_backfill_sites():
     assert args.func is _backfill_sites_run
     assert args.archive == "/tmp/x"
     assert args.apply is True
+
+
+def test_argparse_registration_scan_guiding():
+    p = argparse.ArgumentParser()
+    sub = p.add_subparsers(dest="cmd", required=True)
+    add_subparser(sub)
+
+    args = p.parse_args(["catalog", "scan-guiding", "--logs", "/tmp/logs", "--apply"])
+    assert args.func is _scan_guiding_run
+    assert args.logs == "/tmp/logs"
+    assert args.apply is True
+
+    # --logs is optional: it defaults to <archive>/00_Logs/ASIAir at run time.
+    args = p.parse_args(["catalog", "scan-guiding"])
+    assert args.logs is None
+    assert args.apply is False
 
 
 # ---------------------------------------------------------------------------

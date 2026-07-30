@@ -6,6 +6,7 @@ import sqlite3
 import sys
 from collections import Counter
 from itertools import groupby
+from pathlib import Path
 
 from darkroom.catalog import query_all_sessions
 from darkroom.catalog_client import resolve_backend
@@ -117,6 +118,102 @@ def _scan_processed_run(args: argparse.Namespace) -> None:
         tag = f"  [{t.evidence_date}]" if t.evidence_date else ""
         print(f"  {t.session_id}  {t.current_state} -> {t.proposed_state}{tag}")
     print(f"\nApplied {applied} change(s), {len(transitions) - applied} unchanged")
+
+
+def _scan_guiding_run(args: argparse.Namespace) -> None:
+    """Match PHD2 guide-log segments to sessions by time and store the stats.
+
+    Matching is purely temporal — each session's stored start_utc/end_utc span
+    is intersected with the segments parsed out of every log. Log target names
+    are never consulted (see darkroom.guidescan).
+
+    Dry run (default) is pure-read: it parses logs and reads sessions, and
+    writes nothing. --apply writes via darkroom.guidescan.apply, through the
+    catalog backend (local file or webapi, per catalog_url — W9).
+
+    Both halves of what didn't match are reported and never guessed at: a
+    whole date range failing to match means the ASIAir clock/timezone was not
+    what the parser assumes, which is the user's call, not the scanner's.
+    """
+    from darkroom import guidescan, logs
+
+    backend = resolve_backend(args.catalog)
+
+    if args.logs:
+        logs_dir = Path(args.logs).expanduser()
+    else:
+        archive = resolve_path(None, "DARKROOM_ARCHIVE", "archive_path")
+        if archive is None:
+            sys.exit(
+                "Error: --logs, or --archive / DARKROOM_ARCHIVE / darkroom.toml "
+                "archive_path (whose 00_Logs/ASIAir subdirectory is used), required"
+            )
+        logs_dir = archive / logs.ARCHIVE_SUBDIR
+    if not logs_dir.is_dir():
+        sys.exit(f"Error: guide log directory not found: {logs_dir}")
+
+    result = guidescan.scan(logs_dir, backend)
+
+    for line in _guiding_report(result):
+        print(line)
+
+    if not args.apply:
+        for tgt, group in groupby(
+            sorted(result.matches, key=lambda m: (m.target, m.obs_date)),
+            key=lambda m: m.target,
+        ):
+            print(f"\n{tgt}")
+            for m in group:
+                cov = "" if m.coverage is None else f"  cov {m.coverage * 100:.0f}%"
+                print(
+                    f"  {m.obs_date}  {m.session_id}  {m.rms_total_arcsec:.2f}\" "
+                    f"(RA {m.rms_ra_arcsec:.2f} Dec {m.rms_dec_arcsec:.2f})"
+                    f"{cov}  {m.guide_frames} frames"
+                )
+        print(
+            f"\n{len(result.matches)} session(s) would get guiding stats; "
+            "run with --apply to write"
+        )
+        return
+
+    try:
+        applied = guidescan.apply(backend, result)
+    except sqlite3.OperationalError as e:
+        sys.exit(
+            f"Error writing to catalog: {e}\n"
+            "Hint: run any `darkroom catalog` command against this catalog once "
+            "(e.g. `catalog list`) to ensure it's migrated to the current schema, "
+            "then retry --apply."
+        )
+
+    print(f"\nApplied guiding stats to {applied} session(s)")
+
+
+def _guiding_report(result) -> list[str]:
+    """The unmatched-both-ways report every scan-guiding run prints.
+
+    Deliberately identical in dry-run and --apply mode: the mismatches are the
+    diagnostic, not a preview of pending writes.
+    """
+    lines = [
+        f"{result.log_count} log(s), {result.segment_count} guiding segment(s); "
+        f"{len(result.matches)} session(s) matched"
+    ]
+    if result.undated_sessions:
+        lines.append(
+            f"  {len(result.undated_sessions)} session(s) have no start_utc — "
+            "run `darkroom catalog backfill-times` first"
+        )
+    if result.unmatched_sessions:
+        lines.append(
+            f"  {len(result.unmatched_sessions)} dated session(s) matched no guide data:"
+        )
+        for row in result.unmatched_sessions:
+            lines.append(f"    {row['obs_date']}  {row['session_id']}")
+    if result.unmatched_logs:
+        lines.append(f"  {len(result.unmatched_logs)} log(s) matched no session:")
+        lines.extend(f"    {name}" for name in result.unmatched_logs)
+    return lines
 
 
 def _apply_renames_run(args: argparse.Namespace) -> None:
@@ -587,6 +684,25 @@ def add_subparser(subparsers) -> None:
     sp.add_argument("--apply", action="store_true",
                      help="Write proposed changes to the catalog (default: dry run, read-only)")
     sp.set_defaults(func=_scan_processed_run)
+
+    sg = sub.add_parser(
+        "scan-guiding", parents=[catalog_flag],
+        help="Match PHD2 guide logs to sessions by time and store guiding stats",
+        description="Parse every PHD2_GuideLog_*.txt in the log directory and "
+                    "intersect its guiding segments with each session's stored UTC "
+                    "wall-clock span (start_utc/end_utc — run `catalog backfill-times` "
+                    "first if those are NULL), pooling the in-window rows into one "
+                    "RMS/peak/p95 per session. Matching is by time only; log target "
+                    "names are never used. Sessions matching no log, and logs matching "
+                    "no session, are reported rather than guessed at. Dry run by "
+                    "default (prints what it measured, writes nothing); pass --apply "
+                    "to write. Re-running replaces existing rows.",
+    )
+    sg.add_argument("--logs", metavar="PATH",
+                    help="Guide log directory (default: <archive>/00_Logs/ASIAir)")
+    sg.add_argument("--apply", action="store_true",
+                    help="Write guiding stats to the catalog (default: dry run, read-only)")
+    sg.set_defaults(func=_scan_guiding_run)
 
     ar = sub.add_parser(
         "apply-renames", parents=[catalog_flag],

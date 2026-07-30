@@ -68,6 +68,31 @@ class CalibrationSetIn(BaseModel):
     is_master: int | None = None
 
 
+class SessionGuidingIn(BaseModel):
+    """One session's guide-log-derived stats (F4). Everything but the id is
+    optional — a scan reports what it could measure."""
+
+    session_id: str
+    rms_ra_arcsec: float | None = None
+    rms_dec_arcsec: float | None = None
+    rms_total_arcsec: float | None = None
+    peak_arcsec: float | None = None
+    p95_arcsec: float | None = None
+    guide_frames: int | None = None
+    excluded_frames: int | None = None
+    dropped_frames: int | None = None
+    star_lost_events: int | None = None
+    dither_count: int | None = None
+    guided_sec: int | None = None
+    coverage: float | None = None
+    pixel_scale_arcsec: float | None = None
+    guide_camera: str | None = None
+    guide_exposure_ms: int | None = None
+    # JSON array of contributing log basenames, or the list itself.
+    source_logs: str | list[str] | None = None
+    computed_at: str | None = None
+
+
 class StateIn(BaseModel):
     state: str
     processed_date: str | None = None
@@ -135,6 +160,12 @@ def create_app(db_path: Path, api_token: str, ui_password_hash: str) -> FastAPI:
             # server-side default actually applies.
             data.pop("is_master", None)
         cataloger.upsert_calibration_set(db_path, data)
+
+    @app.post("/api/session-guiding", status_code=204, dependencies=[auth_dep])
+    def post_session_guiding(body: SessionGuidingIn) -> None:
+        from darkroom import cataloger
+
+        cataloger.upsert_session_guiding(db_path, body.model_dump())
 
     @app.patch("/api/sessions/{session_id}", dependencies=[auth_dep])
     def patch_session(session_id: str, body: dict[str, Any], conn=Depends(_get_conn)):
