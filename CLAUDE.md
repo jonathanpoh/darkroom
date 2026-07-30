@@ -219,6 +219,11 @@ Two consequences worth knowing:
 - **Coverage is the honest guard.** `coverage` = guided seconds ÷ session wall
   span. Anything under 0.8 means a partial log, and the UI says so rather than
   letting it look authoritative.
+- **`rms_total >= 2 * p95` is spike-dominated**, and the UI appends a dim ▲ to
+  the RMS (value and colour band unchanged, `ui.py:_is_spike_dominated`): the
+  total is carried by a few wrecked subs, not a bad night (NGC 6888 2026-07-20,
+  rms 19.18" / p95 2.11"), whereas a uniformly bad night sits near 1.2× and
+  keeps reading bad.
 
 A whole date range matching nothing means the ASIAir clock/timezone wasn't
 `guidelog.LOCAL_TZ`. `scan-guiding` **reports** that (unmatched logs and

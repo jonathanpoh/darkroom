@@ -19,6 +19,7 @@ from darkroom.webapi.auth import hash_password
 from darkroom.webapi.ui import (
     _build_aggregate,
     _guiding_summary,
+    _is_spike_dominated,
     _target_suggestions,
     reset_login_rate_limit,
 )
@@ -1401,3 +1402,116 @@ def test_session_page_guiding_survives_a_validation_error(tmp_path):
     resp = client.post(f"/sessions/{sid}", data={"gain": "not-a-number"})
     assert resp.status_code == 400
     assert "Total RMS" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# spike-dominated marker (F4) — presentation only, nothing stored changes
+# ---------------------------------------------------------------------------
+
+# Real sessions from the live catalog, kept as the fixtures for this rule.
+SPIKED = dict(rms_total_arcsec=19.18, p95_arcsec=2.11, peak_arcsec=351.0)  # NGC 6888 2026-07-20
+UNIFORMLY_BAD = dict(rms_total_arcsec=35.30, p95_arcsec=28.30, peak_arcsec=96.4)  # M 45 2025-09-22
+
+
+def test_is_spike_dominated_rule_and_guards():
+    assert _is_spike_dominated(19.18, 2.11) is True        # rms/p95 = 9.1
+    assert _is_spike_dominated(35.30, 28.30) is False       # 1.2 — uniformly bad
+    assert _is_spike_dominated(0.92, 1.88) is False         # 0.5 — clean
+    assert _is_spike_dominated(4.0, 2.0) is True            # exactly 2× counts
+    assert _is_spike_dominated(19.18, 0.0) is False         # p95 <= 0 guard
+    assert _is_spike_dominated(19.18, None) is False
+    assert _is_spike_dominated(None, 2.11) is False
+
+
+def test_night_payload_flags_a_spike_dominated_session(tmp_path):
+    client, db_path = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db_path, _session(sid))
+    _guided(db_path, sid, **SPIKED)
+    login(client)
+
+    night = _embedded_data(client.get("/targets/M%2081").text)[0]["nights"][0]
+    assert night["guiding"]["spike"] is True
+    # the value and its band inputs are untouched — only the annotation is new
+    assert night["guiding"]["rms"] == pytest.approx(19.18)
+    assert night["guiding"]["p95"] == pytest.approx(2.11)
+    assert night["guiding"]["peak"] == pytest.approx(351.0)
+
+
+def test_night_payload_does_not_flag_a_uniformly_bad_session(tmp_path):
+    """High RMS *and* high p95 is a genuinely bad night — it must keep reading bad."""
+    client, db_path = make_client(tmp_path)
+    sid = "M45_20250922_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db_path, _session(sid, target="M 45", obs_date="2025-09-22"))
+    _guided(db_path, sid, **UNIFORMLY_BAD)
+    login(client)
+
+    night = _embedded_data(client.get("/targets/M%2045").text)[0]["nights"][0]
+    assert night["guiding"]["spike"] is False
+
+
+def test_night_payload_does_not_flag_a_clean_session(tmp_path):
+    client, db_path = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db_path, _session(sid))
+    _guided(db_path, sid)  # 0.92 RMS / 1.88 p95
+    login(client)
+
+    night = _embedded_data(client.get("/targets/M%2081").text)[0]["nights"][0]
+    assert night["guiding"]["spike"] is False
+
+
+def test_night_without_a_guiding_row_still_renders_the_em_dash(tmp_path):
+    """No guide log means "not measured", not "spiked" and not "bad": the payload
+    stays null and the renderer's null branch is the em-dash."""
+    client, db_path = make_client(tmp_path)
+    upsert_session(db_path, _session("M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"))
+    login(client)
+
+    night = _embedded_data(client.get("/targets/M%2081").text)[0]["nights"][0]
+    assert night["guiding"] is None
+    js = client.get("/static/app.js").text
+    assert 'if (!g || g.rms == null) return `<span class="guide none">—</span>`;' in js
+    # the marker is a straight read of the server flag — no threshold in the JS
+    assert "if (g.spike)" in js
+    assert re.search(r"g\.spike \? .*class=\\?\"spike\\?\"", js)
+
+
+def test_session_page_marks_a_spike_dominated_session(tmp_path):
+    client, db_path = make_client(tmp_path)
+    sid = "NGC6888_20260720_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db_path, _session(sid, target="NGC 6888", obs_date="2026-07-20"))
+    _guided(db_path, sid, **SPIKED)
+    login(client)
+
+    html = client.get(f"/sessions/{sid}").text
+    assert 'class="spike"' in html
+    assert "spike-dominated: most frames near 2.11" in html
+    assert "worst 351.00" in html
+    assert "a few bad subs rather than a bad night" in html
+    assert "19.18" in html  # the RMS itself is unchanged
+
+
+def test_session_page_does_not_mark_a_uniformly_bad_session(tmp_path):
+    client, db_path = make_client(tmp_path)
+    sid = "M45_20250922_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db_path, _session(sid, target="M 45", obs_date="2025-09-22"))
+    _guided(db_path, sid, **UNIFORMLY_BAD)
+    login(client)
+
+    html = client.get(f"/sessions/{sid}").text
+    assert "35.30" in html
+    assert 'class="spike"' not in html
+    assert "spike-dominated" not in html
+
+
+def test_session_page_does_not_mark_a_clean_session(tmp_path):
+    client, db_path = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db_path, _session(sid))
+    _guided(db_path, sid)
+    login(client)
+
+    html = client.get(f"/sessions/{sid}").text
+    assert 'class="spike"' not in html
+    assert "spike-dominated" not in html

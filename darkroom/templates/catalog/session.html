@@ -65,11 +65,17 @@
 <div class="readonly-block guideblock">
   <h3>Guiding</h3>
   <div class="field-row"><label>Total RMS</label>
-    <span class="guide {{ band }}">{{ "%.2f"|format(guiding.rms_total_arcsec) }}&#8243;</span></div>
+    <span class="guide {{ band }}">{{ "%.2f"|format(guiding.rms_total_arcsec) }}&#8243;{% if guiding.spike %}<span
+      class="spike" title="spike-dominated — a few bad subs rather than a bad night">&#9650;</span>{% endif %}</span></div>
   <div class="field-row"><label>RA / Dec RMS</label>
     <span>{{ "%.2f"|format(guiding.rms_ra_arcsec) }}&#8243; / {{ "%.2f"|format(guiding.rms_dec_arcsec) }}&#8243;</span></div>
   <div class="field-row"><label>Peak / p95</label>
     <span>{{ "%.2f"|format(guiding.peak_arcsec) }}&#8243; / {{ "%.2f"|format(guiding.p95_arcsec) }}&#8243;</span></div>
+  {% if guiding.spike %}
+  <div class="field-row"><label>Spread</label>
+    <span class="guidespike">spike-dominated: most frames near {{ "%.2f"|format(guiding.p95_arcsec) }}&#8243;,
+      worst {{ "%.2f"|format(guiding.peak_arcsec) }}&#8243; — a few bad subs rather than a bad night</span></div>
+  {% endif %}
   <div class="field-row"><label>Coverage</label>
     <span>{% if guiding.coverage is not none %}{{ "%.0f"|format(guiding.coverage * 100) }}% of the session
       ({{ guiding.guided_sec }}s guided){% if guiding.coverage < 0.8 %}
