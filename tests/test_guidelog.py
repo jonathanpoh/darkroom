@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from darkroom.guidelog import (
     LOCAL_TZ,
     GuideRow,
@@ -220,8 +222,10 @@ def test_stats_converts_pixels_to_arcsec():
     result = stats(rows, 6.45)
     assert result is not None
     assert result.rows_used == 40 and result.rows_excluded == 0
-    assert result.rms_ra_arcsec == 0.2 * 6.45
-    assert result.rms_dec_arcsec == 0.1 * 6.45
+    # Tolerance, not equality: RMS goes through sqrt(sum(x**2)/n), so even a
+    # run of identical rows lands an ulp off the closed form on some libms.
+    assert result.rms_ra_arcsec == pytest.approx(0.2 * 6.45)
+    assert result.rms_dec_arcsec == pytest.approx(0.1 * 6.45)
     expected_total = ((0.2 * 6.45) ** 2 + (0.1 * 6.45) ** 2) ** 0.5
     assert abs(result.rms_total_arcsec - expected_total) < 1e-9
     assert abs(result.peak_arcsec - result.p95_arcsec) < 1e-9
