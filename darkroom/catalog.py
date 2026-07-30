@@ -22,13 +22,82 @@ def query_all_sessions(backend: CatalogBackend) -> list[dict]:
     return sorted(backend.query_sessions(), key=lambda r: (r["target"], r["obs_date"]))
 
 
+DEFAULT_DARK_TEMP_TOLERANCE = 3.0
+
+
+def dark_temp_sort_key(set_temp: float | None, session_temp: float) -> tuple[int, float]:
+    """Rank a dark set against a session's sensor temperature: nearest first.
+
+    Sets with no recorded temperature sort last — they match anything, but only
+    as a fallback once every temperatured set has been considered.
+    """
+    if set_temp is None:
+        return (1, 0.0)
+    return (0, abs(set_temp - session_temp))
+
+
+def dark_temp_ties(rows: list[dict], temperature_c: float) -> list[dict]:
+    """Rows tied for nearest temperature at *different* set-points.
+
+    Returns [] unless the pick is genuinely ambiguous — i.e. two or more distinct
+    temperatures sit exactly the same distance from the session. A session at
+    22.5C with masters on the 20C/25C rungs of an uncooled ladder is the real
+    case: neither is more correct than the other, so the caller warns rather
+    than silently taking row order. Sets at the same temperature are not a tie;
+    either is equally right.
+    """
+    temped = [r for r in rows if r["temperature_c"] is not None]
+    if not temped:
+        return []
+    best = min(abs(r["temperature_c"] - temperature_c) for r in temped)
+    tied = [r for r in temped if abs(r["temperature_c"] - temperature_c) == best]
+    if len({r["temperature_c"] for r in tied}) < 2:
+        return []
+    return tied
+
+
 def find_darks(
-    backend: CatalogBackend, *, camera: str, gain: int, exposure_sec: float
+    backend: CatalogBackend, *, camera: str, gain: int, exposure_sec: float,
+    temperature_c: float | None = None,
+    temp_tolerance: float = DEFAULT_DARK_TEMP_TOLERANCE,
 ) -> list[dict]:
-    """Return Dark calibration sets matching camera+gain+exposure, masters first."""
-    return backend.query_calibration_sets(
+    """Return Dark sets matching camera+gain+exposure, masters first.
+
+    When `temperature_c` is given, sets further than `temp_tolerance` degrees
+    from it are dropped and the rest are ranked nearest-first within the
+    masters/raws split (see dark_temp_sort_key). Passing None skips temperature
+    matching entirely — the pre-B11 behaviour, kept for callers that only want
+    to know what darks exist at a given gain/exposure.
+
+    Nearest-within-tolerance is applied to *every* camera, not just uncooled
+    ones. Exact matching looks right for a cooled camera with deliberate
+    set-points, but session `temperature_c` is the raw CCD-TEMP of the session's
+    *first* frame (cataloger._read_header), taken while the sensor may still be
+    settling, whereas calibration sets round to the nearest degree
+    (scanner.py). On the live catalog that leaves 13 of 111 ZWOASI585MCPro
+    sessions on values like -19.5, -16.5 or -15.0 that no master would match
+    exactly. One rule with a tolerance handles both regimes and needs no
+    per-camera cooled/uncooled registry, which the codebase does not have.
+    """
+    rows = backend.query_calibration_sets(
         frame_type="Dark", camera=camera, gain=gain, exposure_sec=exposure_sec
     )
+    if temperature_c is None:
+        return rows
+    rows = [
+        r for r in rows
+        if r["temperature_c"] is None
+        or abs(r["temperature_c"] - temperature_c) <= temp_tolerance
+    ]
+    # Masters stay ahead of raws (the query's contract, which _build_night's
+    # partition-then-fallback relies on); temperature only orders within each.
+    rows.sort(
+        key=lambda r: (
+            not r.get("is_master"),
+            dark_temp_sort_key(r["temperature_c"], temperature_c),
+        )
+    )
+    return rows
 
 
 def find_bias(backend: CatalogBackend, *, camera: str, gain: int) -> list[dict]:

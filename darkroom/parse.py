@@ -92,6 +92,14 @@ def parse_exposure(stem: str) -> str | None:
     return m.group(1) if m else None
 
 
+def parse_temperature(stem: str) -> float | None:
+    """Return sensor temperature in °C from filename stem (e.g. '-20.0C' → -20.0), or None."""
+    for part in stem.split("_"):
+        if TEMP_RE.match(part):
+            return float(part[:-1])
+    return None
+
+
 def parse_datetime(stem: str) -> datetime | None:
     """Return capture datetime from filename stem, or None."""
     m = DATETIME_RE.search(stem)

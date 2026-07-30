@@ -79,6 +79,31 @@ def test_discover_darks_missing_dir(tmp_path):
     assert files == []
 
 
+def test_discover_darks_temperature_filters_out_of_tolerance(tmp_path):
+    d = tmp_path / "Darks"
+    # B11 follow-up: raw dark sets at different temperatures share one folder
+    touch(d / "Dark_180.0s_Bin1_585MC_gain200_20260201-000000_-20.0C_0001.fit")
+    touch(d / "Dark_180.0s_Bin1_585MC_gain200_20260201-000000_-10.0C_0001.fit")
+    files = discover_darks(d, exposure_sec=180.0, temperature_c=-20.0, temp_tolerance=3.0)
+    assert len(files) == 1
+    assert "-20.0C" in files[0].name
+
+
+def test_discover_darks_temperature_keeps_unparseable(tmp_path):
+    d = tmp_path / "Darks"
+    touch(d / "Dark_180.0s_Bin1_585MC_gain200_20260201-000000_0001.fit")  # no temp token
+    files = discover_darks(d, exposure_sec=180.0, temperature_c=-20.0, temp_tolerance=3.0)
+    assert len(files) == 1
+
+
+def test_discover_darks_temperature_none_keeps_all(tmp_path):
+    d = tmp_path / "Darks"
+    touch(d / "Dark_180.0s_Bin1_585MC_gain200_20260201-000000_-20.0C_0001.fit")
+    touch(d / "Dark_180.0s_Bin1_585MC_gain200_20260201-000000_-10.0C_0001.fit")
+    files = discover_darks(d, exposure_sec=180.0)
+    assert len(files) == 2
+
+
 # ── discover_flat_files ───────────────────────────────────────────────────────
 
 def test_discover_flat_files_returns_all_fit(tmp_path):

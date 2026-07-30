@@ -138,7 +138,7 @@ Generalised from `asiair-ingestion/scripts/create_wbpp_input.py`. Key difference
 
 | Frame type | Match key |
 |---|---|
-| Science darks | Camera + Gain + Exposure (all dates usable) |
+| Science darks | Camera + Gain + Exposure + Temperature within ±N °C (N = `--dark-temp-tolerance`, default 3; all dates usable). Single nearest master is symlinked; NULL-temp sets pass as lowest-priority fallback |
 | Flats | OTA + Camera + Filter, within ±N days (N = `--flat-window`, default 3), ranked by the **flat-morning rule** — see below |
 | Flat darks | Flat exposure + flat date (or flat_date + 1 fallback) |
 

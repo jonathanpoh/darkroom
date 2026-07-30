@@ -1,3 +1,4 @@
+import argparse
 import pytest
 from datetime import date
 from pathlib import Path
@@ -12,7 +13,7 @@ from darkroom.finish import (
     _list_session_dirs, _confirm_and_delete, _resolve_session_ids,
     _mark_sessions_processed, cmd_finish,
 )
-from darkroom.prep import _build_night
+from darkroom.prep import _build_night, _no_darks_note, add_subparser as prep_add_subparser
 
 
 def touch(p: Path, content: bytes = b"") -> Path:
@@ -391,6 +392,335 @@ def test_build_night_prefers_master_bias_over_raw_subs(tmp_path):
     bias_links = list((session_dir / "Bias").glob("*"))
     assert len(bias_links) == 1
     assert bias_links[0].resolve().name == "masterBias_gain200.xisf"
+
+
+# ── B11: wbpp symlinks only the nearest-temperature dark master ───────────────
+
+def _register_dark_master(catalog, *, set_id, cam, temperature_c, folder_path):
+    """Shared helper for the B11 tests below — one master dark set at a given temp."""
+    upsert_calibration_set(catalog, {
+        "set_id": set_id, "frame_type": "Dark", "camera": cam, "ota": None,
+        "filter": None, "gain": 200, "exposure_sec": 180.0, "temperature_c": temperature_c,
+        "frame_count": 1, "capture_date": "2026-02-19", "folder_path": folder_path,
+        "is_master": 1,
+    })
+
+
+def test_build_night_symlinks_only_the_nearest_dark_master(tmp_path):
+    """Regression for B11: _build_night used to symlink every matching dark
+    master regardless of temperature. Only the single nearest match (by
+    session temperature_c) should land in Darks/.
+    """
+    archive = tmp_path / "archive"
+    catalog = tmp_path / "cat.db"
+    init_db(catalog)
+
+    cam = "ZWOASI585MCPro"
+
+    for temp in (15.0, 20.0, 25.0):
+        rel = f"00_Calibration/Darks/ZWOASI585MCPro/Masters/masterDark_180s_gain200_{temp:g}C.xisf"
+        touch(archive / rel)
+        _register_dark_master(catalog, set_id=f"dark_{temp:g}", cam=cam,
+                               temperature_c=temp, folder_path=rel)
+
+    lights_rel = "01_Deep Sky Objects/M 81/2026-02-19_FRA400_ZWOASI585MCPro/Lights/L-Pro"
+    touch(archive / lights_rel / "Light_M81_180.0s_L-Pro_20260219-230000_-20C_0001.fit")
+    session = {
+        "lights_path": lights_rel, "filter": "L-Pro", "camera": cam, "gain": 200,
+        "exposure_sec": 180.0, "ota": "FRA400", "obs_date": "2026-02-19", "frame_count": 1,
+        "temperature_c": 22.0,
+    }
+
+    session_dir = tmp_path / "WBPP" / "M81" / "SESSION_1"
+    _build_night([session], output=archive, backend=LocalBackend(catalog),
+                 session_dir=session_dir, flat_window=3)
+
+    dark_links = list((session_dir / "Darks").glob("*"))
+    assert len(dark_links) == 1
+    assert dark_links[0].resolve().name == "masterDark_180s_gain200_20C.xisf"
+
+
+def test_build_night_skips_dark_masters_outside_tolerance(tmp_path):
+    """Regression for B11: with no master within tolerance of the session
+    temperature, Darks/ must end up empty rather than getting every master
+    handed to WBPP as a fallback.
+    """
+    archive = tmp_path / "archive"
+    catalog = tmp_path / "cat.db"
+    init_db(catalog)
+
+    cam = "ZWOASI585MCPro"
+
+    for temp in (15.0, 20.0):
+        rel = f"00_Calibration/Darks/ZWOASI585MCPro/Masters/masterDark_180s_gain200_{temp:g}C.xisf"
+        touch(archive / rel)
+        _register_dark_master(catalog, set_id=f"dark_{temp:g}", cam=cam,
+                               temperature_c=temp, folder_path=rel)
+
+    lights_rel = "01_Deep Sky Objects/M 81/2026-02-19_FRA400_ZWOASI585MCPro/Lights/L-Pro"
+    touch(archive / lights_rel / "Light_M81_180.0s_L-Pro_20260219-230000_-20C_0001.fit")
+    session = {
+        "lights_path": lights_rel, "filter": "L-Pro", "camera": cam, "gain": 200,
+        "exposure_sec": 180.0, "ota": "FRA400", "obs_date": "2026-02-19", "frame_count": 1,
+        "temperature_c": -20.0,
+    }
+
+    session_dir = tmp_path / "WBPP" / "M81" / "SESSION_1"
+    _build_night([session], output=archive, backend=LocalBackend(catalog),
+                 session_dir=session_dir, flat_window=3)
+
+    darks_dir = session_dir / "Darks"
+    dark_links = list(darks_dir.glob("*")) if darks_dir.exists() else []
+    assert dark_links == []
+
+
+def test_build_night_warns_when_session_sits_between_dark_masters(tmp_path, capsys):
+    """Regression for B11: when a session sits exactly equidistant between two
+    dark masters at different temperatures, _build_night must warn (naming
+    both candidates) rather than silently picking one via backend row order.
+    """
+    archive = tmp_path / "archive"
+    catalog = tmp_path / "cat.db"
+    init_db(catalog)
+
+    cam = "ZWOASI585MCPro"
+
+    for temp in (20.0, 25.0):
+        rel = f"00_Calibration/Darks/ZWOASI585MCPro/Masters/masterDark_180s_gain200_{temp:g}C.xisf"
+        touch(archive / rel)
+        _register_dark_master(catalog, set_id=f"dark_{temp:g}", cam=cam,
+                               temperature_c=temp, folder_path=rel)
+
+    lights_rel = "01_Deep Sky Objects/M 81/2026-02-19_FRA400_ZWOASI585MCPro/Lights/L-Pro"
+    touch(archive / lights_rel / "Light_M81_180.0s_L-Pro_20260219-230000_-20C_0001.fit")
+    session = {
+        "lights_path": lights_rel, "filter": "L-Pro", "camera": cam, "gain": 200,
+        "exposure_sec": 180.0, "ota": "FRA400", "obs_date": "2026-02-19", "frame_count": 1,
+        "temperature_c": 22.5,
+    }
+
+    session_dir = tmp_path / "WBPP" / "M81" / "SESSION_1"
+    _build_night([session], output=archive, backend=LocalBackend(catalog),
+                 session_dir=session_dir, flat_window=3)
+
+    out = capsys.readouterr().out
+    warning = next((ln for ln in out.splitlines() if "WARNING" in ln), None)
+    assert warning is not None, out
+    # Match the formatted temperatures, not bare "20"/"25" — those also occur in
+    # "gain200", "180.0s" and the 2026 obs_date, so a substring check on the
+    # whole output would pass even if the warning named no temperatures at all.
+    assert "20C" in warning and "25C" in warning, warning
+    assert "22.5C" in warning, warning
+
+    dark_links = list((session_dir / "Darks").glob("*"))
+    assert len(dark_links) == 1
+
+
+def test_build_night_dark_temp_tolerance_is_configurable(tmp_path):
+    """Regression for B11: --dark-temp-tolerance must actually widen (or
+    narrow) which dark masters are eligible, not just get accepted and
+    ignored.
+    """
+    archive = tmp_path / "archive"
+    catalog = tmp_path / "cat.db"
+    init_db(catalog)
+
+    cam = "ZWOASI585MCPro"
+
+    for temp in (15.0, 30.0):
+        rel = f"00_Calibration/Darks/ZWOASI585MCPro/Masters/masterDark_180s_gain200_{temp:g}C.xisf"
+        touch(archive / rel)
+        _register_dark_master(catalog, set_id=f"dark_{temp:g}", cam=cam,
+                               temperature_c=temp, folder_path=rel)
+
+    lights_rel = "01_Deep Sky Objects/M 81/2026-02-19_FRA400_ZWOASI585MCPro/Lights/L-Pro"
+    touch(archive / lights_rel / "Light_M81_180.0s_L-Pro_20260219-230000_-20C_0001.fit")
+    session = {
+        "lights_path": lights_rel, "filter": "L-Pro", "camera": cam, "gain": 200,
+        "exposure_sec": 180.0, "ota": "FRA400", "obs_date": "2026-02-19", "frame_count": 1,
+        "temperature_c": 20.0,
+    }
+
+    backend = LocalBackend(catalog)
+
+    session_dir_default = tmp_path / "WBPP" / "M81" / "SESSION_1"
+    _build_night([session], output=archive, backend=backend,
+                 session_dir=session_dir_default, flat_window=3)
+    darks_dir_default = session_dir_default / "Darks"
+    dark_links_default = list(darks_dir_default.glob("*")) if darks_dir_default.exists() else []
+    assert dark_links_default == []
+
+    session_dir_wide = tmp_path / "WBPP" / "M81" / "SESSION_2"
+    _build_night([session], output=archive, backend=backend,
+                 session_dir=session_dir_wide, flat_window=3, dark_temp_tolerance=5.0)
+    dark_links_wide = list((session_dir_wide / "Darks").glob("*"))
+    assert len(dark_links_wide) == 1
+    assert dark_links_wide[0].resolve().name == "masterDark_180s_gain200_15C.xisf"
+
+
+# ── B11 review fixes: raw-subs temperature filtering & missing-file fallback ──
+
+def test_build_night_raw_subs_fallback_is_temperature_filtered(tmp_path):
+    """Regression: with no master dark rows, the raw-subs fallback used to scan
+    by exposure only, leaking raws at other temperatures back in because raw
+    dark sets at different temperatures share one Darks/<Camera>/ folder.
+    """
+    archive = tmp_path / "archive"
+    catalog = tmp_path / "cat.db"
+    init_db(catalog)
+
+    cam = "ZWOASI585MCPro"
+
+    raw_rel = "00_Calibration/Darks/ZWOASI585MCPro/Raw/2026-02-19"
+    cold_file = touch(
+        archive / raw_rel / "Dark_180.0s_Bin1_585MC_gain200_20260219-090000_-20.0C_0001.fit"
+    )
+    touch(archive / raw_rel / "Dark_180.0s_Bin1_585MC_gain200_20260219-090100_-10.0C_0001.fit")
+    upsert_calibration_set(catalog, {
+        "set_id": "dark_raw", "frame_type": "Dark", "camera": cam, "ota": None,
+        "filter": None, "gain": 200, "exposure_sec": 180.0, "temperature_c": -20.0,
+        "frame_count": 1, "capture_date": "2026-02-19", "folder_path": raw_rel,
+        "is_master": 0,
+    })
+
+    lights_rel = "01_Deep Sky Objects/M 81/2026-02-19_FRA400_ZWOASI585MCPro/Lights/L-Pro"
+    touch(archive / lights_rel / "Light_M81_180.0s_L-Pro_20260219-230000_-20C_0001.fit")
+    session = {
+        "lights_path": lights_rel, "filter": "L-Pro", "camera": cam, "gain": 200,
+        "exposure_sec": 180.0, "ota": "FRA400", "obs_date": "2026-02-19", "frame_count": 1,
+        "temperature_c": -20.0,
+    }
+
+    session_dir = tmp_path / "WBPP" / "M81" / "SESSION_1"
+    _build_night([session], output=archive, backend=LocalBackend(catalog),
+                 session_dir=session_dir, flat_window=3)
+
+    dark_links = list((session_dir / "Darks").glob("*"))
+    assert len(dark_links) == 1
+    assert dark_links[0].resolve().name == cold_file.name
+
+
+def test_build_night_falls_through_to_next_master_when_nearest_missing(tmp_path):
+    """Regression: a stale folder_path on the nearest dark master row (file
+    missing on disk) used to leave Darks/ empty. It should fall through the
+    ranking to the next-nearest master that's actually present.
+    """
+    archive = tmp_path / "archive"
+    catalog = tmp_path / "cat.db"
+    init_db(catalog)
+
+    cam = "ZWOASI585MCPro"
+
+    missing_rel = "00_Calibration/Darks/ZWOASI585MCPro/Masters/masterDark_180s_gain200_-20C.xisf"
+    # Do NOT touch missing_rel — simulates a stale folder_path with no file on disk.
+    _register_dark_master(catalog, set_id="dark_-20", cam=cam,
+                           temperature_c=-20.0, folder_path=missing_rel)
+
+    present_rel = "00_Calibration/Darks/ZWOASI585MCPro/Masters/masterDark_180s_gain200_-18C.xisf"
+    touch(archive / present_rel)
+    _register_dark_master(catalog, set_id="dark_-18", cam=cam,
+                           temperature_c=-18.0, folder_path=present_rel)
+
+    lights_rel = "01_Deep Sky Objects/M 81/2026-02-19_FRA400_ZWOASI585MCPro/Lights/L-Pro"
+    touch(archive / lights_rel / "Light_M81_180.0s_L-Pro_20260219-230000_-20C_0001.fit")
+    session = {
+        "lights_path": lights_rel, "filter": "L-Pro", "camera": cam, "gain": 200,
+        "exposure_sec": 180.0, "ota": "FRA400", "obs_date": "2026-02-19", "frame_count": 1,
+        "temperature_c": -20.0,
+    }
+
+    session_dir = tmp_path / "WBPP" / "M81" / "SESSION_1"
+    _build_night([session], output=archive, backend=LocalBackend(catalog),
+                 session_dir=session_dir, flat_window=3)
+
+    dark_links = list((session_dir / "Darks").glob("*"))
+    assert len(dark_links) == 1
+    assert dark_links[0].resolve().name == "masterDark_180s_gain200_-18C.xisf"
+
+
+def test_build_night_falls_through_to_raw_subs_when_all_masters_missing(tmp_path):
+    """Regression: when every matched master's file is missing on disk, fall
+    all the way through to the raw-subs fallback rather than leaving Darks/
+    empty.
+    """
+    archive = tmp_path / "archive"
+    catalog = tmp_path / "cat.db"
+    init_db(catalog)
+
+    cam = "ZWOASI585MCPro"
+
+    missing_rel = "00_Calibration/Darks/ZWOASI585MCPro/Masters/masterDark_180s_gain200_-20C.xisf"
+    # Do NOT touch missing_rel — file missing on disk.
+    _register_dark_master(catalog, set_id="dark_-20", cam=cam,
+                           temperature_c=-20.0, folder_path=missing_rel)
+
+    raw_rel = "00_Calibration/Darks/ZWOASI585MCPro/Raw/2026-02-19"
+    raw_file = touch(
+        archive / raw_rel / "Dark_180.0s_Bin1_585MC_gain200_20260219-090000_-20.0C_0001.fit"
+    )
+    upsert_calibration_set(catalog, {
+        "set_id": "dark_raw", "frame_type": "Dark", "camera": cam, "ota": None,
+        "filter": None, "gain": 200, "exposure_sec": 180.0, "temperature_c": -20.0,
+        "frame_count": 1, "capture_date": "2026-02-19", "folder_path": raw_rel,
+        "is_master": 0,
+    })
+
+    lights_rel = "01_Deep Sky Objects/M 81/2026-02-19_FRA400_ZWOASI585MCPro/Lights/L-Pro"
+    touch(archive / lights_rel / "Light_M81_180.0s_L-Pro_20260219-230000_-20C_0001.fit")
+    session = {
+        "lights_path": lights_rel, "filter": "L-Pro", "camera": cam, "gain": 200,
+        "exposure_sec": 180.0, "ota": "FRA400", "obs_date": "2026-02-19", "frame_count": 1,
+        "temperature_c": -20.0,
+    }
+
+    session_dir = tmp_path / "WBPP" / "M81" / "SESSION_1"
+    _build_night([session], output=archive, backend=LocalBackend(catalog),
+                 session_dir=session_dir, flat_window=3)
+
+    dark_links = list((session_dir / "Darks").glob("*"))
+    assert len(dark_links) == 1
+    assert dark_links[0].resolve().name == raw_file.name
+
+
+def test_no_darks_note_suggests_tolerance_for_raw_only_near_miss(tmp_path):
+    """Regression: _no_darks_note used to say "no darks found at this
+    gain/exposure" even when a raw (non-master) dark set existed at that
+    gain/exposure just outside tolerance — it only looked at master rows'
+    framing implicitly via find_darks, but the message text didn't distinguish
+    a near-miss from a true absence. With matched_any=False and a raw set
+    outside tolerance, the note must point at --dark-temp-tolerance.
+    """
+    catalog = tmp_path / "cat.db"
+    init_db(catalog)
+
+    cam = "ZWOASI585MCPro"
+
+    raw_rel = "00_Calibration/Darks/ZWOASI585MCPro/Raw/2026-02-19"
+    upsert_calibration_set(catalog, {
+        "set_id": "dark_raw", "frame_type": "Dark", "camera": cam, "ota": None,
+        "filter": None, "gain": 200, "exposure_sec": 180.0, "temperature_c": -10.0,
+        "frame_count": 1, "capture_date": "2026-02-19", "folder_path": raw_rel,
+        "is_master": 0,
+    })
+
+    backend = LocalBackend(catalog)
+    s0 = {"camera": cam, "gain": 200, "exposure_sec": 180.0}
+    note = _no_darks_note(
+        backend, s0, session_temp=-20.0, tolerance=3.0, matched_any=False,
+    )
+
+    assert "nearest raw set is" in note
+    assert "--dark-temp-tolerance" in note
+    assert "no darks found at this gain/exposure" not in note
+
+
+def test_dark_temp_tolerance_rejects_negative(capsys):
+    parser = argparse.ArgumentParser()
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    prep_add_subparser(sub)
+    with pytest.raises(SystemExit):
+        parser.parse_args(["wbpp", "--dark-temp-tolerance", "-5"])
+    assert "non-negative" in capsys.readouterr().err
 
 
 # ── dry-run previews session resolution ─────────────────────────────────────

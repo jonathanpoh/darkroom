@@ -4,7 +4,7 @@ import shutil
 from datetime import date
 from pathlib import Path
 
-from darkroom.parse import fits_files, parse_datetime, parse_exposure
+from darkroom.parse import fits_files, parse_datetime, parse_exposure, parse_temperature
 
 
 def next_session_num(target_dir: Path) -> int:
@@ -25,16 +25,33 @@ def discover_lights(folder: Path) -> list[Path]:
     return fits_files(folder)
 
 
-def discover_darks(folder: Path, *, exposure_sec: float) -> list[Path]:
-    """Return .fit files in folder whose filename exposure matches exposure_sec."""
+def discover_darks(
+    folder: Path, *, exposure_sec: float,
+    temperature_c: float | None = None, temp_tolerance: float = 0.0,
+) -> list[Path]:
+    """Return .fit files in folder whose filename exposure matches exposure_sec.
+
+    Raw dark sets at different temperatures share the same `Darks/<Camera>/`
+    folder on the NAS, so an exposure-only scan leaks out-of-tolerance raws
+    (B11 follow-up). When temperature_c is given, also drop files whose
+    filename temperature differs from it by more than temp_tolerance. Files
+    with no parseable temperature are kept — the catalog row doesn't
+    distinguish files by temperature either, so this mirrors the NULL-passes
+    rule in catalog.py:find_darks.
+    """
     if not folder.exists():
         return []
     target = f"{float(exposure_sec)}s"
     result = []
     for f in fits_files(folder):
         exp = parse_exposure(f.stem)
-        if exp == target:
-            result.append(f)
+        if exp != target:
+            continue
+        if temperature_c is not None:
+            temp = parse_temperature(f.stem)
+            if temp is not None and abs(temp - temperature_c) > temp_tolerance:
+                continue
+        result.append(f)
     return result
 
 
