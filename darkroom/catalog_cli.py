@@ -497,9 +497,13 @@ def _backfill_sites_run(args: argparse.Namespace) -> None:
 def _backfill_times_run(args: argparse.Namespace) -> None:
     """Backfill start_utc/end_utc on sessions from archive FITS DATE-OBS/EXPTIME.
 
-    start_utc is the earliest frame's DATE-OBS; end_utc is the latest frame's
-    DATE-OBS plus *that* frame's exposure, so the span covers the final
-    sub-exposure (F4 intersects guide-log segments against it).
+    Only frames whose imaging night (cataloger.compute_imaging_night, the
+    canonical noon-to-noon rule) equals the session's obs_date are considered:
+    a lights_path folder can hold more than one night, and more than one
+    session row can point at the same folder. start_utc is then the earliest
+    such frame's DATE-OBS; end_utc is the latest one's DATE-OBS plus *that*
+    frame's exposure, so the span covers the final sub-exposure (F4 intersects
+    guide-log segments against it).
 
     Dry run (default) is pure-read: it never writes to the catalog. --apply
     writes via update_session_fields, through the catalog backend (local file
@@ -509,7 +513,7 @@ def _backfill_times_run(args: argparse.Namespace) -> None:
     """
     from astropy.io import fits
 
-    from darkroom.cataloger import compute_session_span
+    from darkroom.cataloger import compute_imaging_night, compute_session_span
 
     backend = resolve_backend(
         args.catalog, url_flag=args.catalog_url, token_flag=args.api_token
@@ -525,6 +529,7 @@ def _backfill_times_run(args: argparse.Namespace) -> None:
     no_headers = 0
     missing = 0
     read_errors = 0
+    wrong_night = 0
 
     for row in candidates:
         folder = archive / row["lights_path"]
@@ -563,7 +568,25 @@ def _backfill_times_run(args: argparse.Namespace) -> None:
         if unreadable:
             read_errors += 1
 
-        start_utc, end_utc = compute_session_span(stamps)
+        # A folder is not a session. Legacy archive layouts (pre-F4) can have
+        # two session rows pointing at one lights_path, and taking the span
+        # over the whole folder then hands both of them the same multi-day
+        # window — observed as a 76-hour "session" that swallowed three
+        # nights' guide rows and reported an identical bogus RMS for both.
+        # Keep only frames whose imaging night is this session's, using the
+        # same noon-to-noon rule the scanner groups by.
+        on_night = [s for s in stamps if compute_imaging_night(s[0]) == row["obs_date"]]
+        if not on_night:
+            # Nothing dated at all is a header problem; dated frames that all
+            # belong to other nights is a layout problem. Both mean no span
+            # gets written — never fall back to the unfiltered folder span.
+            if any(compute_imaging_night(s[0]) is not None for s in stamps):
+                wrong_night += 1
+            else:
+                no_headers += 1
+            continue
+
+        start_utc, end_utc = compute_session_span(on_night)
         if start_utc is None:
             no_headers += 1
             continue
@@ -582,6 +605,8 @@ def _backfill_times_run(args: argparse.Namespace) -> None:
             f"{no_headers} no date headers",
             f"{missing} missing on disk",
         ]
+        if wrong_night:
+            parts.append(f"{wrong_night} skipped (no frames on the session night)")
         if read_errors:
             parts.append(f"{read_errors} read errors")
         print(f"\n{', '.join(parts)}; run with --apply to write")
@@ -607,6 +632,8 @@ def _backfill_times_run(args: argparse.Namespace) -> None:
         f"{no_headers} no date headers",
         f"{missing} missing on disk",
     ]
+    if wrong_night:
+        parts.append(f"{wrong_night} skipped (no frames on the session night)")
     if read_errors:
         parts.append(f"{read_errors} read errors")
     print(", ".join(parts))
@@ -782,8 +809,10 @@ def add_subparser(subparsers) -> None:
         "backfill-times", parents=site_flags,
         help="Backfill start_utc/end_utc on sessions from archive FITS headers",
         description="Read DATE-OBS/EXPTIME from every FITS frame of each session with "
-                    "a NULL start_utc and propose setting the session's UTC wall-clock "
-                    "span: start_utc = earliest DATE-OBS, end_utc = latest DATE-OBS "
+                    "a NULL start_utc, keep only the frames whose imaging night is "
+                    "that session's obs_date (one lights_path folder can hold several "
+                    "nights), and propose setting the session's UTC wall-clock span: "
+                    "start_utc = earliest DATE-OBS, end_utc = latest DATE-OBS "
                     "plus that frame's exposure. Dry run by default (prints proposed "
                     "changes, writes nothing); pass --apply to write them. Idempotent: "
                     "only NULL start_utc sessions are ever candidates.",
