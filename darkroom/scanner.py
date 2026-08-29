@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 from astropy.time import Time
@@ -9,6 +10,7 @@ from darkroom.cataloger import (
     FITSHeaderExtractor,
     compute_imaging_night,
     compute_session_span,
+    parse_date_obs,
 )
 from darkroom.names import _normalize_camera, _round_exposure
 from darkroom.parse import fits_files, parse_filter, parse_ota, reclassify_flat_dark
@@ -126,12 +128,16 @@ def _scan_lights(light_root: Path) -> list[Session]:
             groups.setdefault((night, filt), []).append((meta, path))
 
         for (night, filter_), frames in sorted(groups.items(), key=lambda kv: (kv[0][0], kv[0][1] or "")):
-            first_meta = frames[0][0]
+            # Pick the chronologically-first frame as representative.
+            # `frames` is in directory-walk order (filename sort), not
+            # capture order — B14.  The span is derived from all frames
+            # (compute_session_span sorts by DATE-OBS itself).
+            first_meta = min(
+                (meta for meta, _ in frames),
+                key=lambda m: parse_date_obs(m.get("date_obs", "")) or datetime.max,
+            )
 
             focallen = first_meta.get("focallen")
-            # Not first_meta: `frames` is in directory-walk order, not
-            # chronological, so the span has to be derived from all of them
-            # (compute_session_span sorts by DATE-OBS itself).
             start_utc, end_utc = compute_session_span(
                 (meta.get("date_obs", ""), meta.get("exposure")) for meta, _ in frames
             )

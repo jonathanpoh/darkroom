@@ -283,6 +283,51 @@ Found 2026-07-29 while verifying **B11** against live data, not reported.
   change, where he may shoot flats both before and after the change — which is
   why offset `0` has to stay a valid in-run match rather than being excluded.
 
+### B14. Session `exposure_sec`/`ra_deg`/`dec_deg`/`gain`/`temperature_c` come from directory order, not the chronologically-first frame — ✅ FIXED
+> Fixed 2026-08-29. Both `scanner.py:_scan_lights` and
+> `cataloger.py:SessionAnalyzer.analyze_sessions` now pick the representative
+> frame by `min(frames, key=parse_date_obs)` (earliest `DATE-OBS`) instead of
+> `frames[0]` (filename sort order). Regression tests in both `test_scanner.py`
+> and `test_cataloger.py` reproduce the SH2-101 mixed-exposure scenario (180s
+> sorts before 300s lexically but was captured later) and assert metadata comes
+> from the chronologically-first frame.
+
+Found 2026-08-29 fixing up SH2-101 2026-07-19 (F8/U4's originating incident).
+Same family as **B13** (`sessions[0]` trusted instead of the actual
+per-session values) — different code, worth its own entry.
+
+- **Where:** `darkroom/scanner.py:129` (`_scan_lights`, the path `ingest`
+  actually uses) and `darkroom/cataloger.py` `SessionAnalyzer.analyze_sessions`
+  (~857-878, used by `scan-lights`). Both do `first_meta = frames[0]` /
+  `first = frames[0]`, where `frames` comes from `parse.fits_files()` —
+  plain `sorted()` on **filename string**, not `DATE-OBS`.
+- **`scanner.py` already half-knows this.** The comment right above it reads:
+  *"Not first_meta: `frames` is in directory-walk order, not chronological, so
+  the span has to be derived from all of them (`compute_session_span` sorts by
+  DATE-OBS itself)"* — correctly fixing `start_utc`/`end_utc`, then two lines
+  later using the same unsorted `first_meta` for `exposure_sec`, `ra_deg`,
+  `dec_deg`, `gain`, `temperature_c`, `camera`, `focal_length` anyway.
+- **When it bites:** any session folder where filename-sort order diverges
+  from capture order — the concrete trigger is mixed exposures in one folder.
+  SH2-101 2026-07-19's `L-Synergy` folder had 5×300s then 87×180s captured in
+  that order, but `"...180.0s..."` sorts before `"...300.0s..."` lexically
+  (`'1' < '3'`), so `frames[0]` was a 180s frame from *after* the mid-session
+  mis-slew — the catalog's `dec_deg` (34.10611°) reflected the wrong framing
+  from the moment `ingest commit` first wrote the row, not just after the
+  later manual fixup. Also reachable without any mis-slew: a session that
+  changed gain, temperature, or exposure partway through (autofocus-driven
+  exposure change, e.g.) picks whichever setting sorts first alphabetically,
+  not whichever the mount was actually doing at the start of the night.
+- **Fix:** pick the representative frame by `min(frames, key=lambda f:
+  parse_date_obs(f["date_obs"]) or datetime.max)` (mirrors what
+  `compute_session_span` already does internally) instead of `frames[0]`, in
+  both call sites. Cheap — `date_obs` is already being read for the span calc
+  right next to it.
+- **Relevant to F8:** a `rescan-archive` divergence check that recomputes
+  `ra_deg`/`dec_deg` for comparison must not reimplement this same bug when
+  computing "what it should be" — fix this first, or the rescan tool will
+  confidently confirm a still-wrong value on the next mixed-exposure night.
+
 ---
 
 ## P2 — Minor / docs
@@ -1068,6 +1113,40 @@ bursty imaging runs, and mismatches fail with a shrug instead of showing what
 - Goal: stop `NoFilter`/`Unknown` values entering the archive at ingest time —
   U2 cleans up the backlog, U3 closes the tap.
 
+### U4. `scan-lights`/`scan-calibration` don't reach the live catalog when `catalog_url` is configured
+
+Filed 2026-08-29, out of a manual catalog fixup (SH2-101 2026-07-19 mis-slew:
+deleting the 87 off-target subs needed `frame_count`/`total_integration_sec`/
+`start_utc`/`end_utc`/`dec_deg` corrected on the *live* session row, and there
+was no clean way to do it).
+
+- **Where:** `catalog_cli.py` — `scan-lights`/`scan-calibration` wire to
+  `_resolve_db` → `config.resolve_catalog` (raw sqlite path only), while
+  `scan-guiding`/`apply-renames`/`sites`/`backfill-sites` all take
+  `--catalog-url`/`--api-token` and go through `catalog_client.resolve_backend`
+  (local file *or* webapi, per W9). `cataloger.scan_all_command`/
+  `scan_calibration_command` call `upsert_session`/`upsert_calibration_set`
+  directly against `Path(args.db)` — never the backend abstraction.
+- **Symptom:** rescanning an archive folder on the Mac to pick up a manual
+  disk change (deleted/added subs, corrected filenames) silently updates a
+  stale local sqlite file (`~/.config/darkroom/astro_catalog.db`, currently
+  92KB and untouched since 2026-08-04) while the deployed LXC catalog — the
+  one the web UI and everyone else reads — is untouched. No error; it just
+  looks like nothing happened.
+- **Fix:** add `--catalog-url`/`--api-token` (the `catalog_url_flag` parser
+  fragment already shared by `apply-renames`/`sites`/`backfill-sites`) to
+  `scan-lights` and `scan-calibration`, and change `scan_all_command`/
+  `scan_calibration_command` to build a `CatalogBackend` via `resolve_backend`
+  and call `backend.upsert_session`/`backend.upsert_calibration_set` instead
+  of importing `cataloger.upsert_*` and hitting `Path(args.db)` directly.
+  `frame_count`/`total_integration_sec` are excluded from
+  `update_session_fields`/PATCH on purpose (recomputed-only fields), so a
+  rescan is the *only* sanctioned way to fix them post-hoc — it needs to
+  actually reach the server.
+- **Workaround today:** hand-build the session dict and `POST /api/sessions`
+  with curl + the bearer token from `darkroom.toml` (same payload shape
+  `ingest commit` sends).
+
 ---
 
 ## F — Features
@@ -1480,6 +1559,134 @@ that.**
   the practical value. Revisit F7 only if culling-then-rescoring becomes a real
   part of the workflow.
 
+- **Third real case, 2026-08-29 (SH2-101 2026-08-28, `L-Extreme`):**
+  `rms_total_arcsec` 87.84″, `p95_arcsec` 1.92″ — a 46× ratio, easily
+  spike-dominated (threshold is 2×), and the session page also shows
+  `coverage` 0.775 with the "partial log — not the whole night" warning
+  (`session.html:81-82`, cutoff `< 0.8`). Jonathan suspected the coverage
+  warning itself was wrong — a second midnight-split log file missed, or a
+  UTC/local mismatch in the matcher. **Neither, checked against the raw log**
+  (`~/02_Astrophotography/01_ASIAir/ASIAIR/log/PHD2_GuideLog_2026-08-28_220037.txt`,
+  read directly, plus the live `session_guiding` row over SSH): only one PHD2
+  log exists for the night and it's the one recorded in `source_logs`; log
+  timestamps (local) and `DATE-OBS` (UTC, +1h for Portugal's August DST) agree
+  throughout, calibration starting ~50 min before the first light frame and
+  the log's last line landing within a minute of `end_utc` converted to local.
+  **The coverage shortfall is real, not mismatched:** `Guiding Ends`/`Begins`
+  pairs show a clean 26-minute dark stretch (03:26:33→03:52:21 local) plus,
+  either side of it, dozens of guiding segments under a minute — some under
+  15 seconds — meaning most of that stretch's guiding time is thrown away by
+  the settle-exclude before it ever reaches `guided_sec`. That whole window
+  sits exactly inside the frame gap (`#0070`–`#0104`) from the
+  forgotten-meridian-flip stall (see **B14**'s entry and the `L-Extreme`
+  cleanup). **Worth fixing regardless of F7:** the "partial log" wording reads
+  as *log data is missing*, when here the true story is *guiding was actually
+  failing for part of the night* — a different, more useful fact the UI
+  currently can't distinguish from a genuine matching gap. Per-frame windowing
+  (this entry) would fix both at once — a `coverage` computed against the subs
+  actually worth keeping stops being dragged down by a period whose frames are
+  already gone from the archive.
+  - **Correction after per-segment analysis (`guidelog.parse_log` +
+    `segment_stats` run directly against the log, not just the `Guiding
+    Begins`/`Ends` markers):** the coverage/blackout window and the RMS spike
+    are **two separate incidents**, not one. `peak_arcsec` 2937.42″ (49
+    arcminutes — essentially a lost star) comes from an isolated 22-minute
+    segment at **22:54–23:16 local**, over 4.5 hours *before* the meridian
+    stall — and it lines up with the other deleted frame, the single
+    tree-obstructed `#0006` (its neighbours place it at ~23:10–23:14 local,
+    squarely inside that segment). The meridian-stall window
+    (02:49–04:33 local) is well-behaved wherever it has enough rows to score
+    at all (1.07″–3.64″ per segment) — its damage is the *coverage* gap (the
+    26-minute blackout plus many settle-excluded sub-minute segments), not the
+    RMS spike. **Every other segment across the whole night — first to
+    last, both sides of both incidents — sits in the 0.7″–1.4″ range**, tight
+    and unremarkable, which is the actual answer to "were the guide settings
+    off": no. A settings/tuning problem would show up as elevated or
+    drifting baseline RMS in the clean segments too, and none of them do,
+    including the very first segment before anything went wrong. Both bad
+    stretches trace to a named external cause (tree; forgotten meridian-flip
+    re-enable), not the guide config.
+
+### F8. `catalog rescan-archive` — diff the archive against the catalog, queue the divergence for review
+
+Filed 2026-08-29, alongside U4, out of the same SH2-101 fixup. Manually
+computing `frame_count`/`total_integration_sec`/`dec_deg`/`start_utc`/`end_utc`
+by hand after deleting bad subs is exactly the kind of thing that should be a
+scan, not arithmetic — and it's not just deletions: renamed/moved session
+folders, sessions dropped from the archive entirely (old test sessions, a
+blown SD-card copy), and folders that appeared on disk without ever going
+through `ingest` all leave the same kind of silent divergence.
+
+- **Shape:** read-only pass over the archive (`find_lights_folders` +
+  `SessionAnalyzer`, same walk `scan-lights` already does) compared against
+  `resolve_backend().query_sessions()`. For each `session_id` seen on either
+  side, classify:
+  - **on disk, matches catalog** — no-op, not queued.
+  - **on disk, diverges from catalog** (`frame_count`/`total_integration_sec`/
+    `start_utc`/`end_utc`/`ra_deg`/`dec_deg`/`exposure_sec` differ from a
+    fresh scan of what's actually there) — queue an *update* proposal,
+    `session_id` unchanged.
+  - **on disk, no catalog row** — queue a *create* proposal (folder exists but
+    was never ingested/committed).
+  - **in catalog, `lights_path` missing on disk** — queue a *delete*
+    proposal, never an automatic delete (mirrors `scan-processed`'s
+    never-auto-write posture; W10's session-delete already exists as the
+    apply step once a proposal is confirmed).
+- **Review queue, not direct write:** same posture as `scan-processed`
+  (dry-run by default, `--apply` writes) and U2's filter-cleanup queue — a
+  diff this consequential (can silently drop or fabricate sessions) shouldn't
+  auto-commit. Given W9's existing `/queue` precedent, a
+  `/api/rescan-proposals`-style endpoint + queue view is probably the more
+  honest shape than a CLI-only `--apply` that just applies everything found.
+- **Depends on U4:** pointless to build if the diff can't be reconciled
+  against the live catalog — needs `resolve_backend`, not raw sqlite.
+- **Scope check before building:** decide whether "diverges" should include
+  `ra_deg`/`dec_deg` (mount-target drift mid-session, as caught here) or only
+  frame-count/timing fields — the former is what caught the SH2-101 mis-slew,
+  but it also fires on ordinary re-centering between sessions that share a
+  folder, so it needs a tolerance, not an exact-match diff.
+
+**Second real case, 2026-08-29 (SH2-101 2026-08-28, `L-Extreme`, 110→74
+frames):** deleted 36 subs — one single tree-obstructed frame (`#0006`) plus a
+contiguous 35-frame run (`#0070`–`#0104`) from a forgotten-meridian-flip mount
+stall. Confirms the classification this entry proposes, and narrows the
+"what to auto-fix vs. what to escalate" line more than the first case did:
+
+- **Both deleted runs were interior** — the surviving first (`#0001`) and last
+  (`#0110`) frames were untouched, so `start_utc`/`end_utc` (computed as
+  min/max over all frames, per `compute_session_span`) came back byte-identical
+  to what was already stored. Only `frame_count` (110→74) and
+  `total_integration_sec` (19800s→13320s) actually changed — `ra_deg`/`dec_deg`
+  also came back unchanged, because frame `#0001` (the directory-order "first"
+  frame — see **B14**) survived the cull. A **pure interior-deletion divergence
+  is cheap to auto-resolve**: recompute, diff, and if only `frame_count`/
+  `total_integration_sec` moved, the update proposal needs no human judgement
+  call the way a `ra_deg`/`dec_deg` change does — those two are safe to
+  auto-apply, or at least pre-approved in the queue UI, while any change to
+  `ra_deg`/`dec_deg`/`start_utc`/`end_utc` should still require a look.
+- **Confirms F7's finding from the other direction:** F7 noted deleting
+  interior subs can't shrink the guiding envelope; here it shows the same
+  envelope-from-edges arithmetic is *exactly* why the recompute below is a
+  no-op for the timing fields specifically when the edges survive — the two
+  are the same underlying fact (`start_utc`/`end_utc` only ever look at the
+  earliest/latest frame) cutting both ways.
+- **B14 dependency confirmed live, not just theoretical:** this session's
+  folder holds one exposure length throughout, so `frames[0]` happened to be
+  chronologically first and `ra_deg`/`dec_deg` came back correct by luck of
+  the naming, not by correctness of the code. The `L-Synergy` case in the same
+  BACKLOG.md update got the wrong answer from the identical code path. Fix
+  B14 before wiring up `rescan-archive`'s comparison — otherwise the tool's
+  own "recomputed value" is only as trustworthy as filename-sort-order happens
+  to be that night.
+- **Net effect on the original question this entry exists to answer:** yes, a
+  targeted `POST /api/sessions` upsert (same shape as the `L-Synergy` fixup)
+  is the right call here too, and is *lower-risk* than that first case —
+  `frame_count`/`total_integration_sec` are the only fields moving, nothing
+  representative-frame-derived changed. Deleting the row and re-ingesting
+  would be strictly worse: it'd cost the existing `id`/`created_at` and, if
+  `scan-guiding` had already run, wouldn't even change its output (per the
+  point above).
+
 ---
 
 ## S — Observation sites & conditions
@@ -1797,3 +2004,8 @@ follow once there is a second mosaic to test against.
     breaking anything. Do the ingest half (`parse_panel` + `panel` column +
     `make_session_id`) before the next mosaic is shot, and the WBPP/UI half
     after. Also closes U2's known same-night panel-collision gap.
+14. **U4** (`--catalog-url` on `scan-lights`/`scan-calibration`) and **F8**
+    (`catalog rescan-archive` divergence queue) — filed 2026-08-29 out of the
+    SH2-101 2026-07-19 mis-slew fixup (5 of 92 subs actually on target; the
+    rest needed hand-built catalog corrections because no rescan path reaches
+    the live catalog). Do U4 first — F8 depends on it.

@@ -842,7 +842,13 @@ class SessionAnalyzer:
 
         sessions = []
         for night, frames in sorted(groups.items()):
-            first = frames[0]
+            # Pick the chronologically-first frame as representative —
+            # `frames` is in directory-walk order (filename sort), not
+            # capture order (B14).
+            first = min(
+                frames,
+                key=lambda f: parse_date_obs(f.get("date_obs", "")) or datetime.max,
+            )
 
             # Filter: filename-first, header fallback — scoped to this night's frames
             filter_ = None

@@ -312,6 +312,52 @@ def test_scan_source_span_ignores_file_iteration_order():
     assert s.end_utc == "2026-02-19T23:35:00"
 
 
+def test_scan_source_metadata_from_chronologically_first_frame():
+    """B14: representative metadata must come from the chronologically-first
+    frame (earliest DATE-OBS), not the filename-first one.
+
+    Simulates the SH2-101 scenario: 5×300s shot first, then 87×180s.
+    "180.0s" sorts before "300.0s" lexically, so frames[0] by filename
+    is a 180s frame — but the 300s frames were captured first.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        source = Path(tmpdir)
+        light_dir = source / "Light" / "SH2-101"
+        light_dir.mkdir(parents=True)
+        # 180s frame — filename sorts FIRST ("1" < "3"), captured SECOND
+        (light_dir / "Light_SH2-101_180.0s_Bin1_585MC_gain200_20260719-233000_-20.0C_L-Synergy_0006.fit").touch()
+        # 300s frame — filename sorts SECOND, captured FIRST
+        (light_dir / "Light_SH2-101_300.0s_Bin1_585MC_gain200_20260719-220000_-20.0C_L-Synergy_0001.fit").touch()
+
+        def mock_extract(path):
+            if "300.0s" in path.name:
+                return {
+                    **light_meta(path.stem, "2026-07-19T22:00:00"),
+                    "file_path": str(path),
+                    "object": "SH2-101",
+                    "exposure": 300.0,
+                    "ra_deg": 315.0,
+                    "dec_deg": 68.2,
+                }
+            return {
+                **light_meta(path.stem, "2026-07-19T23:30:00"),
+                "file_path": str(path),
+                "object": "SH2-101",
+                "exposure": 180.0,
+                "ra_deg": 315.5,
+                "dec_deg": 34.1,  # wrong framing after mis-slew
+            }
+
+        with patch("darkroom.scanner.FITSHeaderExtractor.extract_metadata", side_effect=mock_extract):
+            result = scan_source(source)
+
+    s = result.sessions[0]
+    # Must reflect the 300s frame (captured first), not the 180s frame
+    assert s.exposure_sec == 300.0
+    assert s.ra_deg == pytest.approx(315.0)
+    assert s.dec_deg == pytest.approx(68.2)
+
+
 def test_scan_source_span_is_none_without_date_obs():
     """A session can only exist with a resolvable night, but guard the shape."""
     with tempfile.TemporaryDirectory() as tmpdir:

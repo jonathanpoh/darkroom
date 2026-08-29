@@ -994,6 +994,48 @@ class TestAnalyzeSessionsSiteCoords:
         assert result[0]["site_lat"] is None
         assert result[0]["site_lon"] is None
 
+    def test_metadata_from_chronologically_first_frame(self, tmp_path):
+        """B14: representative metadata must come from the earliest DATE-OBS,
+        not the filename-first frame.
+
+        Simulates mixed exposures where "180.0s" sorts before "300.0s"
+        lexically but the 300s frames were captured first.
+        """
+        lights = tmp_path / "SH2-101" / "Lights"
+        lights.mkdir(parents=True)
+        meta_list = [
+            # 180s — filename sorts first ("1" < "3"), captured SECOND
+            self._make_meta(
+                filename_stem="Light_SH2-101_180.0s_Bin1_0C_20260719_L-Synergy_0006",
+                date_obs="2026-07-19T23:30:00",
+                exposure=180.0,
+                object="SH2-101",
+                ra_deg=315.5,
+                dec_deg=34.1,
+                gain=200,
+                temperature=-20.0,
+            ),
+            # 300s — filename sorts second, captured FIRST
+            self._make_meta(
+                filename_stem="Light_SH2-101_300.0s_Bin1_0C_20260719_L-Synergy_0001",
+                date_obs="2026-07-19T22:00:00",
+                exposure=300.0,
+                object="SH2-101",
+                ra_deg=315.0,
+                dec_deg=68.2,
+                gain=200,
+                temperature=-18.0,
+            ),
+        ]
+        result = SessionAnalyzer.analyze_sessions(meta_list, lights)
+        assert len(result) == 1
+        s = result[0]
+        # Must reflect the 300s frame (captured first), not the 180s one
+        assert s["exposure_sec"] == 300.0
+        assert s["ra_deg"] == pytest.approx(315.0)
+        assert s["dec_deg"] == pytest.approx(68.2)
+        assert s["temperature_c"] == -18.0
+
 
 class TestUpsertSessionSiteCoords:
     def _session(self, **overrides):
