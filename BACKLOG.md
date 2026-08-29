@@ -1514,8 +1514,8 @@ Filed and shipped 2026-07-30, off the back of F3's UI round.
 
 ### F7. Score guiding per *frame* instead of per session envelope
 
-Filed 2026-07-30, out of F4. **Scoping item — decide whether it earns its cost
-before building.** Promoted from an F4 deferral bullet because a real question
+Filed 2026-07-30, out of F4. **Scoped and decided 2026-08-29 — Option A below.
+Ready to build.** Promoted from an F4 deferral bullet because a real question
 ("if I cull the bad subs and re-run `scan-guiding`, do the numbers update?")
 turned out to have a surprising answer: **no, and nothing short of this changes
 that.**
@@ -1536,27 +1536,23 @@ that.**
   side-by-sides without a cull were more modest (M 45 15.70" → 12.65",
   M 31 2.26" → 1.67"), which is the fairer expectation for a normal night.
 
-- **The cost, and the actual design question:** per-frame windows need every
-  frame's `DATE-OBS` at scan time, so `scan-guiding` would stop being pure
-  catalog+logs and start needing a mounted archive — which **the LXC does not
+- **The cost, and the design question it forced:** per-frame windows need every
+  frame's `DATE-OBS` at scan time, so `scan-guiding` stops being pure
+  catalog+logs and starts needing a mounted archive — which **the LXC does not
   have**. Either the scan becomes Mac-only (like `backfill-times`), or per-frame
-  intervals get precomputed and stored so the scan stays archive-free. Storing
-  them is the more interesting option: a `session_frames` table (or a packed
-  interval blob per session) would also give F5 its per-frame temperature series
-  and would make the "cull then rescan" loop work without re-reading the archive
-  each time. Scope that before writing any matcher code.
-
-- **Interaction to respect:** if frames become the unit, `guided_sec` and
-  `coverage` must be redefined against summed exposure time rather than wall
-  span, or coverage silently becomes ~duty-cycle and stops meaning what the F4
-  tooltip says it means.
+  intervals get precomputed and stored so the scan stays archive-free (a
+  `session_frames` table, or a packed interval blob per session, which would
+  also give F5 its per-frame temperature series).
 
 - **Don't do it just for prettier numbers.** Jonathan's standing instruction
   when the spike marker was proposed: the goal is not mislabelling a good night,
   not flattering a bad one. The spike marker (`rms >= 2 * p95`) already flags
   *this night has cullable subs* without any of this machinery, which is most of
   the practical value. Revisit F7 only if culling-then-rescoring becomes a real
-  part of the workflow.
+  part of the workflow. **Answered 2026-08-29:** it has — two hand-culls now
+  (NGC 6888 2026-07-20, SH2-101 2026-08-28), and both left the guiding numbers
+  unchanged and wrong. That is what moved this from "scope it" to "build it";
+  the constraint still stands as a design rule, not as a reason to defer.
 
 - **Third real case, 2026-08-29 (SH2-101 2026-08-28, `L-Extreme`):**
   `rms_total_arcsec` 87.84″, `p95_arcsec` 1.92″ — a 46× ratio, easily
@@ -1605,6 +1601,83 @@ that.**
     including the very first segment before anything went wrong. Both bad
     stretches trace to a named external cause (tree; forgotten meridian-flip
     re-enable), not the guide config.
+
+#### Decision, 2026-08-29: read the archive live, but make the read optional
+
+**Option A — live archive read — with the archive read optional per run rather
+than mandatory.** `scan-guiding` grows an `--archive` flag: given one, it
+computes per-frame windows; without one, it behaves exactly as it does today.
+Nothing is removed from the current capability, the LXC keeps producing
+envelope-mode numbers, and a Mac run overwrites them with better ones.
+
+Rejected: the stored `session_frames` table (Option B), and a third option
+considered and dropped, deriving per-frame windows from the **Autorun logs**
+(they carry per-frame start times — `2025/03/24 21:39:23 Exposure 180.0s image
+2#` — in the same `00_Logs/ASIAir/` directory `scan-guiding` already reads, so
+they'd be zero-schema and LXC-runnable). Why, in order of weight:
+
+- **The cull loop needs ground truth on what exists *now*.** F7's value is
+  almost entirely the 1.10″ number, not the 18.05″ one, and that requires
+  knowing which files survive. A live archive read is true by construction. A
+  stored table is only true if something refreshes it — and that something is
+  **F8**, so Option B isn't "F7 with a cache", it's F7 blocked on F8, and
+  shipped before F8 it is the **B14** failure shape with a bigger blast radius.
+  The Autorun logs can never see a cull at all: they record what was *shot*.
+  They'd deliver the modest improvement and never the large one, which is
+  exactly the half that doesn't justify a build. Keep them in mind as a
+  cross-check oracle, not a data source.
+- **The per-run cost con doesn't hold on this rig.** The live archive is a
+  locally attached APFS volume (`/dev/disk9s1 on /Volumes/Photography 4TB`), not
+  SMB. Measured 2026-08-29: `fits.getheader` runs **0.5 ms/frame** there, so all
+  15,787 light frames in the archive read in **~8 seconds**. Even 10× worse is
+  under two minutes for a full rescan. (CLAUDE.md still describes the archive as
+  an SMB-mounted NAS — stale; that's where it *was*.)
+- **Option B's migration cost was overstated, but its write path wasn't
+  priced.** A new side table is one `CREATE TABLE IF NOT EXISTS` in `init_db`,
+  exactly like `session_guiding` (`cataloger.py:445`) — no rebuild, no
+  retrofit. The real cost is the write path: a backend method on both
+  `LocalBackend` and `WebAPIBackend` (`catalog_client.py:143`, `:445`), a
+  Pydantic model + POST endpoint (`webapi/app.py:165`), ingest population, a
+  one-off backfill, and then F8 to own refresh.
+
+Bank Option B for when **F5** arrives with a second consumer *and* F8 owns the
+refresh. At that point `session_frames` is cheap and correct; today it is
+neither.
+
+##### Build scope
+
+- **Share the reader with `backfill-times`.** Lift the header loop out of
+  `_backfill_times_run` (`catalog_cli.py:545-599`) into a shared
+  `read_session_frames(archive, row) -> [(start_utc, end_utc)]`, keeping the
+  `compute_imaging_night(...) == obs_date` filter — a `lights_path` folder still
+  holds more than one night, and legacy layouts still have two session rows
+  sharing one folder. F5 gets its temperature series off the same helper later,
+  without a table. This answers Option A's "doesn't help F5" con: the reader is
+  shared, only the *storage* isn't.
+- **Store `window_mode` (`'envelope'` | `'frame'`) on `session_guiding`.**
+  Mandatory, not nice-to-have: frame-mode numbers are not comparable to
+  envelope-mode ones — the same caveat `--settle-exclude` already carries — and
+  the UI has to be able to say which it is showing. `scan-guiding` should report
+  the split (*N envelope, M frame*) rather than silently mixing.
+- **Never downgrade silently.** A later envelope-mode run must **refuse** to
+  overwrite an existing frame-mode row unless `--force` is passed. Better data
+  does not get clobbered by worse data because a cron ran on the LXC.
+- **Redefine `coverage` in frame mode** as guided-and-in-frame seconds ÷
+  **summed exposure time**, not wall span, or it silently becomes duty cycle and
+  stops meaning what the F4 tooltip says it means. `guided_sec` moves with it.
+- **Audit trail without the table:** `session_guiding` already has
+  `computed_at`; add `frames_used` and `exposure_sec_used`. `sessions` already
+  carries `frame_count` and `total_integration_sec` (`cataloger.py:295-296`), so
+  staleness becomes a two-integer comparison the UI can make on read — *this RMS
+  was computed over 74 frames / 13320s; the session now says 110 / 19800s →
+  stale, rescan*. That is the whole audit-trail value Option B was buying with a
+  15,787-row table, at four columns on a table that already exists, and it
+  *detects* staleness rather than merely recording provenance.
+- **Two calibrations to redo after, not assume:** `--settle-exclude` largely
+  no-ops in frame mode (dither settle happens between exposures, i.e. outside
+  the frame windows), and the spike marker `rms_total >= 2 * p95`
+  (`ui.py:_is_spike_dominated`) was tuned on envelope numbers. Re-check both on
+  NGC 6888 2026-07-20 and M 45 before trusting the bands.
 
 ### F8. `catalog rescan-archive` — diff the archive against the catalog, queue the divergence for review
 
@@ -1668,7 +1741,12 @@ stall. Confirms the classification this entry proposes, and narrows the
   envelope-from-edges arithmetic is *exactly* why the recompute below is a
   no-op for the timing fields specifically when the edges survive — the two
   are the same underlying fact (`start_utc`/`end_utc` only ever look at the
-  earliest/latest frame) cutting both ways.
+  earliest/latest frame) cutting both ways. **F7 scoped 2026-08-29 and chose a
+  live archive read precisely so it does not depend on this entry** — but F8
+  stays the prerequisite for ever storing per-frame data (`session_frames`),
+  since a stored table is only true if something owns refreshing it. F7's
+  `frames_used`/`exposure_sec_used` staleness check is the cheap stand-in until
+  then, and F8's recompute is what would clear it.
 - **B14 dependency confirmed live, not just theoretical:** this session's
   folder holds one exposure length throughout, so `frames[0]` happened to be
   chronologically first and `ra_deg`/`dec_deg` came back correct by luck of
