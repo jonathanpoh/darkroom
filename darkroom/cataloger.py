@@ -1089,16 +1089,25 @@ class CalibrationCataloger:
         return cal_sets
 
 
-def scan_calibration_command(args):
+def scan_calibration_command(args, *, backend=None):
     calibration_root = Path(args.calibration_path).resolve()
     archive_root = calibration_root.parent
-    db_path = Path(args.db)
 
     if not calibration_root.exists():
         print(f"Error: Calibration folder not found: {calibration_root}", file=sys.stderr)
         sys.exit(1)
 
-    init_db(db_path)
+    if backend is None:
+        # Legacy path (python -m darkroom.cataloger): raw sqlite
+        db_path = Path(args.db)
+        init_db(db_path)
+        _upsert = lambda cs: upsert_calibration_set(db_path, cs)
+        db_label = str(db_path)
+    else:
+        _upsert = backend.upsert_calibration_set
+        from darkroom.catalog_client import LocalBackend
+        db_label = str(backend.db_path) if isinstance(backend, LocalBackend) else backend.base_url
+
     cal_sets = CalibrationCataloger.scan(calibration_root)
 
     if not cal_sets:
@@ -1112,21 +1121,21 @@ def scan_calibration_command(args):
             )
         except ValueError:
             pass
-        upsert_calibration_set(db_path, cal_set)
+        _upsert(cal_set)
         print(f"  {cal_set['set_id']}  ({cal_set['frame_count']} frames)")
 
     print(f"\nDone: {len(cal_sets)} calibration sets cataloged")
-    print(f"Database: {db_path}")
+    print(f"Catalog: {db_label}")
 
 
 
 
-def scan_all_command(args):
+def scan_all_command(args, *, backend=None):
     """Handle scan-all command (recursive scan of all targets/dates).
 
     Walks the directory tree from root to find any folder containing FITS files,
     extracts metadata from each group, builds a session record with collision-resistant
-    session_id, and writes to SQLite database.
+    session_id, and writes to SQLite database (or the webapi when a backend is given).
 
     Handles three coexisting NAS folder structures:
     1. Canonical: Target/Date_Equipment_Filter/Lights/
@@ -1135,13 +1144,22 @@ def scan_all_command(args):
     """
     root = Path(args.root_path).resolve()
     archive_root = root.parent
-    db_path = Path(args.db)
 
     if not root.exists():
         print(f"Error: Root folder not found: {root}", file=sys.stderr)
         sys.exit(1)
 
-    init_db(db_path)
+    if backend is None:
+        # Legacy path (python -m darkroom.cataloger): raw sqlite
+        db_path = Path(args.db)
+        init_db(db_path)
+        _upsert = lambda s: upsert_session(db_path, s)
+        db_label = str(db_path)
+    else:
+        _upsert = backend.upsert_session
+        from darkroom.catalog_client import LocalBackend
+        db_label = str(backend.db_path) if isinstance(backend, LocalBackend) else backend.base_url
+
     lights_folders = find_lights_folders(root)
 
     if not lights_folders:
@@ -1180,12 +1198,12 @@ def scan_all_command(args):
             )
             session["session_id"] = session_id
             session["lights_path"] = str(lights_path.relative_to(archive_root))
-            upsert_session(db_path, session)
+            _upsert(session)
             print(f"  {session_id}  ({session['frame_count']} frames, {session['total_integration_sec']}s)")
             added += 1
 
     print(f"\nDone: {added} sessions cataloged, {skipped} skipped")
-    print(f"Database: {db_path}")
+    print(f"Catalog: {db_label}")
 
 
 def migrate_archive_command(args) -> None:

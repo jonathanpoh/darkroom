@@ -1113,39 +1113,38 @@ bursty imaging runs, and mismatches fail with a shrug instead of showing what
 - Goal: stop `NoFilter`/`Unknown` values entering the archive at ingest time —
   U2 cleans up the backlog, U3 closes the tap.
 
-### U4. `scan-lights`/`scan-calibration` don't reach the live catalog when `catalog_url` is configured
+### U4. `scan-lights`/`scan-calibration` don't reach the live catalog when `catalog_url` is configured — ✅ DONE
+
+> Fixed 2026-08-29. `catalog_cli.py`: added `catalog_url_flag`
+> (`--catalog-url`/`--api-token`) as a parent parser to both `scan-lights`
+> and `scan-calibration`; `_scan_lights_run`/`_scan_calibration_run` now
+> build a `CatalogBackend` via `resolve_backend` and pass it to
+> `scan_all_command`/`scan_calibration_command`. `cataloger.py`: both
+> commands accept an optional `backend` kwarg — when provided they call
+> `backend.upsert_session`/`backend.upsert_calibration_set` instead of the
+> raw `upsert_*` functions against `Path(args.db)`; the legacy
+> `python -m darkroom.cataloger` path (no backend) is preserved. The
+> shared `catalog_url_flag` definition was moved up near `catalog_flag`
+> and the duplicate removed.
 
 Filed 2026-08-29, out of a manual catalog fixup (SH2-101 2026-07-19 mis-slew:
 deleting the 87 off-target subs needed `frame_count`/`total_integration_sec`/
 `start_utc`/`end_utc`/`dec_deg` corrected on the *live* session row, and there
 was no clean way to do it).
 
-- **Where:** `catalog_cli.py` — `scan-lights`/`scan-calibration` wire to
+- **Where:** `catalog_cli.py` — `scan-lights`/`scan-calibration` wired to
   `_resolve_db` → `config.resolve_catalog` (raw sqlite path only), while
-  `scan-guiding`/`apply-renames`/`sites`/`backfill-sites` all take
-  `--catalog-url`/`--api-token` and go through `catalog_client.resolve_backend`
+  `scan-guiding`/`apply-renames`/`sites`/`backfill-sites` all took
+  `--catalog-url`/`--api-token` and went through `catalog_client.resolve_backend`
   (local file *or* webapi, per W9). `cataloger.scan_all_command`/
-  `scan_calibration_command` call `upsert_session`/`upsert_calibration_set`
+  `scan_calibration_command` called `upsert_session`/`upsert_calibration_set`
   directly against `Path(args.db)` — never the backend abstraction.
 - **Symptom:** rescanning an archive folder on the Mac to pick up a manual
-  disk change (deleted/added subs, corrected filenames) silently updates a
+  disk change (deleted/added subs, corrected filenames) silently updated a
   stale local sqlite file (`~/.config/darkroom/astro_catalog.db`, currently
   92KB and untouched since 2026-08-04) while the deployed LXC catalog — the
-  one the web UI and everyone else reads — is untouched. No error; it just
-  looks like nothing happened.
-- **Fix:** add `--catalog-url`/`--api-token` (the `catalog_url_flag` parser
-  fragment already shared by `apply-renames`/`sites`/`backfill-sites`) to
-  `scan-lights` and `scan-calibration`, and change `scan_all_command`/
-  `scan_calibration_command` to build a `CatalogBackend` via `resolve_backend`
-  and call `backend.upsert_session`/`backend.upsert_calibration_set` instead
-  of importing `cataloger.upsert_*` and hitting `Path(args.db)` directly.
-  `frame_count`/`total_integration_sec` are excluded from
-  `update_session_fields`/PATCH on purpose (recomputed-only fields), so a
-  rescan is the *only* sanctioned way to fix them post-hoc — it needs to
-  actually reach the server.
-- **Workaround today:** hand-build the session dict and `POST /api/sessions`
-  with curl + the bearer token from `darkroom.toml` (same payload shape
-  `ingest commit` sends).
+  one the web UI and everyone else reads — was untouched. No error; it just
+  looked like nothing happened.
 
 ---
 

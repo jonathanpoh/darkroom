@@ -54,13 +54,17 @@ def _list_run(args: argparse.Namespace) -> None:
 
 
 def _scan_lights_run(args: argparse.Namespace) -> None:
-    _resolve_db(args)
-    scan_all_command(args)
+    backend = resolve_backend(
+        args.catalog, url_flag=args.catalog_url, token_flag=args.api_token
+    )
+    scan_all_command(args, backend=backend)
 
 
 def _scan_calibration_run(args: argparse.Namespace) -> None:
-    _resolve_db(args)
-    scan_calibration_command(args)
+    backend = resolve_backend(
+        args.catalog, url_flag=args.catalog_url, token_flag=args.api_token
+    )
+    scan_calibration_command(args, backend=backend)
 
 
 def _mark_run(args: argparse.Namespace) -> None:
@@ -662,12 +666,20 @@ def add_subparser(subparsers) -> None:
         help="astro_catalog.db (env: DARKROOM_CATALOG, default: ~/.config/darkroom/astro_catalog.db)",
     )
 
-    sl = sub.add_parser("scan-lights", parents=[catalog_flag],
+    # Shared --catalog-url/--api-token flags (W9 backend abstraction).
+    # Used by any subcommand that writes through the catalog backend.
+    catalog_url_flag = argparse.ArgumentParser(add_help=False)
+    catalog_url_flag.add_argument("--catalog-url", metavar="URL",
+                                   help="Catalog API base URL (env: DARKROOM_CATALOG_URL)")
+    catalog_url_flag.add_argument("--api-token", metavar="TOKEN",
+                                   help="Catalog API bearer token (env: DARKROOM_API_TOKEN)")
+
+    sl = sub.add_parser("scan-lights", parents=[catalog_flag, catalog_url_flag],
                         help="Recursively catalog all light sessions")
     sl.add_argument("root_path", help="Root folder to scan (e.g. '01_Deep Sky Objects')")
     sl.set_defaults(func=_scan_lights_run)
 
-    sc = sub.add_parser("scan-calibration", parents=[catalog_flag],
+    sc = sub.add_parser("scan-calibration", parents=[catalog_flag, catalog_url_flag],
                         help="Catalog calibration frames")
     sc.add_argument("calibration_path", help="Root folder to scan (e.g. '00_Calibration')")
     sc.set_defaults(func=_scan_calibration_run)
@@ -767,13 +779,6 @@ def add_subparser(subparsers) -> None:
                      help="Move folders and ack the ledger (default: dry run, read-only)")
     ar.set_defaults(func=_apply_renames_run)
 
-    # --catalog-url/--api-token, shared by the sites group and backfill-sites
-    # (copied from apply-renames' registration above).
-    catalog_url_flag = argparse.ArgumentParser(add_help=False)
-    catalog_url_flag.add_argument("--catalog-url", metavar="URL",
-                                   help="Catalog API base URL (env: DARKROOM_CATALOG_URL)")
-    catalog_url_flag.add_argument("--api-token", metavar="TOKEN",
-                                   help="Catalog API bearer token (env: DARKROOM_API_TOKEN)")
     site_flags = [catalog_flag, catalog_url_flag]
 
     sites_p = sub.add_parser("sites", help="Manage observing sites")
