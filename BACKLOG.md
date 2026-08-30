@@ -1682,9 +1682,44 @@ neither.
 ### F8. `catalog rescan-archive` — diff the archive against the catalog, queue the divergence for review — ✅ DONE
 
 > Shipped 2026-08-30, built in two parallel worktrees and merged to main
-> (`9c6eebe` web half, `a98a6b2` scan half, guard fix `c83fbaf`). **Not yet
-> deployed to the LXC** — the `rescan_proposals` migration and the `/rescan`
-> page need a deploy before the queue is reachable in the live UI.
+> (`9c6eebe` web half, `a98a6b2` scan half, guard fix `c83fbaf`, live-data
+> fixes `ee6571f`). **DEPLOYED to the LXC 2026-08-30** — `rescan_proposals`
+> created on the live DB (240 sessions / 1028 cal sets / 151 guiding rows all
+> unchanged, `integrity_check` ok), `/api/rescan-proposals` returns `[]`, and
+> `/rescan` auth-gates like `/queue`. Rollback point:
+> `/var/lib/darkroom/backups/astro_catalog-pre-F8-20260830-193601.db`, copied
+> to `~/darkroom-backups/` on the Mac.
+>
+> **The first live dry run found two defects that only real data exposes**
+> (243 proposals, 209 of them spurious — fixed in `ee6571f`):
+> 1. **`upsert_session` canonicalizes `camera`/`exposure_sec` on write**, so a
+>    fresh scan's raw header values are *not* what would be stored. rescan
+>    compared raw against canonical and proposed rewriting 209 of 231 sessions
+>    from `Canon6D`/`ZWOASI585MCPro` back to the raw INSTRUME spellings.
+>    Extracted as `names.normalize_session_fields`, now used by both
+>    `upsert_session` and the rescan walk. **`scan-lights` was never affected**
+>    — `upsert_session` normalizes regardless of what its caller passes.
+> 2. **`make_session_id` only strips whitespace from the target**, while the
+>    disk side also applies `_normalize_target` — so a legacy `SH2-101_...`
+>    row and a fresh `Sh2-101_...` scan of the same night surfaced as an
+>    unrelated delete + create. Applying that pair would drop the row's
+>    `id`/`created_at`, `processed_state` and `session_guiding` row and re-add
+>    a bare one. They now pair into one **`rename`** proposal, applied through
+>    `update_session_fields` (recomputes `session_id`/`lights_path` in place).
+>    Ambiguous pairings decline to guess and fall back to create/delete.
+>
+> **Live dry run after the fixes: 24 proposals** — 2 rename (the `SH2-101`
+> pairs), 5 delete (C 49 ×3, IC 1805, NGC 7000 2026-06-16 — genuinely absent
+> from disk), 1 create, 16 update. Zero safe-tier, so nothing is
+> bulk-appliable on a catalog with this much legacy drift; every one needs an
+> individual look. **Not yet pushed to the queue** (`--apply` never run).
+>
+> **Known false positive, deferred:** the 1 create is
+> `NGC7000_20250801_FRA400_Canon6D_Stars` — a `Stars` folder from processing
+> being read as a filter. Jonathan confirmed 2026-08-30 it's a processing
+> byproduct, to be discussed separately. It also drags one `update` with it
+> (that night's `end_utc` shifts, since those frames currently sit inside the
+> catalogued session's span).
 >
 > **Both scope questions in this entry were decided before building:**
 > - *Shape:* CLI **plus** the `/queue`-style web view, not CLI-only. Forced by
@@ -2134,6 +2169,7 @@ follow once there is a second mosaic to test against.
     Filed 2026-08-29 out of the SH2-101 2026-07-19 mis-slew fixup (5 of 92
     subs actually on target; the rest needed hand-built catalog corrections
     because no rescan path reached the live catalog) — that hand-correction
-    is now `catalog rescan-archive`. **Open follow-up: deploy to the LXC** —
-    the `rescan_proposals` migration and the `/rescan` page are on main but
-    not yet live, so the queue can't be reviewed in the browser until then.
+    is now `catalog rescan-archive`. Deployed to the LXC 2026-08-30.
+    **Open follow-up:** work the 24 proposals the first dry run found (run
+    `rescan-archive --apply` to push them to `/rescan`), and decide what to do
+    about processing byproduct folders like `_Stars` being read as filters.
