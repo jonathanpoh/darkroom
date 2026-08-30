@@ -26,8 +26,10 @@ from astropy.time import Time
 from darkroom.parse import (
     fits_files,
     normalize_filter,
+    panel_from_dirname,
     parse_filter,
     parse_ota,
+    parse_panel,
     reclassify_flat_dark,
 )
 from darkroom.names import (
@@ -226,7 +228,14 @@ def _filter_from_path(lights_path: Path) -> str | None:
     session lands in the U2 review queue as UnknownFilter rather than
     inventing a value. Same class of bug U2 cleaned up when mosaic panel
     names ended up in the filter column.
+    Since M1 a mosaic session nests one level deeper
+    (`Lights/<Filter>/P1-1/`), so a trailing panel dir is stripped first and
+    the filter is read from the directory above it — otherwise the panel dir
+    is mistaken for the filter dir and every panel reads as UnknownFilter.
     """
+    if panel_from_dirname(lights_path.name):
+        lights_path = lights_path.parent
+
     if lights_path.parent.name == "Lights":
         parts = [lights_path.name]
     elif lights_path.name == "Lights":
@@ -920,12 +929,25 @@ class SessionAnalyzer:
             start_utc, end_utc = compute_session_span(
                 (f.get("date_obs", ""), f.get("exposure")) for f in frames
             )
+
+            # M1: the panel can arrive from two places, and they disagree in
+            # the normal case. The OBJECT header is whatever was typed at
+            # acquisition ("M 8_1-1"), so it carries the panel on a freshly
+            # shot mosaic that has not been archived yet; the "P1-1" directory
+            # is what `session_dest_rel` wrote and is authoritative once the
+            # frames are in the archive. Prefer the folder, fall back to the
+            # header, and split the panel off the target either way so the
+            # base object name is what gets stored.
+            base_target, panel = parse_panel(first["object"] or _target_from_path(lights_path))
+            panel = panel_from_dirname(lights_path.name) or panel
+
             sessions.append({
-                "target": _normalize_target(first["object"] or _target_from_path(lights_path)),
+                "target": _normalize_target(base_target),
                 "obs_date": night,
                 "ota": parse_ota(focallen),
                 "camera": first["camera"],
                 "filter": filter_,
+                "panel": panel,
                 "gain": first["gain"],
                 "temperature_c": first["temperature"],
                 "exposure_sec": first["exposure"],

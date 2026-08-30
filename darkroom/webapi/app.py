@@ -37,6 +37,10 @@ class SessionIn(BaseModel):
     ota: str | None = None
     camera: str | None = None
     filter: str | None = None
+    # M1: mosaic panel label ("1-1"). Without it here a remote-backend commit
+    # would silently drop the panel — pydantic ignores unmodelled fields — and
+    # land eight mosaic rows that disagree with their folders.
+    panel: str | None = None
     gain: int | None = None
     temperature_c: float | None = None
     exposure_sec: float | None = None

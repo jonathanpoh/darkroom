@@ -24,6 +24,9 @@ from darkroom.names import _normalize_target, make_session_id, session_dest_rel
 # recomputed server-side (via session_dest_rel) when an identity field changes.
 _EDITABLE_FIELDS = frozenset({
     "target", "obs_date", "ota", "camera", "filter",
+    # M1: mosaic panel label — an identity component (see _IDENTITY_FIELDS),
+    # so editing it recomputes session_id and lights_path like the others.
+    "panel",
     "gain", "temperature_c", "exposure_sec", "focal_length",
     "ra_deg", "dec_deg", "site_lat", "site_lon", "notes",
     "processed_state", "processed_path", "processed_date",
@@ -39,7 +42,7 @@ _EDITABLE_FIELDS = frozenset({
 })
 
 # Identity components: changing any of these changes the derived session_id.
-_IDENTITY_FIELDS = ("target", "obs_date", "ota", "camera", "filter")
+_IDENTITY_FIELDS = ("target", "obs_date", "ota", "camera", "filter", "panel")
 
 
 def open_db(db_path: Path) -> sqlite3.Connection:
@@ -372,7 +375,7 @@ def update_session_fields(conn: sqlite3.Connection, session_id: str, **fields) -
     against darkroom.cataloger.PROCESSED_STATES (imported lazily) if present.
 
     Anti-orphan guarantee (W3): if any identity component (target, obs_date,
-    ota, camera, filter) changes, session_id is recomputed from the merged
+    ota, camera, filter, panel) changes, session_id is recomputed from the merged
     old+new identity values and updated on the SAME row (single UPDATE by
     numeric id) — so processed_state/processed_path/processed_date/notes/
     created_at are carried forward rather than orphaned onto a stale row.
@@ -405,7 +408,7 @@ def update_session_fields(conn: sqlite3.Connection, session_id: str, **fields) -
             )
 
     row = conn.execute(
-        "SELECT id, target, obs_date, ota, camera, filter, lights_path "
+        "SELECT id, target, obs_date, ota, camera, filter, panel, lights_path "
         "FROM sessions WHERE session_id = ?",
         (session_id,),
     ).fetchone()
@@ -424,7 +427,7 @@ def update_session_fields(conn: sqlite3.Connection, session_id: str, **fields) -
         merged = {f: (fields[f] if f in fields else row[f]) for f in _IDENTITY_FIELDS}
         new_session_id = make_session_id(
             merged["target"], merged["obs_date"], merged["ota"],
-            merged["camera"], merged["filter"],
+            merged["camera"], merged["filter"], panel=merged["panel"],
         )
         if new_session_id != session_id:
             collision = conn.execute(
@@ -458,7 +461,7 @@ def update_session_fields(conn: sqlite3.Connection, session_id: str, **fields) -
         if row["lights_path"] is not None:
             new_lights_path = str(session_dest_rel(
                 merged["target"], merged["obs_date"], merged["ota"],
-                merged["camera"], merged["filter"],
+                merged["camera"], merged["filter"], panel=merged["panel"],
             ))
             if new_lights_path != row["lights_path"]:
                 set_clauses.append("lights_path = ?")

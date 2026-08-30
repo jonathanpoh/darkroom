@@ -335,10 +335,12 @@ def build_session_entry(
         session.ota,
         session.camera,
         None if needs_review else filter_,
+        panel=session.panel,
     )
     dest_rel = session_dest_rel(
         session.target, session.obs_date, session.ota, session.camera,
         None if needs_review else filter_,
+        panel=session.panel,
     )
     dest_abs = output / dest_rel
 
@@ -353,6 +355,7 @@ def build_session_entry(
         "ota": session.ota,
         "camera": session.camera,
         "filter": None if needs_review else filter_,
+        "panel": session.panel,
         "gain": session.gain,
         "temperature_c": session.temperature_c,
         "exposure_sec": session.exposure_sec,
@@ -650,6 +653,8 @@ def cmd_commit(args: argparse.Namespace) -> None:
             "ota": entry["ota"],
             "camera": entry["camera"],
             "filter": entry.get("filter"),
+            # .get, not [] — manifests written before M1 have no panel key.
+            "panel": entry.get("panel"),
             "gain": entry["gain"],
             "temperature_c": entry["temperature_c"],
             "exposure_sec": entry["exposure_sec"],

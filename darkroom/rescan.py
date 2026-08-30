@@ -68,7 +68,7 @@ from darkroom.cataloger import (
     make_session_id,
 )
 from darkroom.names import KNOWN_FILTERS, _normalize_target, normalize_session_fields
-from darkroom.parse import fits_files, normalize_filter
+from darkroom.parse import fits_files, normalize_filter, parse_panel
 
 DEFAULT_POINTING_TOLERANCE_DEG = 0.5
 
@@ -122,7 +122,7 @@ _INT_FIELDS = frozenset({"frame_count", "total_integration_sec", "gain"})
 # Identity components — changing any of these changes the derived session_id.
 # Mirrors catalog_db's own identity set; a 'rename' proposal is exactly a
 # divergence in one or more of these.
-_IDENTITY_FIELDS = ("target", "obs_date", "ota", "camera", "filter")
+_IDENTITY_FIELDS = ("target", "obs_date", "ota", "camera", "filter", "panel")
 
 
 def _canonical_session_id(row: dict) -> str:
@@ -145,12 +145,18 @@ def _canonical_session_id(row: dict) -> str:
     processed_state and session_guiding row and re-add a bare one.
     """
     filter_ = normalize_filter(row.get("filter") or "")
+    # M1: a stored row can still carry the panel inside its target
+    # ("IC 4604_1-1", the pre-M1 shape U2 flags), while the disk-side scan now
+    # splits it out — so canonicalize the same way here or every legacy panel
+    # row reads as a delete + create instead of a rename.
+    base_target, panel = parse_panel(_normalize_target(row.get("target") or ""))
     return make_session_id(
-        _normalize_target(row.get("target") or ""),
+        base_target,
         row.get("obs_date") or "",
         row.get("ota") or "",
         row.get("camera") or "",
         filter_ if filter_ in KNOWN_FILTERS else None,
+        panel=row.get("panel") or panel,
     )
 
 
@@ -225,6 +231,7 @@ def _scan_disk(dso_root: Path, archive_root: Path) -> dict[str, dict]:
             session_id = make_session_id(
                 session["target"], session["obs_date"],
                 session["ota"], session["camera"], session["filter"],
+                panel=session.get("panel"),
             )
             session["session_id"] = session_id
             session["lights_path"] = str(lights_path.relative_to(archive_root))

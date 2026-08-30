@@ -159,13 +159,32 @@ def ota_from_focallen(focal_length: int | float | None) -> str:
 KNOWN_OTAS = ("FMA180", "FRA400-07x", "FRA400", "Canon50mm")
 
 
-# Trailing mosaic panel label: "_N-M" or " N-M", digit runs bounded to 1-2
-# digits each so a catalogue designation like "NGC 7000-7001" can't be eaten,
-# and a non-empty base is required before the separator (a bare "1-1" has
-# nothing to split from). Greedy `.+` backtracks from the full string, so a
-# string with more than one underscore/space still splits at the trailing
-# occurrence, keeping everything before it in the base.
-PANEL_RE = re.compile(r"(.+)[_ ](\d{1,2}-\d{1,2})")
+# A mosaic panel label on its own ("1-1"). Digit runs are bounded to 1-2 each
+# so a catalogue designation like "NGC 7000-7001" can't be eaten. Single source
+# of truth for the shape — `darkroom.ingest_review` validates hand-typed panels
+# against this rather than re-stating the pattern.
+PANEL_LABEL = r"\d{1,2}-\d{1,2}"
+PANEL_LABEL_RE = re.compile(PANEL_LABEL)
+
+# The same label as a trailing "_N-M" or " N-M" suffix. A non-empty base is
+# required before the separator (a bare "1-1" has nothing to split from).
+# Greedy `.+` backtracks from the full string, so a name with more than one
+# underscore/space still splits at the trailing occurrence, keeping everything
+# before it in the base.
+PANEL_RE = re.compile(rf"(.+)[_ ]({PANEL_LABEL})")
+
+
+# The archive's own panel directory, one level under `Lights/<filter>/`, as
+# written by `names.session_dest_rel`. The archive-side scan has to recognise
+# it or a panel folder reads as an unknown extra level: `_filter_from_path`
+# would look at "P1-1" instead of the filter dir above it.
+PANEL_DIR_RE = re.compile(rf"P({PANEL_LABEL})")
+
+
+def panel_from_dirname(name: str) -> str | None:
+    """Return the panel label for an archive panel dir ("P1-1" -> "1-1"), else None."""
+    m = PANEL_DIR_RE.fullmatch(name)
+    return m.group(1) if m else None
 
 
 def parse_panel(name: str) -> tuple[str, str | None]:

@@ -37,12 +37,13 @@ from darkroom.names import (
     make_session_id,
     session_dest_rel,
 )
-from darkroom.parse import KNOWN_OTAS
+from darkroom.parse import KNOWN_OTAS, PANEL_LABEL_RE
 
 # Menu actions, and the sentinel for "none of the listed values, let me type one".
 ACCEPT = "accept"
 EDIT_TARGET = "target"
 EDIT_FILTER = "filter"
+EDIT_PANEL = "panel"
 EDIT_OPTICS = "optics"
 QUIT = "quit"
 MANUAL = "\x00manual"
@@ -185,6 +186,10 @@ def entry_lines(entry: dict, position: str = "") -> list[str]:
     lines.append(f"  Optics    : {entry.get('ota')} / {entry.get('camera')}")
     if wants_filter(entry):
         lines.append(f"  Filter    : {entry.get('filter') or '(unknown)'}")
+    # M1: only shown when set — the overwhelming majority of sessions are
+    # single-pointing, and a permanent "Panel: (none)" line would be noise.
+    if entry.get("panel"):
+        lines.append(f"  Panel     : {entry['panel']}")
 
     exposure = entry.get("exposure_sec")
     frames = entry.get("frame_count")
@@ -263,11 +268,17 @@ def recompute_session_entry(
     skipped at commit. Returns warning lines (empty when all is well).
     """
     filter_ = entry.get("filter") or None
+    # M1: panel is a fourth identity field, so it feeds both builders here.
+    # Empty string means "not a mosaic panel" and must normalize to None, or a
+    # cleared panel would append a bare "_P" to the id and a "P" dir to the path.
+    panel = entry.get("panel") or None
     entry["session_id"] = make_session_id(
         entry["target"], entry["obs_date"], entry["ota"], entry["camera"], filter_,
+        panel=panel,
     )
     dest_rel = session_dest_rel(
         entry["target"], entry["obs_date"], entry["ota"], entry["camera"], filter_,
+        panel=panel,
     )
     entry["lights_rel_path"] = str(dest_rel)
 
@@ -347,6 +358,10 @@ def _prompt_action(entry: dict) -> str | None:
         choices.append(questionary.Choice(title="Change target", value=EDIT_TARGET))
     if wants_filter(entry):
         choices.append(questionary.Choice(title="Change filter", value=EDIT_FILTER))
+    if is_session_entry(entry):
+        # M1: only sessions carry a panel — calibration is never per-panel,
+        # since one flat set serves every panel of a night.
+        choices.append(questionary.Choice(title="Change mosaic panel", value=EDIT_PANEL))
     choices.append(questionary.Choice(title="Change OTA / camera", value=EDIT_OPTICS))
     choices.append(questionary.Choice(title="Stop reviewing", value=QUIT))
 
@@ -402,6 +417,31 @@ def _prompt_filter(current: str | None, known: KnownValues, hints: list[str]) ->
 
     typed = questionary.text("Filter name:", style=_style()).ask()
     return typed.strip() if typed and typed.strip() else None
+
+
+def _prompt_panel(panel: str | None) -> str | None:
+    """Type a mosaic panel label, or blank it to make this an ordinary session.
+
+    Free text rather than a pick-list: panel labels are grid coordinates from
+    whatever mosaic was framed that night, so there is no stable vocabulary to
+    offer the way there is for filters and optics. Returns None if interrupted;
+    "" means the user cleared it.
+    """
+    import questionary
+
+    typed = questionary.text(
+        "Mosaic panel (e.g. 1-1, blank for none):",
+        default=panel or "",
+        validate=lambda t: (
+            not t.strip()
+            or bool(_PANEL_LABEL_RE.fullmatch(t.strip()))
+            or "Panel must look like N-M (e.g. 1-1), or be blank."
+        ),
+        style=_style(),
+    ).ask()
+    if typed is None:
+        return None
+    return typed.strip()
 
 
 def _prompt_optics(
@@ -491,6 +531,11 @@ def review_entry(
             edited = new is not None and new != entry.get("filter")
             if edited:
                 entry["filter"] = new
+        elif action == EDIT_PANEL:
+            new = _prompt_panel(entry.get("panel"))
+            edited = new is not None and (new or None) != (entry.get("panel") or None)
+            if edited:
+                entry["panel"] = new or None
         else:  # EDIT_OPTICS
             new = _prompt_optics(entry.get("ota"), entry.get("camera"), known)
             edited = new is not None and new != (entry.get("ota"), entry.get("camera"))

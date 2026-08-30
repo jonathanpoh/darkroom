@@ -13,7 +13,13 @@ from darkroom.cataloger import (
     parse_date_obs,
 )
 from darkroom.names import _normalize_camera, _round_exposure
-from darkroom.parse import fits_files, parse_filter, parse_ota, reclassify_flat_dark
+from darkroom.parse import (
+    fits_files,
+    parse_filter,
+    parse_ota,
+    parse_panel,
+    reclassify_flat_dark,
+)
 from darkroom.sites import describe_disagreement, modal_site
 
 
@@ -30,6 +36,10 @@ class Session:
     focal_length: float | None
     ra_deg: float | None
     dec_deg: float | None
+    # M1: mosaic panel label ("1-1"), None for an ordinary single-pointing
+    # session. The ASIAir writes one folder per panel ("M 8_1-1"), so this is
+    # split off the folder name at scan time — see _scan_lights.
+    panel: str | None = None
     site_lat: float | None = None
     site_lon: float | None = None
     start_utc: str | None = None   # earliest frame DATE-OBS (ISO UTC)
@@ -107,6 +117,13 @@ def _scan_lights(light_root: Path) -> list[Session]:
         if not target_dir.is_dir() or target_dir.name.startswith("."):
             continue
 
+        # M1: a mosaic arrives as one ASIAir folder per panel ("M 8_1-1"), so
+        # the base target and the panel label are separated here, before
+        # anything downstream builds a session_id or a destination path. Every
+        # panel of one night therefore groups under the real object name, and
+        # the panel keeps the eight rows from colliding on one session_id.
+        base_target, panel = parse_panel(target_dir.name)
+
         pairs: list[tuple[dict, Path]] = []
         for path in fits_files(target_dir, recursive=True):
             meta = FITSHeaderExtractor.extract_metadata(path)
@@ -146,7 +163,8 @@ def _scan_lights(light_root: Path) -> list[Session]:
                 f"{target_dir.name} {night} {filter_ or 'no-filter'}",
             )
             sessions.append(Session(
-                target=target_dir.name,
+                target=base_target,
+                panel=panel,
                 obs_date=night,
                 ota=parse_ota(focallen),
                 camera=_normalize_camera(first_meta["camera"]),
