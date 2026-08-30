@@ -136,6 +136,8 @@ def parse_ota(focallen) -> str:
         return "FRA400-07x"
     if 390 <= fl <= 410:
         return "FRA400"
+    if 45 <= fl <= 55:
+        return "Canon50mm"
     return "Unknown"
 
 
@@ -147,7 +149,37 @@ def ota_from_focallen(focal_length: int | float | None) -> str:
 # Every OTA name parse_ota can produce, excluding the "Unknown" fallback —
 # the pick-list offered when focal-length inference has to be corrected by hand
 # (darkroom.ingest_review). Keep in step with parse_ota's tolerance windows.
-KNOWN_OTAS = ("FMA180", "FRA400-07x", "FRA400")
+#
+# "Canon50mm" follows the Canon<focal>mm convention for Canon lenses that fall
+# outside the scope OTAs' tolerance windows and would otherwise ingest as
+# ota="Unknown" (unfixable, since this pick-list is the only correction path).
+# The other Unknown-OTA sessions seen so far are Canon lenses too, so this is
+# the naming convention going forward — do not add windows for other focal
+# lengths without a matching decision.
+KNOWN_OTAS = ("FMA180", "FRA400-07x", "FRA400", "Canon50mm")
+
+
+# Trailing mosaic panel label: "_N-M" or " N-M", digit runs bounded to 1-2
+# digits each so a catalogue designation like "NGC 7000-7001" can't be eaten,
+# and a non-empty base is required before the separator (a bare "1-1" has
+# nothing to split from). Greedy `.+` backtracks from the full string, so a
+# string with more than one underscore/space still splits at the trailing
+# occurrence, keeping everything before it in the base.
+PANEL_RE = re.compile(r"(.+)[_ ](\d{1,2}-\d{1,2})")
+
+
+def parse_panel(name: str) -> tuple[str, str | None]:
+    """Split a trailing mosaic panel label (`_N-M`) off an object name.
+
+    The ASIAir writes one folder per mosaic panel, so `name` is a folder/object
+    name (e.g. "IC4604_1-1"), not a full filename stem.
+
+    Returns (base_name, panel), or (name, None) when there is no panel label.
+    """
+    m = PANEL_RE.fullmatch(name)
+    if not m:
+        return name, None
+    return m.group(1), m.group(2)
 
 
 def fits_files(directory: Path, recursive: bool = False) -> list[Path]:
