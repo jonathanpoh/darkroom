@@ -5,9 +5,11 @@ from darkroom.parse import (
     parse_exposure,
     parse_temperature,
     parse_datetime,
+    parse_panel,
     flat_morning_date,
     reclassify_flat_dark,
     FLAT_DARK_THRESHOLD_SEC,
+    KNOWN_OTAS,
 )
 from datetime import datetime, date
 
@@ -36,6 +38,19 @@ def test_ota_reducer():
 def test_ota_unknown():
     assert ota_from_focallen(250) == "Unknown"
     assert ota_from_focallen(None) == "Unknown"
+
+
+def test_ota_canon50mm():
+    # A 50mm Canon lens (mosaic panels) has its own tolerance window.
+    assert ota_from_focallen(50) == "Canon50mm"
+    assert ota_from_focallen(45) == "Canon50mm"
+    assert ota_from_focallen(55) == "Canon50mm"
+
+
+def test_known_otas_includes_canon50mm():
+    # KNOWN_OTAS is the ingest_review correction pick-list; must stay in step
+    # with parse_ota's tolerance windows or Canon50mm sessions are unfixable.
+    assert "Canon50mm" in KNOWN_OTAS
 
 
 def test_parse_filter_with_filter():
@@ -149,3 +164,35 @@ def test_reclassify_non_dark_frame_types_untouched():
 
 def test_reclassify_none_exposure_is_safe():
     assert reclassify_flat_dark("Dark", None) == "Dark"
+
+
+# ── M1: parse_panel splits a trailing mosaic panel label off an ASIAir
+# object/folder name (e.g. "IC4604_1-1"), not a full filename stem.
+
+@pytest.mark.parametrize(
+    "name, expected",
+    [
+        ("IC4604_1-1", ("IC4604", "1-1")),
+        ("IC4604_2-2", ("IC4604", "2-2")),
+        ("M8_1-8", ("M8", "1-8")),
+        ("IC 4604 1-1", ("IC 4604", "1-1")),
+        ("IC4604", ("IC4604", None)),
+        ("M 8", ("M 8", None)),
+        ("SH2-101", ("SH2-101", None)),  # must not match; no separator
+        ("SH2-101_1-2", ("SH2-101", "1-2")),
+        ("LDN 1235", ("LDN 1235", None)),
+        ("NGC 7000", ("NGC 7000", None)),
+        ("B33", ("B33", None)),
+        ("", ("", None)),
+        ("1-1", ("1-1", None)),  # no base to split from
+        ("IC4604_1-1_extra", ("IC4604_1-1_extra", None)),  # label must be trailing
+    ],
+)
+def test_parse_panel(name, expected):
+    assert parse_panel(name) == expected
+
+
+def test_parse_panel_bounded_digit_runs():
+    # Digit runs are bounded to 1-2 digits each so a catalogue designation
+    # like "NGC 7000-7001" can't be mistaken for a panel label.
+    assert parse_panel("NGC 7000-7001") == ("NGC 7000-7001", None)
