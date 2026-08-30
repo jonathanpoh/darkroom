@@ -439,5 +439,11 @@ details[open] .rigsum .strip { visibility: hidden; }
 .rsactions .qfixform { margin-top: 0; }
 .rsdismiss { background: transparent; border: 1px solid var(--hairline); color: var(--ink-2); }
 .rsdismiss:hover { border-color: var(--safelight-hi); color: var(--safelight-hi); background: transparent; }
+/* Applying a 'delete' proposal is the one action on this page with no undo
+   short of restoring the backup — every other kind edits a row in place. Wears
+   the same safelight-red treatment as the session page's Delete button so it
+   doesn't read like the Apply next to it. Confirm dialog is on the form. */
+.rsdelete { background: none; border: 1px solid var(--safelight); color: var(--safelight); }
+.rsdelete:hover { background: var(--safelight); color: #fff; }
 
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }

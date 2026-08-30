@@ -377,7 +377,9 @@ def update_session_fields(conn: sqlite3.Connection, session_id: str, **fields) -
     numeric id) — so processed_state/processed_path/processed_date/notes/
     created_at are carried forward rather than orphaned onto a stale row.
     On the same identity change, lights_path is recomputed from
-    session_dest_rel (a NULL lights_path stays NULL).
+    session_dest_rel (a NULL lights_path stays NULL), and the row's
+    session_guiding row (F4) is re-keyed to the new session_id, since that
+    table joins on session_id text rather than the numeric id.
 
     Returns True if the session was found and updated, False if session_id
     doesn't match any row.
@@ -436,6 +438,18 @@ def update_session_fields(conn: sqlite3.Connection, session_id: str, **fields) -
                 )
             set_clauses.append("session_id = ?")
             params.append(new_session_id)
+
+            # F4's session_guiding keys on session_id TEXT, not on the numeric
+            # sessions.id, and SQLite has no cascade here — so an identity edit
+            # silently orphans the guiding row unless it's carried across.
+            # (pending_renames below keys on session_row_id and is already
+            # safe; session_guiding was the one side table never wired into
+            # W3's anti-orphan guarantee.) Found live: F8's 12 rename
+            # proposals orphaned 11 guiding rows in one pass.
+            conn.execute(
+                "UPDATE OR REPLACE session_guiding SET session_id = ? WHERE session_id = ?",
+                (new_session_id, session_id),
+            )
 
         # lights_path is derived from the same identity components, so it can
         # change even when session_id doesn't (e.g. a spacing-only target edit

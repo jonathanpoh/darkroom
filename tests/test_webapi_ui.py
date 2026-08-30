@@ -1733,3 +1733,61 @@ def test_rescan_nav_link_present_on_queue_and_index(tmp_path):
     login(client)
     assert '/rescan' in client.get("/").text
     assert '/rescan' in client.get("/queue").text
+
+
+# ── delete proposals confirm before applying ───────────────────────────────
+#
+# Applying a 'delete' is the only action on /rescan with no undo short of
+# restoring the backup; everything else edits a row in place. The session
+# page's own delete button has always confirmed — /rescan's did not, which
+# meant the same destructive operation had two levels of protection depending
+# on which page you reached it from.
+
+def test_rescan_delete_apply_form_confirms(tmp_path):
+    client, db_path = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db_path, _session(sid))
+    _rescan_proposal(
+        db_path, sid, tier="review", kind="delete",
+        changes={"target": {"current": "M 81", "proposed": None}},
+    )
+    login(client)
+
+    resp = client.get("/rescan")
+
+    assert "onsubmit=\"return confirm(" in resp.text
+    assert "There is no undo." in resp.text
+    assert "archive files are untouched" in resp.text
+
+
+def test_rescan_non_delete_apply_form_does_not_confirm(tmp_path):
+    """An update edits in place and is reversible — don't nag about it."""
+    client, db_path = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db_path, _session(sid))
+    _rescan_proposal(
+        db_path, sid, tier="safe", kind="update",
+        changes={"frame_count": {"current": 110, "proposed": 74}},
+    )
+    login(client)
+
+    resp = client.get("/rescan")
+
+    assert "/rescan/" in resp.text  # the form is rendered
+    assert "confirm(" not in resp.text
+
+
+def test_rescan_rename_apply_form_does_not_confirm(tmp_path):
+    """Renames apply through update_session_fields — row history is kept."""
+    client, db_path = make_client(tmp_path)
+    sid = "SH2-101_20260719_FRA400_ZWOASI585MCPro_L-Synergy"
+    upsert_session(db_path, _session(sid))
+    _rescan_proposal(
+        db_path, sid, tier="review", kind="rename",
+        changes={"target": {"current": "SH2-101", "proposed": "Sh2-101"}},
+    )
+    login(client)
+
+    resp = client.get("/rescan")
+
+    assert "confirm(" not in resp.text

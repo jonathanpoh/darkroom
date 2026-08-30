@@ -42,8 +42,12 @@
     </div>
     {{ field_diff(p.changes) }}
     <div class="rsactions">
-      <form class="qfixform" method="post" action="/rescan/{{ p.id }}/apply">
-        <button type="submit">Apply</button>
+      {# A delete is the only apply here with no undo short of restoring the
+         backup — every other kind edits a row in place. Confirm it, matching
+         the wording the session page's own delete button uses (W10). #}
+      <form class="qfixform" method="post" action="/rescan/{{ p.id }}/apply"
+        {%- if p.kind == 'delete' %} onsubmit="return confirm('Delete session {{ p.session_id }}? This removes the catalog row only — archive files are untouched. There is no undo.');"{% endif %}>
+        <button type="submit"{% if p.kind == 'delete' %} class="rsdelete"{% endif %}>Apply</button>
       </form>
       <form class="qfixform" method="post" action="/rescan/{{ p.id }}/dismiss">
         <button type="submit" class="rsdismiss">Dismiss</button>

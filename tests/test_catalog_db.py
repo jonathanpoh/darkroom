@@ -817,3 +817,61 @@ def test_importing_catalog_db_does_not_pull_in_astropy():
         capture_output=True, text=True,
     )
     assert result.returncode == 0, result.stderr
+
+
+# ── identity edits must carry the guiding row (F4 side table) ──────────────
+#
+# session_guiding keys on session_id TEXT with no FK cascade, so a rename
+# silently orphaned it: the row survived but no longer joined to any session.
+# Found live — F8's 12 rename proposals orphaned 11 guiding rows in one pass.
+
+def _guiding(conn, session_id, rms=1.23):
+    conn.execute(
+        "INSERT OR REPLACE INTO session_guiding (session_id, rms_total_arcsec) "
+        "VALUES (?, ?)",
+        (session_id, rms),
+    )
+    conn.commit()
+
+
+def test_identity_edit_carries_session_guiding_row(tmp_path):
+    db = tmp_path / "cat.db"
+    init_db(db)
+    old_id = "SH2-101_20260719_FRA400_ZWOASI585MCPro_L-Synergy"
+    upsert_session(db, _session(
+        old_id, target="SH2-101", obs_date="2026-07-19", filter="L-Synergy",
+    ))
+
+    with open_db(db) as conn:
+        _guiding(conn, old_id, rms=0.97)
+        assert update_session_fields(conn, old_id, target="Sh2-101") is True
+
+        new_id = conn.execute(
+            "SELECT session_id FROM sessions WHERE target = 'Sh2-101'"
+        ).fetchone()["session_id"]
+        assert new_id != old_id
+
+        # The guiding row followed the rename, and nothing is orphaned.
+        rows = conn.execute("SELECT session_id, rms_total_arcsec FROM session_guiding").fetchall()
+        assert [r["session_id"] for r in rows] == [new_id]
+        assert rows[0]["rms_total_arcsec"] == 0.97
+        orphans = conn.execute(
+            "SELECT COUNT(*) AS n FROM session_guiding g "
+            "LEFT JOIN sessions s ON s.session_id = g.session_id "
+            "WHERE s.session_id IS NULL"
+        ).fetchone()["n"]
+        assert orphans == 0
+
+
+def test_non_identity_edit_leaves_guiding_row_alone(tmp_path):
+    db = tmp_path / "cat.db"
+    init_db(db)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db, _session(sid))
+
+    with open_db(db) as conn:
+        _guiding(conn, sid)
+        update_session_fields(conn, sid, notes="edited")
+
+        rows = conn.execute("SELECT session_id FROM session_guiding").fetchall()
+        assert [r["session_id"] for r in rows] == [sid]
