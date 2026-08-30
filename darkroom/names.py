@@ -88,7 +88,9 @@ def _normalize_camera(name: str | None) -> str | None:
     return _CAMERA_ALIASES.get(slug, slug)
 
 
-def make_session_id(target: str, obs_date: str, ota: str, camera: str, filter_: str | None) -> str:
+def make_session_id(
+    target: str, obs_date: str, ota: str, camera: str, filter_: str | None, *, panel: str | None = None
+) -> str:
     """Build collision-resistant session primary key.
 
     Removes spaces from target and camera, strips dashes from date, and uses
@@ -101,10 +103,17 @@ def make_session_id(target: str, obs_date: str, ota: str, camera: str, filter_: 
         ota: OTA abbreviation (e.g. "FRA400", "FMA180")
         camera: Camera model (e.g. "ASI585MC", "Canon6D")
         filter_: Filter name (e.g. "L-Pro", "L-Extreme"), or None/empty string
+        panel: Mosaic panel label (e.g. "1-1"), or None for an ordinary
+            single-pointing session (the overwhelming majority). Without this,
+            a same-night multi-panel mosaic has every panel's session collide
+            on the same session_id, since obs_date/OTA/camera/filter are
+            otherwise identical — the collision `catalog_db.rename_target`
+            currently reports as a per-row error.
 
     Returns:
-        Session ID: {TargetSlug}_{YYYYMMDD}_{OTA}_{Camera}_{Filter}
-        (e.g. "M81_20260219_FRA400_ASI585MC_L-Pro")
+        Session ID: {TargetSlug}_{YYYYMMDD}_{OTA}_{Camera}_{Filter}[_P{Panel}]
+        (e.g. "M81_20260219_FRA400_ASI585MC_L-Pro", or with a panel,
+        "IC4604_20250426_FRA400_Canon6D_NoFilter_P1-1")
     """
     slug = re.sub(r"\s+", "", target)
     camera_slug = _normalize_camera(camera)
@@ -112,21 +121,32 @@ def make_session_id(target: str, obs_date: str, ota: str, camera: str, filter_: 
     # "UnknownFilter" means parse failed AND no FITS FILTER header — needs manual review.
     # A session legitimately shot bare would need to be flagged explicitly (future work).
     f = filter_ or "UnknownFilter"
-    return f"{slug}_{date}_{ota}_{camera_slug}_{f}"
+    session_id = f"{slug}_{date}_{ota}_{camera_slug}_{f}"
+    if panel:
+        session_id += f"_P{panel}"
+    return session_id
 
 
 def session_dest_rel(
-    target: str, obs_date: str, ota: str, camera: str, filter_: str | None
+    target: str, obs_date: str, ota: str, camera: str, filter_: str | None, *, panel: str | None = None
 ) -> Path:
     """Return relative destination path for a session's Lights/<filter>/ folder.
 
     Single source of truth for `lights_path` derivation: `darkroom.ingest` computes
     new sessions' destinations from this, and `catalog_db.update_session_fields`
     recomputes `lights_path` from this on identity edits.
+
+    When `panel` is given (a mosaic panel label, e.g. "1-1"), an extra
+    `P<panel>` directory is nested under the filter level so each panel of a
+    same-night mosaic gets its own Lights subfolder instead of dumping every
+    panel's frames into one.
     """
     f = filter_ or "NoFilter"
     folder = f"{obs_date}_{ota}_{_normalize_camera(camera)}"
-    return Path("01_Deep Sky Objects") / target / folder / "Lights" / f
+    rel = Path("01_Deep Sky Objects") / target / folder / "Lights" / f
+    if panel:
+        rel = rel / f"P{panel}"
+    return rel
 
 
 def target_slug(target: str) -> str:

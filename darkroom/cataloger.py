@@ -310,6 +310,7 @@ _SESSIONS_SCHEMA = """
         ota                      TEXT,
         camera                   TEXT,
         filter                   TEXT,
+        panel                    TEXT,
         gain                     INTEGER,
         temperature_c            REAL,
         exposure_sec             REAL,
@@ -557,6 +558,11 @@ def init_db(db_path: Path) -> None:
         if "end_utc" not in cols:
             conn.execute("ALTER TABLE sessions ADD COLUMN end_utc TEXT")
 
+        # M1: mosaic panel label ("1-1"), NULL for an ordinary single-pointing
+        # session. Part of session identity — see names.make_session_id.
+        if "panel" not in cols:
+            conn.execute("ALTER TABLE sessions ADD COLUMN panel TEXT")
+
         # Indexes are (re)created here, after the rebuild above (which drops
         # them along with the old table) — safe to run every time.
         conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_target ON sessions(target)")
@@ -624,17 +630,20 @@ def upsert_session(db_path: Path, session: dict) -> None:
     session.setdefault("start_utc", None)
     session.setdefault("end_utc", None)
     session.setdefault("notes", "")
+    # M1: mosaic panel label, NULL for an ordinary single-pointing session —
+    # the overwhelming majority of callers don't set this.
+    session.setdefault("panel", None)
     with sqlite3.connect(db_path) as conn:
         conn.execute(
             """
             INSERT INTO sessions (
-                session_id, target, obs_date, ota, camera, filter,
+                session_id, target, obs_date, ota, camera, filter, panel,
                 gain, temperature_c, exposure_sec, focal_length,
                 frame_count, total_integration_sec, ra_deg, dec_deg,
                 lights_path, processed_status, notes, created_at, updated_at,
                 site_lat, site_lon, start_utc, end_utc
             ) VALUES (
-                :session_id, :target, :obs_date, :ota, :camera, :filter,
+                :session_id, :target, :obs_date, :ota, :camera, :filter, :panel,
                 :gain, :temperature_c, :exposure_sec, :focal_length,
                 :frame_count, :total_integration_sec, :ra_deg, :dec_deg,
                 :lights_path, :processed_status, :notes, :created_at, :updated_at,
@@ -646,6 +655,7 @@ def upsert_session(db_path: Path, session: dict) -> None:
                 ota                   = excluded.ota,
                 camera                = excluded.camera,
                 filter                = excluded.filter,
+                panel                 = excluded.panel,
                 gain                  = excluded.gain,
                 temperature_c         = excluded.temperature_c,
                 exposure_sec          = excluded.exposure_sec,

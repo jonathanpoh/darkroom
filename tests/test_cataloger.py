@@ -1524,3 +1524,187 @@ class TestFilterFromPath:
         """One real archive folder is 'AstronimikL2'; it must not become None."""
         p = Path("NGC 7000/2025-08-01_FRA400_Canon6D/Lights/AstronimikL2")
         assert _filter_from_path(p) == "AstronomikL2"
+
+
+# ── M1: mosaic panel identity ────────────────────────────────────────────────
+
+class TestMakeSessionIdPanel:
+    def test_panel_appends_suffix(self):
+        assert make_session_id(
+            "IC 4604", "2025-04-26", "FRA400", "Canon6D", "NoFilter", panel="1-1"
+        ) == "IC4604_20250426_FRA400_Canon6D_NoFilter_P1-1"
+
+    def test_no_panel_is_byte_identical_to_pre_m1(self):
+        assert make_session_id("M 81", "2026-02-19", "FRA400", "ASI585MC", "L-Pro") == \
+            "M81_20260219_FRA400_ASI585MC_L-Pro"
+
+    def test_panel_none_keyword_is_byte_identical(self):
+        assert make_session_id(
+            "M 81", "2026-02-19", "FRA400", "ASI585MC", "L-Pro", panel=None
+        ) == "M81_20260219_FRA400_ASI585MC_L-Pro"
+
+
+class TestPanelSchema:
+    def test_adds_panel_column_to_db_missing_it(self, tmp_path):
+        """CREATE TABLE IF NOT EXISTS is a no-op on an existing table, so a
+        live catalog only gains this column via the ALTER TABLE guard."""
+        db = tmp_path / "old.db"
+        with sqlite3.connect(db) as conn:
+            conn.executescript("""
+                CREATE TABLE sessions (
+                    id                       INTEGER PRIMARY KEY,
+                    session_id               TEXT NOT NULL UNIQUE,
+                    target                   TEXT NOT NULL,
+                    obs_date                 TEXT NOT NULL,
+                    ota                      TEXT,
+                    camera                   TEXT,
+                    filter                   TEXT,
+                    gain                     INTEGER,
+                    temperature_c            REAL,
+                    exposure_sec             REAL,
+                    focal_length             REAL,
+                    frame_count              INTEGER,
+                    total_integration_sec    INTEGER,
+                    ra_deg                   REAL,
+                    dec_deg                  REAL,
+                    lights_path              TEXT,
+                    processed_status         TEXT,
+                    processed_state          TEXT NOT NULL DEFAULT 'unprocessed',
+                    processed_path           TEXT,
+                    processed_date           TEXT,
+                    notes                    TEXT,
+                    created_at               TEXT,
+                    updated_at               TEXT,
+                    site_lat                 REAL,
+                    site_lon                 REAL,
+                    start_utc                TEXT,
+                    end_utc                  TEXT
+                );
+                INSERT INTO sessions (session_id, target, obs_date)
+                    VALUES ('S1', 'M 81', '2026-02-19');
+                CREATE TABLE calibration_sets (set_id TEXT PRIMARY KEY, frame_type TEXT NOT NULL);
+            """)
+        init_db(db)
+        with sqlite3.connect(db) as conn:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(sessions)")}
+            row = conn.execute(
+                "SELECT panel FROM sessions WHERE session_id = 'S1'"
+            ).fetchone()
+        assert "panel" in cols
+        assert row == (None,)  # existing rows survive, unpopulated
+
+    def test_init_db_is_idempotent_over_the_panel_migration(self, tmp_path):
+        db = tmp_path / "test.db"
+        init_db(db)
+        init_db(db)
+        with sqlite3.connect(db) as conn:
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(sessions)")]
+        assert cols.count("panel") == 1
+
+
+class TestUpsertSessionPanel:
+    def _session(self, **overrides):
+        base = {
+            "session_id": "IC4604_20250426_FRA400_Canon6D_NoFilter_P1-1",
+            "target": "IC 4604",
+            "obs_date": "2025-04-26",
+            "ota": "FRA400",
+            "camera": "Canon6D",
+            "filter": "NoFilter",
+            "gain": 200,
+            "temperature_c": -10.0,
+            "exposure_sec": 180.0,
+            "focal_length": 400.0,
+            "frame_count": 10,
+            "total_integration_sec": 1800,
+            "ra_deg": None,
+            "dec_deg": None,
+            "lights_path": "/fake",
+            "notes": "",
+        }
+        base.update(overrides)
+        return base
+
+    def _panel(self, db, session_id):
+        with sqlite3.connect(db) as conn:
+            return conn.execute(
+                "SELECT panel FROM sessions WHERE session_id = ?", (session_id,)
+            ).fetchone()[0]
+
+    def test_session_without_panel_key_upserts_as_null(self, tmp_path):
+        db = tmp_path / "test.db"
+        init_db(db)
+        session = self._session()  # no "panel" key at all
+        upsert_session(db, session)
+        assert self._panel(db, session["session_id"]) is None
+
+    def test_panel_round_trips(self, tmp_path):
+        db = tmp_path / "test.db"
+        init_db(db)
+        session = self._session(panel="1-1")
+        upsert_session(db, session)
+        assert self._panel(db, session["session_id"]) == "1-1"
+
+    def test_panel_is_plain_overwrite_on_conflict(self, tmp_path):
+        """Treated like `filter`, not `notes`/`site_lat` — no COALESCE."""
+        db = tmp_path / "test.db"
+        init_db(db)
+        upsert_session(db, self._session(panel="1-1"))
+        upsert_session(db, self._session(panel="2-2"))
+        assert self._panel(db, "IC4604_20250426_FRA400_Canon6D_NoFilter_P1-1") == "2-2"
+
+        # A re-scan that no longer supplies a panel at all overwrites to NULL too —
+        # unlike notes/site_lat, there is no "leave it alone" fallback for panel.
+        upsert_session(db, self._session())
+        assert self._panel(db, "IC4604_20250426_FRA400_Canon6D_NoFilter_P1-1") is None
+
+
+class TestPanelAndNullPanelCoexist:
+    """The normal end state for an object shot single-frame first and
+    mosaicked later: the bare session is real data, not a stray to clean up.
+    """
+
+    def test_one_target_holds_null_and_panelled_sessions_at_once(self, tmp_path):
+        db = tmp_path / "test.db"
+        init_db(db)
+
+        def row(obs_date, panel=None):
+            return {
+                "session_id": make_session_id(
+                    "IC 4604", obs_date, "FRA400", "Canon6D", "NoFilter", panel=panel
+                ),
+                "target": "IC 4604",
+                "obs_date": obs_date,
+                "ota": "FRA400",
+                "camera": "Canon6D",
+                "filter": "NoFilter",
+                "panel": panel,
+                "gain": 200,
+                "temperature_c": -10.0,
+                "exposure_sec": 180.0,
+                "focal_length": 400.0,
+                "frame_count": 10,
+                "total_integration_sec": 1800,
+                "ra_deg": None,
+                "dec_deg": None,
+                "lights_path": "/fake",
+                "notes": "",
+            }
+
+        # 2023-07-15: an ordinary single-pointing session, not a stray.
+        upsert_session(db, row("2023-07-15"))
+        # 2025-04-26: shot again, this time as a 4-panel mosaic.
+        for panel in ("1-1", "1-2", "2-1", "2-2"):
+            upsert_session(db, row("2025-04-26", panel=panel))
+
+        with sqlite3.connect(db) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT session_id, panel FROM sessions WHERE target = ?", ("IC 4604",)
+            ).fetchall()
+
+        assert len(rows) == 5
+        session_ids = {r["session_id"] for r in rows}
+        assert len(session_ids) == 5  # every row got a distinct session_id
+        panels = {r["panel"] for r in rows}
+        assert panels == {None, "1-1", "1-2", "2-1", "2-2"}

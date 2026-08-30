@@ -1,4 +1,6 @@
-from darkroom.names import _normalize_target, _normalize_camera, make_session_id, target_slug
+from darkroom.names import (
+    _normalize_target, _normalize_camera, make_session_id, session_dest_rel, target_slug,
+)
 
 
 class TestNormalizeTarget:
@@ -71,6 +73,36 @@ class TestMakeSessionId:
     def test_target_with_multiple_spaces(self):
         assert make_session_id("IC 1805", "2025-11-01", "FMA180", "ASI585MC", "L-Extreme") == \
             "IC1805_20251101_FMA180_ASI585MC_L-Extreme"
+
+    def test_panel_appends_p_suffix(self):
+        """M1: resolves the same-night panel collision catalog_db.rename_target
+        currently reports as a per-row error."""
+        assert make_session_id(
+            "IC 4604", "2025-04-26", "FRA400", "Canon6D", "NoFilter", panel="1-1"
+        ) == "IC4604_20250426_FRA400_Canon6D_NoFilter_P1-1"
+
+    def test_panel_none_is_byte_identical_to_no_panel(self):
+        assert make_session_id(
+            "M 81", "2026-02-19", "FRA400", "ASI585MC", "L-Pro", panel=None
+        ) == make_session_id("M 81", "2026-02-19", "FRA400", "ASI585MC", "L-Pro")
+
+
+class TestSessionDestRel:
+    def test_no_panel_unchanged(self):
+        result = session_dest_rel("M 81", "2026-02-19", "FRA400", "ZWO ASI585MC Pro", "L-Pro")
+        assert str(result) == "01_Deep Sky Objects/M 81/2026-02-19_FRA400_ZWOASI585MCPro/Lights/L-Pro"
+
+    def test_panel_adds_p_subdirectory(self):
+        result = session_dest_rel(
+            "IC 4604", "2025-04-26", "FRA400", "Canon6D", "NoFilter", panel="1-1"
+        )
+        assert str(result) == \
+            "01_Deep Sky Objects/IC 4604/2025-04-26_FRA400_Canon6D/Lights/NoFilter/P1-1"
+
+    def test_panel_none_keyword_is_byte_identical(self):
+        with_kw = session_dest_rel("M 81", "2026-02-19", "FRA400", "ASI585MC", "L-Pro", panel=None)
+        without_kw = session_dest_rel("M 81", "2026-02-19", "FRA400", "ASI585MC", "L-Pro")
+        assert with_kw == without_kw
 
 
 class TestTargetSlug:
