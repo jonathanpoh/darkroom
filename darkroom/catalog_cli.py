@@ -125,6 +125,66 @@ def _scan_processed_run(args: argparse.Namespace) -> None:
     print(f"\nApplied {applied} change(s), {len(transitions) - applied} unchanged")
 
 
+def _print_rescan_summary(proposals: list[dict]) -> None:
+    """Group proposals by target; show each proposal's tier and changed fields."""
+
+    def sort_key(p: dict) -> tuple[str, str, str]:
+        return (p.get("target") or "", p.get("obs_date") or "", p["session_id"])
+
+    for tgt, group in groupby(
+        sorted(proposals, key=sort_key), key=lambda p: p.get("target") or "(no target)"
+    ):
+        print(f"\n{tgt}")
+        for p in group:
+            print(f"  {p.get('obs_date') or '?'}  {p['session_id']}  [{p['kind']}/{p['tier']}]")
+            for field, delta in sorted(p["changes"].items()):
+                print(f"      {field}: {delta['current']!r} -> {delta['proposed']!r}")
+
+
+def _rescan_archive_run(args: argparse.Namespace) -> None:
+    """Diff the archive against the catalog and queue divergences for review (F8).
+
+    Strictly read-only pass: rescans <archive>/01_Deep Sky Objects/ (the same
+    walk `scan-lights` uses) and diffs it against the catalog, classifying
+    each session_id found on either side as matching (no-op), diverging
+    (update), on-disk-only (create), or catalog-only (delete). Dry run by
+    default — prints a grouped summary, writes nothing.
+
+    --apply does NOT edit any session row. It calls
+    darkroom.rescan.apply -> backend.replace_rescan_proposals, which PUSHES
+    these findings to the rescan_proposals review queue (superseding the
+    previous pending set — applied/dismissed rows are left alone as the audit
+    trail). A human (or the queue's pre-approved 'safe' tier) still has to
+    apply each one from there; nothing about this command touches `sessions`.
+    """
+    from darkroom import rescan
+
+    backend = resolve_backend(
+        args.catalog, url_flag=args.catalog_url, token_flag=args.api_token
+    )
+    archive = resolve_path(args.archive, "DARKROOM_ARCHIVE", "archive_path")
+    if archive is None:
+        sys.exit("Error: --archive / DARKROOM_ARCHIVE / darkroom.toml archive_path required")
+
+    proposals = rescan.scan(archive, backend, pointing_tolerance_deg=args.pointing_tolerance)
+
+    if not args.apply:
+        _print_rescan_summary(proposals)
+        counts = Counter(p["kind"] for p in proposals)
+        tiers = Counter(p["tier"] for p in proposals)
+        parts = [f"{n} {kind}" for kind, n in sorted(counts.items())]
+        summary = ", ".join(parts) if parts else "no divergences found"
+        print(
+            f"\n{summary} ({tiers.get('safe', 0)} safe, {tiers.get('review', 0)} review); "
+            "run with --apply to push these to the review queue "
+            "(this does NOT write to sessions)"
+        )
+        return
+
+    written = rescan.apply(backend, proposals)
+    print(f"Pushed {written} proposal(s) to the review queue ({len(proposals)} found)")
+
+
 def _scan_guiding_run(args: argparse.Namespace) -> None:
     """Match PHD2 guide-log segments to sessions by time and store the stats.
 
@@ -730,6 +790,30 @@ def add_subparser(subparsers) -> None:
     sp.add_argument("--apply", action="store_true",
                      help="Write proposed changes to the catalog (default: dry run, read-only)")
     sp.set_defaults(func=_scan_processed_run)
+
+    rs = sub.add_parser(
+        "rescan-archive", parents=[catalog_flag, catalog_url_flag],
+        help="Diff the archive against the catalog and queue divergences for review",
+        description="Strictly read-only pass over <archive>/01_Deep Sky Objects/ "
+                    "(the same walk `scan-lights` uses), diffed against the catalog "
+                    "(resolve_backend().query_sessions()). Classifies each session_id "
+                    "found on either side as matching (no-op), diverging (update), "
+                    "on-disk-only (create), or catalog-only (delete) — see BACKLOG.md "
+                    "F8. Dry run by default (prints a grouped summary, writes "
+                    "nothing). --apply does NOT edit any session row — it pushes the "
+                    "findings to the rescan_proposals review queue (superseding the "
+                    "previous pending set), for a human (or the queue's pre-approved "
+                    "'safe' tier — a pure frame_count/total_integration_sec change) "
+                    "to apply from there.",
+    )
+    rs.add_argument("--archive", metavar="PATH", help="Archive root (env: DARKROOM_ARCHIVE)")
+    rs.add_argument("--pointing-tolerance", type=float, default=0.5, metavar="DEG",
+                     help="RA/Dec divergence tolerance in degrees, wrapping RA at "
+                          "360 (default: 0.5)")
+    rs.add_argument("--apply", action="store_true",
+                     help="Push proposals to the review queue (default: dry run, "
+                          "read-only; this does NOT write to sessions)")
+    rs.set_defaults(func=_rescan_archive_run)
 
     sg = sub.add_parser(
         "scan-guiding", parents=[catalog_flag],
