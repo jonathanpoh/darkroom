@@ -10,7 +10,13 @@ from astropy.io import fits
 from darkroom.catalog_cli import _rescan_archive_run
 from darkroom.catalog_client import LocalBackend
 from darkroom.cataloger import init_db, upsert_session
-from darkroom.rescan import DEFAULT_POINTING_TOLERANCE_DEG, apply, scan
+from darkroom.rescan import (
+    DEFAULT_POINTING_TOLERANCE_DEG,
+    ArchiveRootMissing,
+    EmptyDiskDivergence,
+    apply,
+    scan,
+)
 
 DSO = "01_Deep Sky Objects"
 
@@ -154,7 +160,10 @@ def test_disk_only_session_produces_create_proposal(tmp_path):
 
 def test_catalog_only_session_produces_delete_proposal(tmp_path):
     archive = tmp_path / "archive"
-    archive.mkdir()
+    # A real, unrelated session on disk keeps this test decoupled from the
+    # empty-disk guard (test_scan_raises_empty_disk_divergence_*) — it's
+    # exercising a genuine per-session delete, not a whole-archive wipe.
+    _write_session_frames(archive, target="NGC 7000", obs_date="2026-01-01")
     db = _db(tmp_path)
     row = {
         "session_id": "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro",
@@ -179,9 +188,11 @@ def test_catalog_only_session_produces_delete_proposal(tmp_path):
 
     proposals = scan(archive, backend)
 
-    assert len(proposals) == 1
-    p = proposals[0]
-    assert p["kind"] == "delete"
+    # Plus a 'create' for the unrelated NGC 7000 session, which is on disk
+    # only — not the focus of this test, just a side effect of avoiding the
+    # empty-disk guard.
+    assert len(proposals) == 2
+    p = next(p for p in proposals if p["kind"] == "delete")
     assert p["tier"] == "review"
     assert p["session_id"] == row["session_id"]
     assert p["target"] == "M 81"
@@ -364,10 +375,12 @@ def test_apply_pushes_to_review_queue_and_never_touches_sessions(tmp_path):
 
 # ── CLI ──────────────────────────────────────────────────────────────────
 
-def _cli_args(catalog, archive, *, apply_: bool, tolerance: float = 0.5) -> argparse.Namespace:
+def _cli_args(
+    catalog, archive, *, apply_: bool, tolerance: float = 0.5, yes: bool = False
+) -> argparse.Namespace:
     return argparse.Namespace(
         catalog=str(catalog), catalog_url=None, api_token=None,
-        archive=str(archive), apply=apply_, pointing_tolerance=tolerance,
+        archive=str(archive), apply=apply_, pointing_tolerance=tolerance, yes=yes,
     )
 
 
@@ -407,7 +420,161 @@ def test_cli_requires_archive(tmp_path, monkeypatch):
     db = _db(tmp_path)
     args = argparse.Namespace(
         catalog=str(db), catalog_url=None, api_token=None,
-        archive=None, apply=False, pointing_tolerance=0.5,
+        archive=None, apply=False, pointing_tolerance=0.5, yes=False,
     )
     with pytest.raises(SystemExit):
         _rescan_archive_run(args)
+
+
+# ── guard: missing DSO root ─────────────────────────────────────────────────
+
+def test_scan_raises_when_dso_root_missing(tmp_path):
+    archive = tmp_path / "archive"
+    archive.mkdir()  # exists, but no "01_Deep Sky Objects" subfolder
+    backend = LocalBackend(_db(tmp_path))
+
+    with pytest.raises(ArchiveRootMissing):
+        scan(archive, backend)
+
+
+def test_cli_refuses_when_dso_root_missing_no_prompt(tmp_path, capsys, monkeypatch):
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    db = _db(tmp_path)
+
+    def _no_prompt(_prompt):
+        raise AssertionError("must not prompt when the archive root is simply missing")
+
+    monkeypatch.setattr("builtins.input", _no_prompt)
+
+    with pytest.raises(SystemExit) as exc_info:
+        _rescan_archive_run(_cli_args(db, archive, apply_=False))
+
+    assert "archive DSO root not found" in str(exc_info.value)
+
+
+# ── guard: empty disk, non-empty catalog ────────────────────────────────────
+
+def test_scan_raises_empty_disk_divergence_when_catalog_nonempty(tmp_path):
+    archive = tmp_path / "archive"
+    (archive / DSO).mkdir(parents=True)  # root exists, walk finds nothing
+    db = _db(tmp_path)
+    row = {
+        "session_id": "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro",
+        "target": "M 81", "obs_date": "2026-02-19",
+        "ota": "FRA400", "camera": "ZWOASI585MCPro", "filter": "L-Pro",
+        "gain": 200, "temperature_c": -20.0, "exposure_sec": 180.0,
+        "focal_length": 400.0, "frame_count": 3, "total_integration_sec": 540,
+        "ra_deg": 148.89, "dec_deg": 69.07,
+        "lights_path": str(_lights_dir(archive, "M 81", "2026-02-19").relative_to(archive)),
+        "notes": "",
+    }
+    upsert_session(db, row)
+    backend = LocalBackend(db)
+
+    with pytest.raises(EmptyDiskDivergence) as exc_info:
+        scan(archive, backend)
+    assert exc_info.value.catalog_session_count == 1
+
+
+def test_scan_allow_empty_disk_proceeds_to_delete_proposals(tmp_path):
+    archive = tmp_path / "archive"
+    (archive / DSO).mkdir(parents=True)
+    db = _db(tmp_path)
+    row = {
+        "session_id": "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro",
+        "target": "M 81", "obs_date": "2026-02-19",
+        "ota": "FRA400", "camera": "ZWOASI585MCPro", "filter": "L-Pro",
+        "gain": 200, "temperature_c": -20.0, "exposure_sec": 180.0,
+        "focal_length": 400.0, "frame_count": 3, "total_integration_sec": 540,
+        "ra_deg": 148.89, "dec_deg": 69.07,
+        "lights_path": str(_lights_dir(archive, "M 81", "2026-02-19").relative_to(archive)),
+        "notes": "",
+    }
+    upsert_session(db, row)
+    backend = LocalBackend(db)
+
+    proposals = scan(archive, backend, allow_empty_disk=True)
+
+    assert len(proposals) == 1
+    assert proposals[0]["kind"] == "delete"
+
+
+def test_scan_empty_catalog_full_disk_is_first_run_not_a_divergence(tmp_path):
+    """The asymmetric case: empty catalog + sessions on disk must NOT raise."""
+    archive = tmp_path / "archive"
+    _write_session_frames(archive)
+    backend = LocalBackend(_db(tmp_path))  # catalog empty
+
+    proposals = scan(archive, backend)  # must not raise
+
+    assert len(proposals) == 1
+    assert proposals[0]["kind"] == "create"
+
+
+def _empty_disk_setup(tmp_path: Path) -> tuple[Path, Path]:
+    archive = tmp_path / "archive"
+    (archive / DSO).mkdir(parents=True)
+    db = _db(tmp_path)
+    row = {
+        "session_id": "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro",
+        "target": "M 81", "obs_date": "2026-02-19",
+        "ota": "FRA400", "camera": "ZWOASI585MCPro", "filter": "L-Pro",
+        "gain": 200, "temperature_c": -20.0, "exposure_sec": 180.0,
+        "focal_length": 400.0, "frame_count": 3, "total_integration_sec": 540,
+        "ra_deg": 148.89, "dec_deg": 69.07,
+        "lights_path": str(_lights_dir(archive, "M 81", "2026-02-19").relative_to(archive)),
+        "notes": "",
+    }
+    upsert_session(db, row)
+    return archive, db
+
+
+def test_cli_empty_disk_aborts_on_no(tmp_path, capsys, monkeypatch):
+    archive, db = _empty_disk_setup(tmp_path)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda _: "")  # abort
+
+    with pytest.raises(SystemExit):
+        _rescan_archive_run(_cli_args(db, archive, apply_=False))
+
+    err = capsys.readouterr().err
+    assert "WARNING: 0 sessions found on disk" in err
+    assert LocalBackend(db).query_sessions()  # catalog untouched
+
+
+def test_cli_empty_disk_proceeds_on_yes_at_prompt(tmp_path, capsys, monkeypatch):
+    archive, db = _empty_disk_setup(tmp_path)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda _: "yes")
+
+    _rescan_archive_run(_cli_args(db, archive, apply_=False))
+
+    out = capsys.readouterr().out
+    assert "[delete/review]" in out
+
+
+def test_cli_empty_disk_proceeds_with_yes_flag_no_prompt(tmp_path, capsys, monkeypatch):
+    archive, db = _empty_disk_setup(tmp_path)
+
+    def _no_prompt(_prompt):
+        raise AssertionError("--yes must skip the prompt entirely")
+
+    monkeypatch.setattr("builtins.input", _no_prompt)
+
+    _rescan_archive_run(_cli_args(db, archive, apply_=False, yes=True))
+
+    out = capsys.readouterr().out
+    assert "[delete/review]" in out
+
+
+def test_cli_empty_disk_refuses_without_tty_and_without_yes(tmp_path, capsys, monkeypatch):
+    archive, db = _empty_disk_setup(tmp_path)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+    with pytest.raises(SystemExit):
+        _rescan_archive_run(_cli_args(db, archive, apply_=False))
+
+    err = capsys.readouterr().err
+    assert "no TTY to confirm" in err
+    assert LocalBackend(db).query_sessions()  # catalog untouched

@@ -31,6 +31,20 @@ Tiering (F8 contract, decided): an ``update`` whose only changed fields are
 the queue UI — a pure interior-deletion divergence needs no human judgement).
 Everything else — any ``create``, any ``delete``, any ``update`` touching a
 pointing/timing/equipment field — is ``tier='review'``.
+
+Two guards against mistaking "the archive isn't there" for "the archive is
+empty" — the failure mode that would otherwise turn an unmounted NAS into a
+proposal to delete every session in the catalog:
+
+- ``ArchiveRootMissing`` — raised when ``<archive_root>/<dso_dirname>``
+  doesn't exist. Always an error; never treated as "nothing on disk".
+- ``EmptyDiskDivergence`` — raised when the DSO root exists but the walk
+  finds zero sessions while the catalog has some. This module does no I/O
+  and no prompting (that's the CLI's job — see ``catalog_cli._rescan_archive_run``);
+  it only refuses to silently propose deleting everything. A caller that has
+  confirmed this is intentional passes ``allow_empty_disk=True`` to proceed.
+  The reverse case — an empty catalog with a full disk — is a legitimate
+  first-run state and never raises.
 """
 from __future__ import annotations
 
@@ -48,6 +62,37 @@ from darkroom.cataloger import (
 from darkroom.parse import fits_files
 
 DEFAULT_POINTING_TOLERANCE_DEG = 0.5
+
+
+class ArchiveRootMissing(Exception):
+    """<archive_root>/<dso_dirname> is not an existing directory.
+
+    Raised rather than treating a missing root as an empty one — an
+    unmounted NAS or a wrong --archive must be a hard error, not "0 sessions
+    on disk".
+    """
+
+    def __init__(self, dso_root: Path):
+        self.dso_root = dso_root
+        super().__init__(f"archive DSO root not found: {dso_root}")
+
+
+class EmptyDiskDivergence(Exception):
+    """The DSO root exists, but the walk found 0 sessions while the catalog has some.
+
+    Raised instead of silently classifying every catalog session as a
+    'delete' proposal — that shape (root present, walk empty) is what an
+    unmounted-but-present mountpoint, a wrong subdirectory, or a permissions
+    problem looks like, not what a genuinely wiped archive looks like. Pass
+    allow_empty_disk=True to scan() once a caller (the CLI, after explicit
+    confirmation) has established this is intentional.
+    """
+
+    def __init__(self, catalog_session_count: int):
+        self.catalog_session_count = catalog_session_count
+        super().__init__(
+            f"0 sessions found on disk but {catalog_session_count} in the catalog"
+        )
 
 # Fields compared for an 'update' divergence, and reported in full for a
 # 'create'/'delete' proposal's `changes` dict. target/obs_date are
@@ -151,6 +196,7 @@ def scan(
     *,
     dso_dirname: str = "01_Deep Sky Objects",
     pointing_tolerance_deg: float = DEFAULT_POINTING_TOLERANCE_DEG,
+    allow_empty_disk: bool = False,
 ) -> list[dict]:
     """Diff <archive_root>/<dso_dirname> against the catalog; return proposal dicts.
 
@@ -160,12 +206,23 @@ def scan(
     session rows or the review queue (that's `apply`). Every proposal shares
     one `detected_at` timestamp for this run. See the module docstring for
     the classification/tiering rules; shape is the F8 shared contract.
+
+    Raises ``ArchiveRootMissing`` if the DSO root doesn't exist, and
+    ``EmptyDiskDivergence`` if it exists but the walk finds 0 sessions while
+    the catalog has some (pass ``allow_empty_disk=True`` to proceed anyway,
+    once a caller has confirmed that's intentional). An empty catalog with a
+    non-empty disk — ordinary first-run — never raises either way.
     """
     archive_root = Path(archive_root)
     dso_root = archive_root / dso_dirname
+    if not dso_root.is_dir():
+        raise ArchiveRootMissing(dso_root)
 
     disk_sessions = _scan_disk(dso_root, archive_root)
     catalog_sessions = {row["session_id"]: row for row in query_all_sessions(backend)}
+
+    if not disk_sessions and catalog_sessions and not allow_empty_disk:
+        raise EmptyDiskDivergence(len(catalog_sessions))
 
     detected_at = _now_iso()
     proposals: list[dict] = []
