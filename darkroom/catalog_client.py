@@ -96,6 +96,14 @@ class CatalogBackend(Protocol):
 
     def update_site(self, name: str, fields: dict) -> bool: ...
 
+    def replace_rescan_proposals(self, proposals: list[dict]) -> int: ...
+
+    def list_rescan_proposals(self, *, status: str | None = "pending") -> list[dict]: ...
+
+    def apply_rescan_proposal(self, proposal_id: int) -> bool: ...
+
+    def dismiss_rescan_proposal(self, proposal_id: int) -> bool: ...
+
 
 class LocalBackend:
     """In-process SQLite backend — today's behaviour, unchanged.
@@ -345,6 +353,56 @@ class LocalBackend:
         conn = self._open()
         try:
             return update_site_fields(conn, name, **fields)
+        finally:
+            conn.close()
+
+    def replace_rescan_proposals(self, proposals: list[dict]) -> int:
+        from darkroom.catalog_db import replace_rescan_proposals
+
+        # rescan_proposals is an F8 table — ensure schema first, same
+        # rationale as list_pending_renames: a legacy pre-F8 DB predates it.
+        self._ensure_schema()
+        conn = self._open()
+        try:
+            return replace_rescan_proposals(conn, proposals)
+        finally:
+            conn.close()
+
+    def list_rescan_proposals(self, *, status: str | None = "pending") -> list[dict]:
+        from darkroom.catalog_db import list_rescan_proposals
+
+        self._ensure_schema()
+        conn = self._open()
+        try:
+            return list_rescan_proposals(conn, status=status)
+        finally:
+            conn.close()
+
+    def apply_rescan_proposal(self, proposal_id: int) -> bool:
+        from darkroom.catalog_db import (
+            apply_rescan_proposal,
+            get_rescan_proposal,
+            resolve_rescan_proposal,
+        )
+
+        self._ensure_schema()
+        conn = self._open()
+        try:
+            proposal = get_rescan_proposal(conn, proposal_id)
+            if proposal is None or proposal["status"] != "pending":
+                return False
+            apply_rescan_proposal(conn, self.db_path, proposal)
+            return resolve_rescan_proposal(conn, proposal_id, "applied")
+        finally:
+            conn.close()
+
+    def dismiss_rescan_proposal(self, proposal_id: int) -> bool:
+        from darkroom.catalog_db import resolve_rescan_proposal
+
+        self._ensure_schema()
+        conn = self._open()
+        try:
+            return resolve_rescan_proposal(conn, proposal_id, "dismissed")
         finally:
             conn.close()
 
@@ -609,6 +667,41 @@ class HttpBackend:
             return False
         if resp.status_code == 400:
             raise ValueError(resp.json()["detail"])
+        resp.raise_for_status()
+        return True
+
+    def replace_rescan_proposals(self, proposals: list[dict]) -> int:
+        resp = self._client.post("/api/rescan-proposals", json=proposals)
+        self._check(resp)
+        if resp.status_code == 400:
+            raise ValueError(resp.json()["detail"])
+        resp.raise_for_status()
+        return resp.json()["inserted"]
+
+    def list_rescan_proposals(self, *, status: str | None = "pending") -> list[dict]:
+        # status=None means "no filter" server-side — omit the query param
+        # entirely rather than sending status=None, which GET can't express.
+        params = self._params(status=status)
+        resp = self._client.get("/api/rescan-proposals", params=params)
+        self._check(resp)
+        resp.raise_for_status()
+        return resp.json()
+
+    def apply_rescan_proposal(self, proposal_id: int) -> bool:
+        resp = self._client.post(f"/api/rescan-proposals/{proposal_id}/apply")
+        self._check(resp)
+        if resp.status_code == 404:
+            return False
+        if resp.status_code == 400:
+            raise ValueError(resp.json()["detail"])
+        resp.raise_for_status()
+        return True
+
+    def dismiss_rescan_proposal(self, proposal_id: int) -> bool:
+        resp = self._client.post(f"/api/rescan-proposals/{proposal_id}/dismiss")
+        self._check(resp)
+        if resp.status_code == 404:
+            return False
         resp.raise_for_status()
         return True
 

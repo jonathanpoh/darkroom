@@ -485,6 +485,45 @@ def _target_suggestions(targets: list[str]) -> list[dict]:
     return suggestions
 
 
+def _group_rescan_proposals(proposals: list[dict]) -> list[dict]:
+    """Group decoded rescan proposals by target, safe-tier first within each group.
+
+    A 'delete' proposal for a session whose target the contract leaves as
+    None is grouped under the literal 'Unknown' rather than dropped, so it
+    never silently disappears from the queue.
+    """
+    groups: dict[str, list[dict]] = {}
+    for p in proposals:
+        key = p.get("target") or "Unknown"
+        groups.setdefault(key, []).append(p)
+
+    result = []
+    for tgt in sorted(groups):
+        # Named "proposals", not "items" — a dict key called "items" would
+        # shadow dict.items() and break `group.proposals` in the template
+        # (Jinja's attribute lookup finds the bound method first).
+        proposals = sorted(
+            groups[tgt], key=lambda p: (p["tier"] != "safe", p.get("obs_date") or "")
+        )
+        result.append({
+            "target": tgt,
+            "proposals": proposals,
+            "safe_count": sum(1 for p in proposals if p["tier"] == "safe"),
+            "review_count": sum(1 for p in proposals if p["tier"] == "review"),
+        })
+    return result
+
+
+def _rescan_context(conn) -> dict:
+    pending = catalog_db.list_rescan_proposals(conn, status="pending")
+    return {
+        "groups": _group_rescan_proposals(pending),
+        "total_count": len(pending),
+        "safe_count": sum(1 for p in pending if p["tier"] == "safe"),
+        "review_count": sum(1 for p in pending if p["tier"] == "review"),
+    }
+
+
 def build_ui_router(db_path: Path, ui_password_hash: str) -> APIRouter:
     """Build the Jinja2 UI router, bound to the DB + UI password hash."""
     db_path = Path(db_path)
@@ -949,5 +988,112 @@ def build_ui_router(db_path: Path, ui_password_hash: str) -> APIRouter:
                 f"/targets/{urllib.parse.quote(target)}", status_code=303
             )
         return RedirectResponse("/", status_code=303)
+
+    @router.get("/rescan", response_class=HTMLResponse)
+    def rescan_review(
+        request: Request,
+        darkroom_token: str | None = Cookie(default=None),
+    ):
+        redirect = _require_auth(request, darkroom_token)
+        if redirect:
+            return redirect
+
+        conn = _get_conn()
+        try:
+            ctx = _rescan_context(conn)
+        finally:
+            conn.close()
+        ctx["error"] = None
+        ctx["success"] = None
+        return templates.TemplateResponse(request, "rescan.html", ctx)
+
+    @router.post("/rescan/{proposal_id}/apply")
+    def rescan_apply(
+        request: Request,
+        proposal_id: int,
+        darkroom_token: str | None = Cookie(default=None),
+    ):
+        redirect = _require_auth(request, darkroom_token)
+        if redirect:
+            return redirect
+
+        conn = _get_conn()
+        try:
+            proposal = catalog_db.get_rescan_proposal(conn, proposal_id)
+            if proposal is None or proposal["status"] != "pending":
+                raise HTTPException(
+                    status_code=404, detail="pending rescan proposal not found"
+                )
+            try:
+                catalog_db.apply_rescan_proposal(conn, db_path, proposal)
+            except ValueError as e:
+                ctx = _rescan_context(conn)
+                ctx["error"] = f"{proposal['session_id']}: {e}"
+                ctx["success"] = None
+                return templates.TemplateResponse(
+                    request, "rescan.html", ctx, status_code=400
+                )
+            catalog_db.resolve_rescan_proposal(conn, proposal_id, "applied")
+        finally:
+            conn.close()
+
+        return RedirectResponse("/rescan", status_code=303)
+
+    @router.post("/rescan/{proposal_id}/dismiss")
+    def rescan_dismiss(
+        request: Request,
+        proposal_id: int,
+        darkroom_token: str | None = Cookie(default=None),
+    ):
+        redirect = _require_auth(request, darkroom_token)
+        if redirect:
+            return redirect
+
+        conn = _get_conn()
+        try:
+            dismissed = catalog_db.resolve_rescan_proposal(conn, proposal_id, "dismissed")
+        finally:
+            conn.close()
+        if not dismissed:
+            raise HTTPException(status_code=404, detail="pending rescan proposal not found")
+
+        return RedirectResponse("/rescan", status_code=303)
+
+    @router.post("/rescan/apply-all-safe")
+    def rescan_apply_all_safe(
+        request: Request,
+        darkroom_token: str | None = Cookie(default=None),
+    ):
+        redirect = _require_auth(request, darkroom_token)
+        if redirect:
+            return redirect
+
+        conn = _get_conn()
+        try:
+            pending = catalog_db.list_rescan_proposals(conn, status="pending")
+            safe = [p for p in pending if p["tier"] == "safe"]
+            applied = 0
+            errors: list[str] = []
+            for p in safe:
+                try:
+                    catalog_db.apply_rescan_proposal(conn, db_path, p)
+                except ValueError as e:
+                    errors.append(f"{p['session_id']}: {e}")
+                    continue
+                catalog_db.resolve_rescan_proposal(conn, p["id"], "applied")
+                applied += 1
+            ctx = _rescan_context(conn)
+        finally:
+            conn.close()
+
+        ctx["success"] = (
+            f"applied {applied} safe proposal{'' if applied == 1 else 's'}"
+            if applied else None
+        )
+        ctx["error"] = "; ".join(errors) if errors else None
+        status_code = 400 if errors and not applied else 200
+        return templates.TemplateResponse(
+            request, "rescan.html", ctx, status_code=status_code
+        )
 
     return router

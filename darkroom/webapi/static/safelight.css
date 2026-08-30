@@ -424,4 +424,20 @@ details[open] .rigsum .strip { visibility: hidden; }
   font: inherit; font-size: 12px; padding: 5px 8px; border-radius: 3px; flex: 1; max-width: 220px;
 }
 
+/* ── rescan review (F8) ───────
+   Reuses .qsection/.qrow/.qhead/.qbadge/.qfield/.qfixform/.qempty/.success/
+   .error/.qcount from the queue blocks above; this only adds the tier
+   accent colors and the field-diff list. */
+.rsrow-safe { border-left: 3px solid var(--f-extreme); padding-left: 10px; }
+.rsrow-review { border-left: 3px solid var(--f-lpro); padding-left: 10px; }
+.rstier-safe { color: var(--f-extreme); border-color: var(--f-extreme); }
+.rstier-review { color: var(--f-lpro); border-color: var(--f-lpro); }
+.rsfields { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 6px; }
+.rsfield { color: var(--ink-2); font-size: 12px; font-variant-numeric: tabular-nums; }
+.rsfield b { color: var(--ink); font-weight: 500; }
+.rsactions { display: flex; gap: 8px; margin-top: 8px; }
+.rsactions .qfixform { margin-top: 0; }
+.rsdismiss { background: transparent; border: 1px solid var(--hairline); color: var(--ink-2); }
+.rsdismiss:hover { border-color: var(--safelight-hi); color: var(--safelight-hi); background: transparent; }
+
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }

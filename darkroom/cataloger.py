@@ -462,6 +462,27 @@ def init_db(db_path: Path) -> None:
                 source_logs        TEXT,   -- JSON array of log basenames
                 computed_at        TEXT
             );
+            -- F8: divergences found by a Mac-side `catalog rescan-archive`
+            -- pass (the webapi host has no archive mount, so it can never
+            -- generate these itself) between what's on disk and what the
+            -- catalog says. One row per divergence; `changes` is the
+            -- {field: {current, proposed}} diff JSON. status starts
+            -- 'pending' and moves to 'applied'/'dismissed' — rows are never
+            -- deleted, so resolved rows are the audit trail.
+            -- replace_rescan_proposals only ever touches the pending set.
+            CREATE TABLE IF NOT EXISTS rescan_proposals (
+                id           INTEGER PRIMARY KEY,
+                session_id   TEXT NOT NULL,
+                kind         TEXT NOT NULL,
+                tier         TEXT NOT NULL,
+                target       TEXT,
+                obs_date     TEXT,
+                lights_path  TEXT,
+                changes      TEXT NOT NULL,
+                detected_at  TEXT,
+                status       TEXT NOT NULL DEFAULT 'pending',
+                resolved_at  TEXT
+            );
         """
         )
         # Additive migrations for existing (pre-W3) sessions tables. These must
@@ -524,6 +545,10 @@ def init_db(db_path: Path) -> None:
         )
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_sites_home ON sites(is_home) WHERE is_home = 1"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_rescan_proposals_status "
+            "ON rescan_proposals(status)"
         )
 
         # W2: NULL is the empty/unknown sentinel for filter, not "". Safe to

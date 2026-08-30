@@ -1515,3 +1515,221 @@ def test_session_page_does_not_mark_a_clean_session(tmp_path):
     html = client.get(f"/sessions/{sid}").text
     assert 'class="spike"' not in html
     assert "spike-dominated" not in html
+
+
+# ---------------------------------------------------------------------------
+# rescan review page (F8, GET /rescan + apply/dismiss/apply-all-safe)
+# ---------------------------------------------------------------------------
+
+
+def _rescan_proposal(db_path, session_id, **extra):
+    base = {
+        "session_id": session_id,
+        "kind": "update",
+        "tier": "safe",
+        "target": "M 81",
+        "obs_date": "2026-02-19",
+        "lights_path": "01_Deep Sky Objects/M 81/2026-02-19_FRA400_ZWOASI585MCPro/Lights/L-Pro",
+        "changes": {
+            "frame_count": {"current": 110, "proposed": 74},
+            "total_integration_sec": {"current": 19800, "proposed": 13320},
+        },
+        "detected_at": "2026-08-30T12:00:00Z",
+    }
+    base.update(extra)
+    conn = catalog_db.open_db(db_path)
+    try:
+        catalog_db.replace_rescan_proposals(conn, [base])
+        return catalog_db.list_rescan_proposals(conn)[0]["id"]
+    finally:
+        conn.close()
+
+
+def test_rescan_unauthenticated_redirects_to_login(tmp_path):
+    client, _ = make_client(tmp_path)
+    resp = client.get("/rescan", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"].startswith("/login")
+
+
+def test_rescan_lists_pending_grouped_by_target(tmp_path):
+    client, db_path = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db_path, _session(sid))
+    _rescan_proposal(db_path, sid)
+    login(client)
+
+    resp = client.get("/rescan")
+    assert resp.status_code == 200
+    assert sid in resp.text
+    assert "M 81" in resp.text
+    assert "frame_count" in resp.text
+    assert "110" in resp.text and "74" in resp.text
+
+
+def test_rescan_safe_tier_offers_bulk_apply_button(tmp_path):
+    client, db_path = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db_path, _session(sid))
+    _rescan_proposal(db_path, sid, tier="safe")
+    login(client)
+
+    resp = client.get("/rescan")
+    assert "/rescan/apply-all-safe" in resp.text
+
+
+def test_rescan_review_tier_has_no_bulk_apply_button_when_nothing_safe(tmp_path):
+    client, db_path = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db_path, _session(sid))
+    _rescan_proposal(
+        db_path, sid, tier="review", kind="delete",
+        changes={"target": {"current": "M 81", "proposed": None}},
+    )
+    login(client)
+
+    resp = client.get("/rescan")
+    assert "/rescan/apply-all-safe" not in resp.text
+
+
+def test_rescan_delete_proposal_with_no_target_groups_under_unknown(tmp_path):
+    client, db_path = make_client(tmp_path)
+    _rescan_proposal(
+        db_path, "GONE_20260101_FRA400_ZWOASI585MCPro_L-Pro",
+        target=None, obs_date=None, lights_path=None, tier="review", kind="delete",
+        changes={"target": {"current": "M 81", "proposed": None}},
+    )
+    login(client)
+
+    resp = client.get("/rescan")
+    assert resp.status_code == 200
+    assert "Unknown" in resp.text
+
+
+def test_rescan_apply_writes_session_and_redirects(tmp_path):
+    client, db_path = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db_path, _session(sid))
+    pid = _rescan_proposal(db_path, sid)
+    login(client)
+
+    resp = client.post(f"/rescan/{pid}/apply", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/rescan"
+
+    conn = catalog_db.open_db(db_path)
+    try:
+        row = catalog_db.query_sessions(conn, session_id=sid)[0]
+        proposal = catalog_db.get_rescan_proposal(conn, pid)
+    finally:
+        conn.close()
+    assert row["frame_count"] == 74
+    assert proposal["status"] == "applied"
+    assert proposal["resolved_at"] is not None
+
+    # Applied proposal drops out of the pending queue.
+    resp = client.get("/rescan")
+    assert sid not in resp.text or "0 proposals pending" in resp.text
+
+
+def test_rescan_dismiss_leaves_session_untouched(tmp_path):
+    client, db_path = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db_path, _session(sid))
+    pid = _rescan_proposal(db_path, sid)
+    login(client)
+
+    resp = client.post(f"/rescan/{pid}/dismiss", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/rescan"
+
+    conn = catalog_db.open_db(db_path)
+    try:
+        row = catalog_db.query_sessions(conn, session_id=sid)[0]
+        proposal = catalog_db.get_rescan_proposal(conn, pid)
+    finally:
+        conn.close()
+    assert row["frame_count"] == 100  # dismiss never writes to the session
+    assert proposal["status"] == "dismissed"
+
+
+def test_rescan_apply_unknown_id_404(tmp_path):
+    client, _ = make_client(tmp_path)
+    login(client)
+    resp = client.post("/rescan/999/apply")
+    assert resp.status_code == 404
+
+
+def test_rescan_dismiss_unknown_id_404(tmp_path):
+    client, _ = make_client(tmp_path)
+    login(client)
+    resp = client.post("/rescan/999/dismiss")
+    assert resp.status_code == 404
+
+
+def test_rescan_apply_all_safe_applies_only_safe_tier(tmp_path):
+    client, db_path = make_client(tmp_path)
+    safe_sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    review_sid = "M81_20260220_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db_path, _session(safe_sid))
+    upsert_session(db_path, _session(review_sid, obs_date="2026-02-20"))
+
+    conn = catalog_db.open_db(db_path)
+    try:
+        catalog_db.replace_rescan_proposals(conn, [
+            {
+                "session_id": safe_sid, "kind": "update", "tier": "safe",
+                "target": "M 81", "obs_date": "2026-02-19",
+                "lights_path": None,
+                "changes": {
+                    "frame_count": {"current": 110, "proposed": 74},
+                    "total_integration_sec": {"current": 19800, "proposed": 13320},
+                },
+                "detected_at": "2026-08-30T12:00:00Z",
+            },
+            {
+                "session_id": review_sid, "kind": "update", "tier": "review",
+                "target": "M 81", "obs_date": "2026-02-20",
+                "lights_path": None,
+                "changes": {
+                    "ra_deg": {"current": 148.89, "proposed": 150.0},
+                },
+                "detected_at": "2026-08-30T12:00:00Z",
+            },
+        ])
+    finally:
+        conn.close()
+    login(client)
+
+    resp = client.post("/rescan/apply-all-safe", follow_redirects=False)
+    assert resp.status_code == 200
+    assert "applied 1 safe proposal" in resp.text
+
+    conn = catalog_db.open_db(db_path)
+    try:
+        safe_row = catalog_db.query_sessions(conn, session_id=safe_sid)[0]
+        review_row = catalog_db.query_sessions(conn, session_id=review_sid)[0]
+        safe_proposal = catalog_db.list_rescan_proposals(conn, status="applied")
+        review_pending = catalog_db.list_rescan_proposals(conn, status="pending")
+    finally:
+        conn.close()
+    assert safe_row["frame_count"] == 74
+    assert review_row["ra_deg"] == pytest.approx(148.89)  # untouched
+    assert len(safe_proposal) == 1
+    assert len(review_pending) == 1
+    assert review_pending[0]["session_id"] == review_sid
+
+
+def test_rescan_apply_all_safe_noop_when_nothing_safe(tmp_path):
+    client, db_path = make_client(tmp_path)
+    login(client)
+    resp = client.post("/rescan/apply-all-safe", follow_redirects=False)
+    assert resp.status_code == 200
+    assert "applied" not in resp.text or "applied 0" not in resp.text
+
+
+def test_rescan_nav_link_present_on_queue_and_index(tmp_path):
+    client, db_path = make_client(tmp_path)
+    login(client)
+    assert '/rescan' in client.get("/").text
+    assert '/rescan' in client.get("/queue").text

@@ -105,6 +105,23 @@ class TargetRenameIn(BaseModel):
     new_target: str
 
 
+class RescanProposalIn(BaseModel):
+    """One F8 rescan-archive proposal, as produced by the Mac-side scan.
+
+    `status` is deliberately absent — the store assigns 'pending' on insert
+    and moves rows to 'applied'/'dismissed' itself; f8-core never sets it.
+    """
+
+    session_id: str
+    kind: str
+    tier: str
+    target: str | None = None
+    obs_date: str | None = None
+    lights_path: str | None = None
+    changes: dict[str, Any]
+    detected_at: str | None = None
+
+
 class SiteIn(BaseModel):
     name: str
     lat: float
@@ -330,6 +347,45 @@ def create_app(db_path: Path, api_token: str, ui_password_hash: str) -> FastAPI:
             gain=gain,
             exposure_sec=exposure_sec,
         )
+
+    @app.post("/api/rescan-proposals", dependencies=[auth_dep])
+    def post_rescan_proposals(body: list[RescanProposalIn], conn=Depends(_get_conn)):
+        try:
+            inserted = catalog_db.replace_rescan_proposals(
+                conn, [p.model_dump() for p in body]
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        return {"inserted": inserted}
+
+    @app.get("/api/rescan-proposals", dependencies=[auth_dep])
+    def get_rescan_proposals(status: str | None = None, conn=Depends(_get_conn)):
+        # No status param -> no filter (every row). This differs from
+        # CatalogBackend.list_rescan_proposals's own default of "pending" —
+        # that default lives in the Python callers (LocalBackend passes it
+        # straight through; HttpBackend sends it as an explicit `?status=`
+        # query param), not here, so a bare GET stays the honest "show me
+        # everything" the wire-level API contract implies.
+        return catalog_db.list_rescan_proposals(conn, status=status)
+
+    @app.post("/api/rescan-proposals/{proposal_id}/apply", dependencies=[auth_dep])
+    def post_rescan_apply(proposal_id: int, conn=Depends(_get_conn)):
+        proposal = catalog_db.get_rescan_proposal(conn, proposal_id)
+        if proposal is None or proposal["status"] != "pending":
+            raise HTTPException(status_code=404, detail="pending rescan proposal not found")
+        try:
+            catalog_db.apply_rescan_proposal(conn, db_path, proposal)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        catalog_db.resolve_rescan_proposal(conn, proposal_id, "applied")
+        return {"applied": True}
+
+    @app.post("/api/rescan-proposals/{proposal_id}/dismiss", dependencies=[auth_dep])
+    def post_rescan_dismiss(proposal_id: int, conn=Depends(_get_conn)):
+        dismissed = catalog_db.resolve_rescan_proposal(conn, proposal_id, "dismissed")
+        if not dismissed:
+            raise HTTPException(status_code=404, detail="pending rescan proposal not found")
+        return {"dismissed": True}
 
     app.include_router(build_ui_router(db_path, ui_password_hash))
     # No auth on static assets (CSS/JS/fonts) — nothing sensitive lives here,
