@@ -144,6 +144,29 @@ def _round_exposure(x):
     return None if x is None else round(float(x), 4)
 
 
+def normalize_session_fields(session: dict) -> dict:
+    """Return a copy of *session* with the fields the catalog canonicalizes on write.
+
+    ``upsert_session`` canonicalizes `camera` and `exposure_sec` on the way in,
+    so the value a scan produces is not necessarily the value that gets stored:
+    a raw FITS INSTRUME of "Canon EOS 6D" is stored as "Canon6D", and an
+    EXPTIME of 0.000125000005937181 is stored as 0.0001.
+
+    That mattered enough to extract. Anything comparing a fresh scan against
+    the catalog (`darkroom.rescan`) has to compare like with like — against
+    what *would* be stored, not the raw header values — or every session with
+    a camera reads as diverging. F8's first dry run on the live catalog
+    proposed rewriting 209 of 231 sessions from the canonical `Canon6D`/
+    `ZWOASI585MCPro` back to the raw header spellings for exactly this reason.
+
+    Pure: returns a copy, never mutates the argument.
+    """
+    out = dict(session)
+    out["camera"] = _normalize_camera(out.get("camera"))
+    out["exposure_sec"] = _round_exposure(out.get("exposure_sec"))
+    return out
+
+
 def _parse_coords(ra, dec) -> tuple[float | None, float | None]:
     """Return (ra_deg, dec_deg) from FITS header values, or (None, None).
 

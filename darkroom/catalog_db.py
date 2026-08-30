@@ -550,7 +550,12 @@ def delete_session(conn: sqlite3.Connection, session_id: str) -> bool:
 # F8: rescan-archive proposals
 # ---------------------------------------------------------------------------
 
-_RESCAN_KINDS = frozenset({"update", "create", "delete"})
+# 'rename' is a catalog-only + disk-only pair recognised as one session under
+# two spellings of its identity (legacy 'SH2-101' vs canonical 'Sh2-101').
+# It applies exactly like an 'update' — update_session_fields recomputes
+# session_id and lights_path on the same row — which is the whole point of
+# not letting it surface as a delete + create.
+_RESCAN_KINDS = frozenset({"update", "create", "delete", "rename"})
 _RESCAN_TIERS = frozenset({"safe", "review"})
 
 
@@ -654,8 +659,10 @@ def apply_rescan_proposal(conn: sqlite3.Connection, db_path: Path, proposal: dic
     `proposal` is a decoded row (as from get_rescan_proposal/
     list_rescan_proposals — `changes` already a dict of
     {field: {current, proposed}}). Dispatches on `kind`:
-      - 'update': update_session_fields with every changed field's proposed
-        value, via the conn already open for this request.
+      - 'update' / 'rename': update_session_fields with every changed field's
+        proposed value, via the conn already open for this request. A rename
+        differs only in that its changed fields include identity components,
+        so the same call recomputes session_id and lights_path in place.
       - 'delete': delete_session (W10), on the same conn.
       - 'create': cataloger.upsert_session (imported lazily — astropy) on a
         session dict built from every proposed value plus session_id.
@@ -675,7 +682,11 @@ def apply_rescan_proposal(conn: sqlite3.Connection, db_path: Path, proposal: dic
     """
     kind = proposal["kind"]
     proposed = {field: diff["proposed"] for field, diff in proposal["changes"].items()}
-    if kind == "update":
+    if kind in ("update", "rename"):
+        # Same call for both: a rename's changed fields include identity
+        # components, and update_session_fields recomputes session_id and
+        # lights_path on the same row (anti-orphan), carrying processed_state,
+        # notes, created_at and the session_guiding row forward.
         update_session_fields(conn, proposal["session_id"], **proposed)
     elif kind == "delete":
         delete_session(conn, proposal["session_id"])

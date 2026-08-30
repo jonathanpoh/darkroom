@@ -25,6 +25,14 @@ Every ``session_id`` seen on either side is classified:
   never ingested/committed).
 - in the catalog, ``lights_path`` missing on disk — a ``delete`` proposal,
   never an automatic delete.
+- a catalog-only and a disk-only session that share a *canonical* identity —
+  one ``rename`` proposal rather than an unrelated delete + create pair. A
+  legacy row stored as ``SH2-101_...`` is the same night as a fresh scan's
+  ``Sh2-101_...``; applying that as delete + create would drop the row's
+  ``id``/``created_at``, its ``processed_state`` and its ``session_guiding``
+  row and re-add a bare one. A rename applies through
+  ``update_session_fields``, which recomputes ``session_id``/``lights_path``
+  on the same row and carries all of that forward.
 
 Tiering (F8 contract, decided): an ``update`` whose only changed fields are
 ``frame_count``/``total_integration_sec`` is ``tier='safe'`` (pre-approved in
@@ -59,6 +67,7 @@ from darkroom.cataloger import (
     find_lights_folders,
     make_session_id,
 )
+from darkroom.names import _normalize_target, normalize_session_fields
 from darkroom.parse import fits_files
 
 DEFAULT_POINTING_TOLERANCE_DEG = 0.5
@@ -109,6 +118,31 @@ _CHANGE_FIELDS = (
 
 _FLOAT_FIELDS = frozenset({"exposure_sec", "temperature_c", "focal_length"})
 _INT_FIELDS = frozenset({"frame_count", "total_integration_sec", "gain"})
+
+# Identity components — changing any of these changes the derived session_id.
+# Mirrors catalog_db's own identity set; a 'rename' proposal is exactly a
+# divergence in one or more of these.
+_IDENTITY_FIELDS = ("target", "obs_date", "ota", "camera", "filter")
+
+
+def _canonical_session_id(row: dict) -> str:
+    """session_id this row WOULD have if its identity fields were canonical.
+
+    `make_session_id` only strips whitespace from the target — it does not
+    apply `_normalize_target`, while the disk-side scan (via
+    `SessionAnalyzer.analyze_sessions`) does. So a legacy row stored as
+    `SH2-101_...` and the same session freshly scanned as `Sh2-101_...` are
+    the same night under two spellings. Normalising both sides here is what
+    lets that be recognised as a rename instead of an unrelated
+    delete + create pair.
+    """
+    return make_session_id(
+        _normalize_target(row.get("target") or ""),
+        row.get("obs_date") or "",
+        row.get("ota") or "",
+        row.get("camera") or "",
+        row.get("filter"),
+    )
 
 
 def _now_iso() -> str:
@@ -185,9 +219,53 @@ def _scan_disk(dso_root: Path, archive_root: Path) -> dict[str, dict]:
             )
             session["session_id"] = session_id
             session["lights_path"] = str(lights_path.relative_to(archive_root))
-            sessions[session_id] = session
+            # Compare against what upsert_session would STORE, not the raw
+            # header values — otherwise every session with a camera diverges
+            # (raw INSTRUME "Canon EOS 6D" vs the stored canonical "Canon6D")
+            # and exposure noise reads as a real change. See
+            # names.normalize_session_fields.
+            sessions[session_id] = normalize_session_fields(session)
 
     return sessions
+
+
+def _pair_renames(
+    disk_sessions: dict[str, dict], catalog_sessions: dict[str, dict]
+) -> dict[str, tuple[str, str]]:
+    """Match catalog-only against disk-only sessions that share a canonical identity.
+
+    Returns {session_id: (catalog_id, disk_id)} with an entry for BOTH ids of
+    each pair, so the caller can skip either side and emit one 'rename'.
+
+    Only unambiguous pairs are returned: a canonical id claimed by more than
+    one session on either side is left alone and falls through to the ordinary
+    create/delete classification. A wrong pairing would rewrite one session's
+    identity to another's, which is worse than two rows a human has to read —
+    so ambiguity declines to guess, in keeping with the rest of F8.
+    """
+    catalog_only = set(catalog_sessions) - set(disk_sessions)
+    disk_only = set(disk_sessions) - set(catalog_sessions)
+    if not catalog_only or not disk_only:
+        return {}
+
+    def index(ids, rows):
+        out: dict[str, list[str]] = {}
+        for sid in ids:
+            out.setdefault(_canonical_session_id(rows[sid]), []).append(sid)
+        return out
+
+    cat_index = index(catalog_only, catalog_sessions)
+    disk_index = index(disk_only, disk_sessions)
+
+    pairs: dict[str, tuple[str, str]] = {}
+    for key, cat_ids in cat_index.items():
+        disk_ids = disk_index.get(key)
+        if not disk_ids or len(cat_ids) != 1 or len(disk_ids) != 1:
+            continue
+        pair = (cat_ids[0], disk_ids[0])
+        pairs[cat_ids[0]] = pair
+        pairs[disk_ids[0]] = pair
+    return pairs
 
 
 def scan(
@@ -227,7 +305,40 @@ def scan(
     detected_at = _now_iso()
     proposals: list[dict] = []
 
+    # Pair off catalog-only and disk-only sessions that are the same night
+    # under two spellings of its identity (legacy `SH2-101` vs canonical
+    # `Sh2-101`). Without this they'd surface as an unrelated delete + create,
+    # and applying that pair would drop the row's id/created_at, its
+    # processed_state and its session_guiding row, then re-add a bare one.
+    # A rename applies through update_session_fields instead, which recomputes
+    # session_id and lights_path on the SAME row (catalog_db's anti-orphan
+    # guarantee) and carries all of that forward.
+    renames = _pair_renames(disk_sessions, catalog_sessions)
+
     for session_id in sorted(set(disk_sessions) | set(catalog_sessions)):
+        if session_id in renames:
+            old_id, new_id = renames[session_id]
+            if session_id != old_id:
+                continue  # emitted once, keyed on the catalog-side id
+            cat, disk = catalog_sessions[old_id], disk_sessions[new_id]
+            changes = _diff_fields(cat, disk, pointing_tolerance_deg)
+            changes.update({
+                f: {"current": cat.get(f), "proposed": disk.get(f)}
+                for f in _IDENTITY_FIELDS
+                if cat.get(f) != disk.get(f)
+            })
+            proposals.append({
+                "session_id": old_id,
+                "kind": "rename",
+                "tier": "review",
+                "target": cat.get("target"),
+                "obs_date": cat.get("obs_date"),
+                "lights_path": disk.get("lights_path"),
+                "changes": changes,
+                "detected_at": detected_at,
+            })
+            continue
+
         disk = disk_sessions.get(session_id)
         cat = catalog_sessions.get(session_id)
 

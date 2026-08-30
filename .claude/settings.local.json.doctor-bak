@@ -1,0 +1,37 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(sqlite3 *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Skill(superpowers:writing-plans)",
+      "Bash(git commit *)",
+      "Skill(superpowers:subagent-driven-development)",
+      "Bash(uv run *)",
+      "Bash(git -C /Users/jpoh/Projects/darkroom-ingest add pyproject.toml uv.lock)",
+      "Bash(git -C /Users/jpoh/Projects/darkroom-ingest commit -m \"feat: add fits-cataloger path dep and pyyaml\")",
+      "Bash(git *)",
+      "Bash(uv sync *)",
+      "Bash(python3 -c \"import fits_cataloger; print\\(dir\\(fits_cataloger\\)\\)\")",
+      "Bash(tee /tmp/dry_run_output.yaml)",
+      "Bash(python3 *)",
+      "Skill(superpowers:finishing-a-development-branch)",
+      "Skill(superpowers:brainstorming)",
+      "Skill(superpowers:receiving-code-review)",
+      "Skill(superpowers:requesting-code-review)",
+      "Bash(python -m pytest --tb=short -q)",
+      "Bash(cat .claude-plugin/plugin.json)",
+      "Bash(cat hooks/*.json)",
+      "Bash(awk -F: '{s+=$2} END {print s\" test functions across files\"}')",
+      "Bash(uv add *)",
+      "Bash(ping -c 3 -t 3 192.168.2.217)",
+      "Bash(ssh -i ~/.ssh/id_ed25519_claude -o ConnectTimeout=5 -o BatchMode=yes claude@192.168.2.217 \"echo ssh-ok && uptime\")",
+      "Bash(curl -sS -m 5 -o /dev/null -w \"http_status=%{http_code} time=%{time_total}s\\\\n\" http://192.168.2.217:8000/)",
+      "Bash(curl -sS -m 5 -o /dev/null -w \"root redirect location: %{redirect_url}\\\\nhttp_status=%{http_code}\\\\n\" http://192.168.2.217:8000/)",
+      "Read(//Users/jpoh/.config/darkroom/**)"
+    ]
+  },
+  "skillOverrides": {
+    "ha-energy": "off"
+  }
+}

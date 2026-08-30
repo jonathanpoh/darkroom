@@ -578,3 +578,126 @@ def test_cli_empty_disk_refuses_without_tty_and_without_yes(tmp_path, capsys, mo
     err = capsys.readouterr().err
     assert "no TTY to confirm" in err
     assert LocalBackend(db).query_sessions()  # catalog untouched
+
+
+# ── camera/exposure canonicalisation on the disk side ──────────────────────
+#
+# upsert_session canonicalizes `camera` and `exposure_sec` on write
+# (names.normalize_session_fields), so a fresh scan has to compare against
+# what would be STORED, not the raw FITS header values. Found on the live
+# catalog: the first dry run proposed rewriting 209 of 231 sessions from the
+# canonical 'Canon6D'/'ZWOASI585MCPro' back to the raw header spellings.
+
+def test_raw_header_camera_name_is_not_a_divergence(tmp_path):
+    """A raw INSTRUME of 'Canon EOS 6D' must match a stored 'Canon6D'."""
+    archive = tmp_path / "archive"
+    _write_session_frames(archive, camera="Canon EOS 6D")
+    db = _db(tmp_path)
+    backend = LocalBackend(db)
+
+    create = _only_create(archive, backend)
+    # The proposal itself reports the canonical form, not the header spelling.
+    assert create["changes"]["camera"]["proposed"] == "Canon6D"
+
+    upsert_session(db, _catalog_row_from_create(create, create["session_id"]))
+
+    # Re-scanning the identical archive must now be a clean no-op.
+    assert scan(archive, backend) == []
+
+
+def test_sub_millisecond_exposure_noise_is_not_a_divergence(tmp_path):
+    """EXPTIME 0.000125000005937181 is stored rounded to 0.0001 — not a change."""
+    archive = tmp_path / "archive"
+    _write_session_frames(archive, exposure=0.000125000005937181)
+    db = _db(tmp_path)
+    backend = LocalBackend(db)
+
+    create = _only_create(archive, backend)
+    assert create["changes"]["exposure_sec"]["proposed"] == pytest.approx(0.0001)
+
+    upsert_session(db, _catalog_row_from_create(create, create["session_id"]))
+
+    assert scan(archive, backend) == []
+
+
+# ── rename pairing ─────────────────────────────────────────────────────────
+#
+# make_session_id only strips whitespace from the target; the disk-side scan
+# applies _normalize_target as well. So a legacy row stored as 'SH2-101_...'
+# and a fresh scan's 'Sh2-101_...' are the same night under two spellings.
+# Surfacing that as delete + create would drop the row's id/created_at,
+# processed_state and session_guiding row.
+
+def _legacy_target_setup(tmp_path):
+    """Archive holding one Sh2-101 night; catalog holding it under 'SH2-101'."""
+    archive = tmp_path / "archive"
+    _write_session_frames(archive, target="Sh2-101")
+    db = _db(tmp_path)
+    backend = LocalBackend(db)
+
+    create = _only_create(archive, backend)
+    row = _catalog_row_from_create(create, create["session_id"])
+    # Store it under the legacy un-normalized spelling, as the live catalog does.
+    row["target"] = "SH2-101"
+    row["session_id"] = create["session_id"].replace("Sh2-101", "SH2-101", 1)
+    upsert_session(db, row)
+    return archive, db, backend, row["session_id"], create["session_id"]
+
+
+def test_legacy_target_spelling_pairs_as_one_rename(tmp_path):
+    archive, db, backend, old_id, new_id = _legacy_target_setup(tmp_path)
+
+    proposals = scan(archive, backend)
+
+    assert len(proposals) == 1, "must be one rename, not a delete + create pair"
+    p = proposals[0]
+    assert p["kind"] == "rename"
+    assert p["tier"] == "review"
+    # Keyed on the CATALOG-side id — that's what update_session_fields needs.
+    assert p["session_id"] == old_id
+    assert p["changes"]["target"] == {"current": "SH2-101", "proposed": "Sh2-101"}
+    assert old_id != new_id
+
+
+def test_rename_applies_in_place_preserving_row_identity(tmp_path):
+    """Applying the rename must keep id/created_at, not delete-and-recreate."""
+    from darkroom.catalog_db import apply_rescan_proposal, open_db
+
+    archive, db, backend, old_id, new_id = _legacy_target_setup(tmp_path)
+    proposal = scan(archive, backend)[0]
+
+    with open_db(db) as conn:
+        before = conn.execute(
+            "SELECT id, created_at FROM sessions WHERE session_id = ?", (old_id,)
+        ).fetchone()
+        apply_rescan_proposal(conn, db, proposal)
+        after = conn.execute(
+            "SELECT id, created_at, target, session_id FROM sessions WHERE id = ?",
+            (before["id"],),
+        ).fetchone()
+
+    assert after["target"] == "Sh2-101"
+    assert after["session_id"] == new_id
+    assert after["created_at"] == before["created_at"]
+    # And the archive now agrees with the catalog.
+    assert scan(archive, backend) == []
+
+
+def test_ambiguous_rename_candidates_are_left_as_create_and_delete(tmp_path):
+    """Two catalog rows collapsing to one canonical id must not be guessed at."""
+    archive = tmp_path / "archive"
+    _write_session_frames(archive, target="Sh2-101")
+    db = _db(tmp_path)
+    backend = LocalBackend(db)
+
+    create = _only_create(archive, backend)
+    for legacy in ("SH2-101", "sh2-101"):
+        row = _catalog_row_from_create(create, create["session_id"])
+        row["target"] = legacy
+        row["session_id"] = create["session_id"].replace("Sh2-101", legacy, 1)
+        upsert_session(db, row)
+
+    kinds = sorted(p["kind"] for p in scan(archive, backend))
+
+    assert "rename" not in kinds, "ambiguity must decline to guess"
+    assert kinds == ["create", "delete", "delete"]

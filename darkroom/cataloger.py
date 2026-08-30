@@ -37,6 +37,7 @@ from darkroom.names import (
     _parse_coords,
     _round_exposure,
     make_session_id,  # re-exported for back-compat (moved to names.py in W4)
+    normalize_session_fields,
 )
 
 
@@ -588,9 +589,10 @@ def upsert_session(db_path: Path, session: dict) -> None:
         db_path: Path to SQLite database file
         session: Dictionary with keys matching the sessions table schema
     """
-    session = dict(session)
-    session["camera"] = _normalize_camera(session.get("camera"))
-    session["exposure_sec"] = _round_exposure(session.get("exposure_sec"))
+    # Shared with darkroom.rescan, which has to diff a fresh scan against the
+    # catalog and so must compare against what would be STORED, not the raw
+    # header values (names.normalize_session_fields explains why).
+    session = normalize_session_fields(session)
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     session.setdefault("created_at", now)
     session["updated_at"] = now
