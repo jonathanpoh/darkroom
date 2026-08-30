@@ -2141,18 +2141,96 @@ recorded anywhere** and Jonathan has to supply it.
    `Lights/IC4604_1-1/` → `Lights/<Filter>/P1-1/`.
 3. Unrelated oddities in the same data, for whoever does the pass: the
    2023-07-15 row (21 frames, `ota: Unknown`, `lights_path` with no `Lights/`
-   level) is a genuine single-pointing legacy session — leave it alone; and
-   there is a stray 2-frame `IC 4604_1-2` row on obs_date 2025-04-27 that looks
-   like a tail past the night boundary.
+   level) is a genuine single-pointing session of the same object — leave its
+   `panel` NULL (Jonathan confirmed 2026-08-30; see "the bare `IC 4604` row is
+   NOT a stray" below, it's a design constraint, not a leftover); and there is
+   a stray 2-frame `IC 4604_1-2` row on obs_date 2025-04-27 that looks like a
+   tail past the night boundary.
+4. **Their `filter` column is now empty, not `IC4604_1-1`** — M2's
+   KNOWN_FILTERS guard (2026-08-30, `0e54759`) evicted the panel names, and
+   F8's rename proposals applied that to all 9 rows. So the "panel name in
+   both target and filter" description above is now only true of the *target*
+   column, and those rows will surface in U2's filter queue wanting the real
+   filter, which still isn't recorded anywhere.
 
-#### Do first / do later
+#### Do first / do later — ⚠️ UPDATED 2026-08-30: the trigger condition has fired
 
-IC 4604 is the only mosaic in the archive, it is already sitting in a per-panel
-layout on disk, and nothing is currently broken by it. The part that actually
-earns priority is the **ingest side** (`parse_panel` + the `panel` column +
-`make_session_id`), because without it the next mosaic recreates this exact mess
-from scratch. The web-UI panel-aware totals and the per-panel WBPP prep can
-follow once there is a second mosaic to test against.
+The original note said the ingest half should land "before the next mosaic is
+shot". **That mosaic now exists and is waiting to be ingested**, so the ingest
+half (`parse_panel` + the `panel` column + `make_session_id`) is no longer
+speculative priority — it is the thing standing between Jonathan and ingesting
+real data. Ingesting first means the new mosaic recreates the five-fake-targets
+mess from scratch and doubles the cleanup. He has deliberately held the ingest.
+
+The web-UI panel-aware totals and the per-panel WBPP prep can still follow.
+
+#### The pending mosaic (facts confirmed by Jonathan 2026-08-30)
+
+- **8 panels**, **50mm lens**, roughly centred on **M8**, shot in **blocks**
+  (all of one panel, then the next), not interleaved.
+- **Shot without the guidescope** — at 50mm the FOV is wide enough that he
+  judged guiding unnecessary. **Consequence: there will be no PHD2 guide log
+  for that night, so `scan-guiding` will list those 8 sessions as unmatched.
+  That is correct and expected, not a failure to debug.** F4's design already
+  treats "no guiding data" as row-absent rather than an error.
+
+**⚠️ Blocker to clear before ingesting: 50mm has no OTA mapping.**
+`parse.parse_ota` only covers 170–190 (`FMA180`), 270–290 (`FRA400-07x`) and
+390–410 (`FRA400`); everything else returns `"Unknown"`. So all 8 panel
+sessions would ingest with `ota='Unknown'`, which (a) bakes `Unknown` into
+every `session_id`, (b) trips U2's unknown-OTA badge 8 times, (c) breaks flat
+matching, which keys on OTA+camera+filter, and (d) can't even be corrected in
+`ingest review`, because the pick-list comes from `parse.KNOWN_OTAS`.
+
+Needs a naming decision before ingest, not after — the OTA is an identity
+component, so changing it later is a rename of all 8 rows plus their folders.
+Two useful precedents: **20 live sessions already sit at `ota='Unknown'`**
+(mostly Canon6D legacy), and the archive already contains a lens-named folder
+`NGC 7000/2023-04-16_100mm_Canon6D/`, i.e. a bare focal length used where an
+OTA name goes. Pick the convention, add the tolerance window to `parse_ota`,
+and add the name to `KNOWN_OTAS` in the same change.
+
+#### The bare `IC 4604` row is NOT a stray — it is a design constraint
+
+Confirmed by Jonathan 2026-08-30: of the five `4604` targets in the catalog,
+the bare `IC 4604` row (2023-07-15, 21 frames, Canon6D) is a **legitimate
+single-pointing session of the same object**, shot before the mosaic existed.
+The other four are the mosaic panels.
+
+So a target legitimately holds **both** panelled and non-panelled sessions at
+once. That is not an edge case to tolerate — it is the normal end state for any
+object shot single-frame first and mosaicked later. It confirms the nullable
+`panel` design (NULL = ordinary session) and adds required behaviour:
+
+- `panel IS NULL` and `panel = '1-1'` rows must coexist under one target, and
+  every per-target rollup (integration hours, depth gauge, calibration chips)
+  has to stay correct across the mix.
+- The target view can't just say "4 panels · 2.1h/panel" — it needs to show the
+  single-pointing session alongside the panel breakdown without double-counting
+  or implying the two are interchangeable depth.
+- Make it a test case, not an afterthought: one target, one NULL-panel session,
+  N panelled sessions.
+
+#### Guiding interacts with acquisition *order*, not with mosaics as such
+
+Checked against the live catalog 2026-08-30 (the question was whether **F7**
+would help here — it would not, and here is why):
+
+IC 4604's panels were shot in disjoint sequential blocks, e.g. 2025-04-26 ran
+`2-2` 23:02→00:11, `2-1` 00:18→01:34, `1-2` 01:39→03:11, `1-1` 03:16→04:30. So
+each panel-night already has a clean non-overlapping window, envelope matching
+is correct, and the per-panel RMS spread on one night (14.14″ / 9.58″ / 5.50″ /
+6.96″) is real signal rather than cross-contamination. Span vs integration
+overhead is only ~0.13h on ~1.1h, so F7 would refine those numbers slightly and
+change no conclusion. The pending 8-panel mosaic was also shot in blocks.
+
+**The conditional worth remembering:** if panels are ever shot *interleaved*
+(P1, P2, P3, P4, P1, …, which some mosaic sequencers do by default to keep
+altitude and rotation even), then every panel's envelope spans the whole night,
+they overlap completely, and all panels get near-identical whole-night guiding
+stats — silently. That is precisely the failure **F7** exists to fix, and it is
+undetectable without it. So F7's value for mosaics is a function of acquisition
+pattern, not of mosaics themselves. Block-sequential needs nothing.
 
 ---
 
@@ -2330,10 +2408,16 @@ so it's worth deciding first rather than by default.
     only R3 remains from that block. Litestream (continuous DB replication)
     also lands here as an optional upgrade over the nightly backup.
 13. **M1** (mosaic panels as a session dimension) — design settled 2026-07-30,
-    unbuilt. Not urgent: IC 4604 is the archive's only mosaic and it isn't
-    breaking anything. Do the ingest half (`parse_panel` + `panel` column +
-    `make_session_id`) before the next mosaic is shot, and the WBPP/UI half
-    after. Also closes U2's known same-night panel-collision gap.
+    unbuilt. **⚠️ NOW THE TOP PRIORITY as of 2026-08-30: an 8-panel 50mm
+    mosaic around M8 is shot and waiting to be ingested, and Jonathan is
+    holding the ingest until this lands.** Ingesting first recreates the
+    five-fake-targets mess (IC 4604 is currently 5 separate "targets") and
+    doubles the cleanup. Do the ingest half (`parse_panel` + `panel` column +
+    `make_session_id`); the WBPP/UI half can follow. **Clear the 50mm OTA
+    blocker in the same change** — `parse_ota` has no window for it, so all 8
+    sessions would ingest as `ota='Unknown'` and can't be fixed in `ingest
+    review` either (its pick-list is `KNOWN_OTAS`). Also closes U2's known
+    same-night panel-collision gap. See M1 for the confirmed facts.
 14. **U4** and **F8** — both ✅ DONE (U4 `46653ea`, F8 merged 2026-08-30).
     Filed 2026-08-29 out of the SH2-101 2026-07-19 mis-slew fixup (5 of 92
     subs actually on target; the rest needed hand-built catalog corrections
