@@ -130,14 +130,14 @@ def parse_ota(focallen) -> str:
         fl = int(focallen)
     except (TypeError, ValueError):
         return "Unknown"
+    if 45 <= fl <= 55:
+        return "Canon50mm"
     if 170 <= fl <= 190:
         return "FMA180"
     if 270 <= fl <= 290:
         return "FRA400-07x"
     if 390 <= fl <= 410:
         return "FRA400"
-    if 45 <= fl <= 55:
-        return "Canon50mm"
     return "Unknown"
 
 
