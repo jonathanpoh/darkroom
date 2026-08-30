@@ -10,6 +10,7 @@ so it's never paid at module load either.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,8 +18,8 @@ from pathlib import Path
 from darkroom.names import _normalize_target, make_session_id, session_dest_rel
 
 # Columns a UI is allowed to edit via update_session_fields. Deliberately
-# excludes id, session_id (derived, not directly settable), frame_count,
-# total_integration_sec/hours, processed_status (legacy), created_at/updated_at
+# excludes id, session_id (derived, not directly settable), total_integration_hours
+# (GENERATED, not writable at all), processed_status (legacy), created_at/updated_at
 # (managed by this module), and lights_path — excluded from direct editing but
 # recomputed server-side (via session_dest_rel) when an identity field changes.
 _EDITABLE_FIELDS = frozenset({
@@ -29,6 +30,12 @@ _EDITABLE_FIELDS = frozenset({
     # F4: derived wall-clock span, written by `catalog backfill-times`. Not an
     # identity component — editing it never touches session_id/lights_path.
     "start_utc", "end_utc",
+    # F8: recomputed by `catalog rescan-archive` when a session's frame count
+    # changes on disk (e.g. bad subs culled) — the only two fields a 'safe'
+    # tier rescan proposal ever touches. Not exposed on the manual session
+    # edit form (ui.py's _EDIT_FIELDS), only reachable via the rescan apply
+    # path and the JSON API.
+    "frame_count", "total_integration_sec",
 })
 
 # Identity components: changing any of these changes the derived session_id.
@@ -537,3 +544,162 @@ def delete_session(conn: sqlite3.Connection, session_id: str) -> bool:
     cur = conn.execute("DELETE FROM sessions WHERE id = ?", (row["id"],))
     conn.commit()
     return cur.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# F8: rescan-archive proposals
+# ---------------------------------------------------------------------------
+
+_RESCAN_KINDS = frozenset({"update", "create", "delete"})
+_RESCAN_TIERS = frozenset({"safe", "review"})
+
+
+def _decode_rescan_row(row: sqlite3.Row) -> dict:
+    d = dict(row)
+    d["changes"] = json.loads(d["changes"])
+    return d
+
+
+def replace_rescan_proposals(conn: sqlite3.Connection, proposals: list[dict]) -> int:
+    """Replace all *pending* rescan_proposals rows with this new set (F8).
+
+    Applied/dismissed rows are left alone — they're the audit trail of what
+    was already resolved. A re-scan supersedes the previous pending set
+    rather than accumulating duplicates of the same divergence.
+
+    Every proposal's `kind`/`tier` is validated before anything is written,
+    so a malformed batch fails atomically without touching the existing
+    pending set. Returns the number of rows inserted.
+
+    Raises:
+        ValueError: a proposal has an unrecognised kind or tier.
+    """
+    for p in proposals:
+        if p.get("kind") not in _RESCAN_KINDS:
+            raise ValueError(
+                f"Invalid rescan proposal kind: {p.get('kind')!r} "
+                f"(must be one of {sorted(_RESCAN_KINDS)})"
+            )
+        if p.get("tier") not in _RESCAN_TIERS:
+            raise ValueError(
+                f"Invalid rescan proposal tier: {p.get('tier')!r} "
+                f"(must be one of {sorted(_RESCAN_TIERS)})"
+            )
+
+    conn.execute("DELETE FROM rescan_proposals WHERE status = 'pending'")
+    for p in proposals:
+        conn.execute(
+            "INSERT INTO rescan_proposals "
+            "(session_id, kind, tier, target, obs_date, lights_path, changes, "
+            "detected_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')",
+            (
+                p["session_id"], p["kind"], p["tier"], p.get("target"),
+                p.get("obs_date"), p.get("lights_path"), json.dumps(p["changes"]),
+                p.get("detected_at"),
+            ),
+        )
+    conn.commit()
+    return len(proposals)
+
+
+def list_rescan_proposals(
+    conn: sqlite3.Connection, *, status: str | None = "pending"
+) -> list[dict]:
+    """Return stored rescan proposals, newest (highest id) first.
+
+    status=None returns every row regardless of status; otherwise filters to
+    just that one. `changes` is decoded from its stored JSON text back into a
+    dict, matching the shape f8-core produces.
+    """
+    if status is not None:
+        rows = conn.execute(
+            "SELECT * FROM rescan_proposals WHERE status = ? ORDER BY id DESC",
+            (status,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM rescan_proposals ORDER BY id DESC"
+        ).fetchall()
+    return [_decode_rescan_row(r) for r in rows]
+
+
+def get_rescan_proposal(conn: sqlite3.Connection, proposal_id: int) -> dict | None:
+    """Return one rescan_proposals row (any status), changes decoded, or None."""
+    row = conn.execute(
+        "SELECT * FROM rescan_proposals WHERE id = ?", (proposal_id,)
+    ).fetchone()
+    return None if row is None else _decode_rescan_row(row)
+
+
+def resolve_rescan_proposal(conn: sqlite3.Connection, proposal_id: int, status: str) -> bool:
+    """Mark a *pending* rescan_proposals row applied/dismissed, stamping resolved_at.
+
+    Returns True if a pending row was found and updated, False if
+    proposal_id doesn't match a pending row — already-resolved rows are
+    immutable history and are never re-resolved.
+    """
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    cur = conn.execute(
+        "UPDATE rescan_proposals SET status = ?, resolved_at = ? "
+        "WHERE id = ? AND status = 'pending'",
+        (status, now, proposal_id),
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def apply_rescan_proposal(conn: sqlite3.Connection, db_path: Path, proposal: dict) -> None:
+    """Perform the session write side of resolving one rescan proposal (F8).
+
+    `proposal` is a decoded row (as from get_rescan_proposal/
+    list_rescan_proposals — `changes` already a dict of
+    {field: {current, proposed}}). Dispatches on `kind`:
+      - 'update': update_session_fields with every changed field's proposed
+        value, via the conn already open for this request.
+      - 'delete': delete_session (W10), on the same conn.
+      - 'create': cataloger.upsert_session (imported lazily — astropy) on a
+        session dict built from every proposed value plus session_id.
+        upsert_session manages its own connection to db_path — the existing
+        calling convention for it elsewhere (see set_processed_state) —
+        rather than the conn passed in here.
+
+    Does not itself mark the proposal resolved — callers only do that (via
+    resolve_rescan_proposal) after this returns without raising, so a failed
+    write never leaves a proposal marked applied.
+
+    Raises:
+        ValueError: an unknown proposal kind, a field-level error surfaced by
+            update_session_fields (e.g. an identity collision), or a 'create'
+            whose proposed values don't satisfy the sessions table's
+            constraints (e.g. no target/obs_date).
+    """
+    kind = proposal["kind"]
+    proposed = {field: diff["proposed"] for field, diff in proposal["changes"].items()}
+    if kind == "update":
+        update_session_fields(conn, proposal["session_id"], **proposed)
+    elif kind == "delete":
+        delete_session(conn, proposal["session_id"])
+    elif kind == "create":
+        from darkroom.cataloger import upsert_session
+
+        session = dict(proposed)
+        session["session_id"] = proposal["session_id"]
+        # upsert_session binds every one of these as a named sqlite param —
+        # a 'create' proposal that only reports the fields it could actually
+        # read off disk (say, no RA/Dec) would otherwise blow up with a
+        # sqlite3.ProgrammingError on the fields it left out entirely.
+        for key in (
+            "target", "obs_date", "ota", "camera", "filter", "gain",
+            "temperature_c", "exposure_sec", "focal_length", "frame_count",
+            "total_integration_sec", "ra_deg", "dec_deg", "lights_path",
+        ):
+            session.setdefault(key, None)
+        try:
+            upsert_session(db_path, session)
+        except sqlite3.IntegrityError as e:
+            # target/obs_date are NOT NULL — surface this as the same kind of
+            # rejectable, caller-fixable error as the other two kinds raise,
+            # rather than a raw sqlite exception.
+            raise ValueError(f"cannot create session: {e}") from e
+    else:
+        raise ValueError(f"unknown rescan proposal kind: {kind!r}")

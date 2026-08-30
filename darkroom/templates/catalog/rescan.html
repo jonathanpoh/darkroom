@@ -1,0 +1,58 @@
+<!-- darkroom/templates/catalog/rescan.html -->
+{% extends "base.html" %}
+{% block title %}darkroom — rescan{% endblock %}
+{% block content %}
+<a class="backlink" href="/">&larr; back to targets</a>
+<div class="dethead">
+  <span><span class="tname display">Rescan review</span></span>
+  <span class="sub">{{ total_count }} proposal{{ '' if total_count == 1 else 's' }} pending — {{ safe_count }} safe, {{ review_count }} need review</span>
+</div>
+
+{% if success %}<div class="success">{{ success }}</div>{% endif %}
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+
+{% if safe_count %}
+<form class="qfixform" method="post" action="/rescan/apply-all-safe">
+  <button type="submit">Apply all {{ safe_count }} safe proposal{{ '' if safe_count == 1 else 's' }}</button>
+</form>
+{% endif %}
+
+{% macro field_diff(changes) %}
+<div class="rsfields">
+  {% for field, diff in changes.items() %}
+  <span class="rsfield"><b>{{ field }}</b>: {{ diff.current if diff.current is not none else '—' }} &rarr; {{ diff.proposed if diff.proposed is not none else '—' }}</span>
+  {% endfor %}
+</div>
+{% endmacro %}
+
+{% for group in groups %}
+<section class="qsection">
+  <h3 class="qsectitle">{{ group.target }} <span class="n">{{ group.proposals | length }}</span></h3>
+  {% for p in group.proposals %}
+  <div class="qrow rsrow-{{ p.tier }}">
+    <div class="qhead">
+      <a class="tname" href="/sessions/{{ p.session_id | urlencode }}">{{ p.session_id }}</a>
+      <span class="qbadge rstier-{{ p.tier }}">{{ p.tier }}</span>
+      <span class="qbadge">{{ p.kind }}</span>
+    </div>
+    <div class="qmeta">
+      <span class="qfield">{{ p.obs_date or '—' }}</span>
+      <span class="qfield">{{ p.lights_path or '—' }}</span>
+      <span class="qfield">detected {{ p.detected_at or '—' }}</span>
+    </div>
+    {{ field_diff(p.changes) }}
+    <div class="rsactions">
+      <form class="qfixform" method="post" action="/rescan/{{ p.id }}/apply">
+        <button type="submit">Apply</button>
+      </form>
+      <form class="qfixform" method="post" action="/rescan/{{ p.id }}/dismiss">
+        <button type="submit" class="rsdismiss">Dismiss</button>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
+</section>
+{% else %}
+<p class="qempty">Nothing here.</p>
+{% endfor %}
+{% endblock %}

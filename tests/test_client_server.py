@@ -117,7 +117,7 @@ def test_update_session_fields_parity(backends):
         assert b.update_session_fields(sid, notes="two-panel mosaic") is True
         assert b.update_session_fields("NoSuchSession_x", notes="x") is False
         with pytest.raises(ValueError):
-            b.update_session_fields(sid, frame_count=999)  # not editable
+            b.update_session_fields(sid, not_a_real_field=999)  # not editable
 
     assert (
         local.query_sessions(session_id=sid)[0]["notes"]
