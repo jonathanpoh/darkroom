@@ -1679,7 +1679,56 @@ neither.
   (`ui.py:_is_spike_dominated`) was tuned on envelope numbers. Re-check both on
   NGC 6888 2026-07-20 and M 45 before trusting the bands.
 
-### F8. `catalog rescan-archive` — diff the archive against the catalog, queue the divergence for review
+### F8. `catalog rescan-archive` — diff the archive against the catalog, queue the divergence for review — ✅ DONE
+
+> Shipped 2026-08-30, built in two parallel worktrees and merged to main
+> (`9c6eebe` web half, `a98a6b2` scan half, guard fix `c83fbaf`). **Not yet
+> deployed to the LXC** — the `rescan_proposals` migration and the `/rescan`
+> page need a deploy before the queue is reachable in the live UI.
+>
+> **Both scope questions in this entry were decided before building:**
+> - *Shape:* CLI **plus** the `/queue`-style web view, not CLI-only. Forced by
+>   a fact worth recording — the LXC serving the webapi has the catalog DB but
+>   **no archive mount** (`deploy/darkroom-api.service`), so the scan can never
+>   run server-side. The CLI scans on the Mac and pushes proposals to
+>   `rescan_proposals`; the server only reviews and applies. That constraint is
+>   what makes the proposals table necessary rather than optional — a live
+>   server-side scan was never available as an option.
+> - *RA/Dec:* compared, with a **0.5° default tolerance** (`--pointing-tolerance`),
+>   RA wrap-corrected at 360 so 359.9 vs 0.1 reads as 0.2° apart. This is the
+>   check that catches the SH2-101 mis-slew class; the tolerance is what keeps
+>   ordinary re-centring between sessions sharing a folder quiet.
+>
+> **Tiering as built:** `safe` = an `update` whose only changed fields are
+> `frame_count`/`total_integration_sec` (the pure interior-deletion case —
+> bulk-appliable in the queue UI). `review` = every `create`, every `delete`,
+> and any `update` touching pointing/timing/equipment. `--apply` on the CLI
+> **pushes proposals to the queue and never writes to `sessions`**; the only
+> thing that edits the catalog is an explicit per-proposal Apply in the UI.
+>
+> **`_EDITABLE_FIELDS` widened:** `catalog_db` now allows `frame_count`/
+> `total_integration_sec`, required by the safe-tier apply path.
+> `total_integration_hours` stays excluded (GENERATED), and `ui.py:_EDIT_FIELDS`
+> still doesn't expose either on the manual session edit form.
+>
+> **The guard that had to be added (review finding, not spec):** the first cut
+> let `_scan_disk` return `{}` for an unreachable archive, which is
+> indistinguishable from a genuinely empty one — so an unmounted NAS would
+> classify **every** catalog session as a `delete` proposal, and `--apply`
+> would wipe the real pending set to push them. Exactly the "can silently drop
+> or fabricate sessions" failure this entry exists to prevent. Now:
+> `ArchiveRootMissing` is a hard error, and a walk finding 0 sessions against a
+> non-empty catalog raises `EmptyDiskDivergence`, which the CLI turns into a
+> warning naming both counts plus a required confirmation (`--yes`, or a `yes`
+> at the prompt; no TTY and no `--yes` refuses, matching `ingest review`). The
+> reverse — empty catalog, full disk — is an ordinary first run and never
+> prompts. **That asymmetry is the point:** only the empty-disk direction
+> generates deletes.
+>
+> **B14 dependency honoured:** the recompute goes through
+> `SessionAnalyzer.analyze_sessions` rather than reimplementing frame
+> selection, which is how it inherits the chronologically-first-frame fix
+> instead of regrowing the bug this entry warned it would otherwise confirm.
 
 Filed 2026-08-29, alongside U4, out of the same SH2-101 fixup. Manually
 computing `frame_count`/`total_integration_sec`/`dec_deg`/`start_utc`/`end_utc`
@@ -2081,8 +2130,10 @@ follow once there is a second mosaic to test against.
     breaking anything. Do the ingest half (`parse_panel` + `panel` column +
     `make_session_id`) before the next mosaic is shot, and the WBPP/UI half
     after. Also closes U2's known same-night panel-collision gap.
-14. **U4** (`--catalog-url` on `scan-lights`/`scan-calibration`) and **F8**
-    (`catalog rescan-archive` divergence queue) — filed 2026-08-29 out of the
-    SH2-101 2026-07-19 mis-slew fixup (5 of 92 subs actually on target; the
-    rest needed hand-built catalog corrections because no rescan path reaches
-    the live catalog). Do U4 first — F8 depends on it.
+14. **U4** and **F8** — both ✅ DONE (U4 `46653ea`, F8 merged 2026-08-30).
+    Filed 2026-08-29 out of the SH2-101 2026-07-19 mis-slew fixup (5 of 92
+    subs actually on target; the rest needed hand-built catalog corrections
+    because no rescan path reached the live catalog) — that hand-correction
+    is now `catalog rescan-archive`. **Open follow-up: deploy to the LXC** —
+    the `rescan_proposals` migration and the `/rescan` page are on main but
+    not yet live, so the queue can't be reviewed in the browser until then.
