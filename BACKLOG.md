@@ -1897,6 +1897,50 @@ stall. Confirms the classification this entry proposes, and narrows the
 
 ---
 
+### F9. A camera lens can impersonate a telescope, and `parse_ota` can't tell
+
+Filed 2026-08-30, out of M1's `Canon50mm` naming decision. Jonathan also shoots
+a **Canon EF 100–400mm zoom**, and `parse_ota` infers the optic from `FOCALLEN`
+alone. Checked against the current windows:
+
+| Zoom shot at | `parse_ota` returns | Actually |
+|---|---|---|
+| 180mm | **`FMA180`** | Canon 100–400 |
+| 400mm | **`FRA400`** | Canon 100–400 |
+| 100 / 135 / 200 / 250 / 300 / 350mm | `Unknown` | Canon 100–400 |
+
+Two of those are **silently wrong rather than unknown**, which is the dangerous
+half. An `Unknown` OTA is loud — U2 badges it, `ingest_review.suggested_action`
+lands the cursor on "Change OTA / camera", and `entry_issues` prints a ⚠. A
+confidently wrong `FRA400` does none of that: it sails through review, bakes a
+false optic into the `session_id` and the folder name, and then **matches flats
+belonging to a genuinely different telescope** (flat matching keys on
+OTA + camera + filter), which is a real data-correctness bug, not a cosmetic one.
+
+**There is no header that disambiguates them.** `FOCALLEN` collides by
+construction, and `TELESCOP` is the mount (`ZWO AM5N`), not the optic. So this
+cannot be auto-detected — it has to be a human correction at review time, and
+the design question is how to make the wrong answer *loud*.
+
+Sketch, not a decision:
+
+- Give the zoom a name family (`Canon100-400mm@200mm`? `Canon100-400mm` plus
+  the existing `focal_length` column?) and add it to `KNOWN_OTAS` so review can
+  actually offer it — today it can't be picked at all.
+- Consider a "focal length is ambiguous" issue in `entry_issues` that fires
+  when `FOCALLEN` falls in a window shared by kit that is in `KNOWN_OTAS`, so
+  180 and 400 stop being confidently answered.
+- Aperture is **not** part of this: the EF adapter is purely mechanical with no
+  electronic aperture control, so both Canon lenses are always wide open. Focal
+  ratio therefore never varies per session and is not an identity component —
+  which is why `Canon50mm` carries no `-f18` suffix (confirmed 2026-08-30).
+
+Low urgency: the zoom has not been used for a catalogued session yet. It stops
+being theoretical the first night it is, and the damage is retroactive
+(a rename of rows + folders), so decide the naming before that night.
+
+---
+
 ## S — Observation sites & conditions
 
 ### S1. Observation-site tracking + SQM-weighted depth — ✅ DONE
