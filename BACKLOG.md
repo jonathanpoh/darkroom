@@ -399,6 +399,46 @@ per-session values) — different code, worth its own entry.
   under `01_Deep Sky Objects` for DSO, so nothing needs to explicitly reject
   Sun, it would just stop getting scanned/ingested there.
 
+### B15. An identity edit orphaned the session's `session_guiding` row — ✅ FIXED
+
+> Fixed 2026-08-30 (`840605b`). `update_session_fields` now re-keys
+> `session_guiding` to the recomputed `session_id` inside the same identity
+> change that renames the row.
+
+Found 2026-08-30 while verifying the 12 rename proposals from F8's first live
+queue: 11 of 151 guiding rows stopped joining to any session.
+
+- **Cause:** `session_guiding` keys on `session_id` **TEXT** (F4 chose a side
+  table so "no guiding data" is simply row-absent), and SQLite has no cascade
+  here. W3's anti-orphan guarantee moved `processed_state`/`notes`/
+  `created_at` across a rename because they live *on* the renamed row, and U2's
+  `pending_renames` was safe because it keys on the numeric `session_row_id`.
+  `session_guiding` was the one side table keyed on the text id and never
+  wired in.
+- **Not F8's bug.** The web edit form has always been able to do this — any
+  identity edit orphaned the guiding row silently. F8 merely triggered it 11
+  times in one pass, which is what made it visible at all.
+- **The data was never lost**, just unreachable: the rows survived pointing at
+  session_ids that no longer existed, so the UI showed those 11 sessions as
+  having no guiding data.
+
+**Repair (worth recording, because the obvious fix was wrong):** the tempting
+move is a surgical SQL remap of old → new `session_id`. It is **not safe
+here** — the join key available (`lights_path`) is *not unique*: the legacy
+IC 4604 panels share one folder across several nights, so the remap mapped
+`IC4604_1-2` 2025-04-27's guiding onto the 2025-04-26 session and only failed
+loudly because of a UNIQUE constraint. Rehearsing on a copy caught it.
+The correct fix is that `session_guiding` is **derived data** — the PHD2 logs
+are the source of truth — so the orphans were deleted and `scan-guiding
+--apply` regenerated all 151 rows under current ids. Proof the remap would
+have been wrong: the two nights came back **9.58″ and 6.98″**, not one shared
+value.
+
+**Generalises to:** anything else keyed on `session_id` text. Today that's
+`rescan_proposals` (harmless — a stale proposal is superseded by the next
+scan) and `pending_renames` (already safe). Check this list before adding a
+new side table; prefer the numeric `sessions.id` as the foreign key.
+
 ### B10. Repo hygiene — untracked leftovers in the repo root — ✅ DONE
 > Captured 2026-07-12 (whole-app review). `ingest.yaml` (stale manifest) and
 > `tmp/` (loose IC 1848 frames) deleted 2026-07-13; `check_missing_object.py`
