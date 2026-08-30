@@ -36,6 +36,11 @@ _FILTER_ALIASES: dict[str, str] = {
     "LPro": "L-Pro",
     "LEnhance": "L-Enhance",
     "LUltimate": "L-Ultimate",
+    # Misspelling present on one archive folder (Astron-i-mik). Aliased rather
+    # than left to fall through: since M2 made _filter_from_path reject
+    # anything not in KNOWN_FILTERS, an unaliased typo would silently demote a
+    # correctly-filtered session to UnknownFilter.
+    "AstronimikL2": "AstronomikL2",
 }
 
 SESSION_GAP = timedelta(hours=4)

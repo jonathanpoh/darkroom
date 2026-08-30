@@ -9,6 +9,7 @@ from astropy.io import fits
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from darkroom.cataloger import (
+    _filter_from_path,
     parse_filter,
     parse_ota,
     make_session_id,
@@ -1476,3 +1477,50 @@ class TestAnalyzeSessionsSpan:
         assert len(result) == 1
         assert result[0]["start_utc"] == "2026-02-19T22:00:00"
         assert result[0]["end_utc"] == "2026-02-19T23:05:00"
+
+
+# ── _filter_from_path: folder names are not automatically filters (M2) ──────
+
+class TestFilterFromPath:
+    """A path component only names a filter if it actually is one.
+
+    Found by F8's first live dry run: a broadband star layer shot to be
+    composited onto narrowband data lived in
+    `.../20250802_FRA400_NoFilter_RGB_Stars/`, and taking the trailing
+    component invented `filter='Stars'`. Same class of bug U2 cleaned up when
+    mosaic panel names landed in the filter column.
+    """
+
+    def test_trailing_component_is_used_when_it_is_a_known_filter(self):
+        p = Path("NGC 7000/2025-08-01_FRA400_Canon6D_L-Extreme/Lights")
+        assert _filter_from_path(p) == "L-Extreme"
+
+    def test_filter_subfolder_layout_still_works(self):
+        p = Path("NGC 7000/2025-08-01_FRA400_Canon6D/Lights/L-Pro")
+        assert _filter_from_path(p) == "L-Pro"
+
+    def test_aliases_still_apply(self):
+        p = Path("NGC 7000/2025-08-01_FRA400_Canon6D/Lights/LPro")
+        assert _filter_from_path(p) == "L-Pro"
+
+    def test_star_layer_folder_recovers_the_filter_it_states(self):
+        """'Stars' is not a filter; the same name says NoFilter, so use that."""
+        p = Path(
+            "NGC 7000/2025-08-01_FRA400_Canon6D/20250802_FRA400_NoFilter_RGB_Stars"
+        )
+        assert _filter_from_path(p) == "NoFilter"
+
+    def test_non_filter_trailing_component_is_not_invented(self):
+        """No known filter anywhere in the name -> None, not a junk value."""
+        p = Path("NGC 7000/2025-08-01_FRA400_Canon6D/20250802_FRA400_RGB_Stars")
+        assert _filter_from_path(p) is None
+
+    def test_mosaic_panel_folder_is_not_a_filter(self):
+        """U2's known case: panel names must not land in the filter column."""
+        p = Path("IC 4604/2025-04-26_FRA400_Canon6D/Lights/IC4604_1-1")
+        assert _filter_from_path(p) is None
+
+    def test_misspelled_astronomik_is_aliased_not_rejected(self):
+        """One real archive folder is 'AstronimikL2'; it must not become None."""
+        p = Path("NGC 7000/2025-08-01_FRA400_Canon6D/Lights/AstronimikL2")
+        assert _filter_from_path(p) == "AstronomikL2"

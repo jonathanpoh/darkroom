@@ -67,8 +67,8 @@ from darkroom.cataloger import (
     find_lights_folders,
     make_session_id,
 )
-from darkroom.names import _normalize_target, normalize_session_fields
-from darkroom.parse import fits_files
+from darkroom.names import KNOWN_FILTERS, _normalize_target, normalize_session_fields
+from darkroom.parse import fits_files, normalize_filter
 
 DEFAULT_POINTING_TOLERANCE_DEG = 0.5
 
@@ -128,20 +128,29 @@ _IDENTITY_FIELDS = ("target", "obs_date", "ota", "camera", "filter")
 def _canonical_session_id(row: dict) -> str:
     """session_id this row WOULD have if its identity fields were canonical.
 
-    `make_session_id` only strips whitespace from the target — it does not
-    apply `_normalize_target`, while the disk-side scan (via
-    `SessionAnalyzer.analyze_sessions`) does. So a legacy row stored as
-    `SH2-101_...` and the same session freshly scanned as `Sh2-101_...` are
-    the same night under two spellings. Normalising both sides here is what
-    lets that be recognised as a rename instead of an unrelated
-    delete + create pair.
+    Every identity component is put through the same canonicalization the
+    disk-side scan applies, because each one can drift:
+
+    - **target**: `make_session_id` only strips whitespace, while the scan
+      also applies `_normalize_target` — so a legacy `SH2-101_...` row and a
+      fresh `Sh2-101_...` scan are the same night under two spellings.
+    - **filter**: a stored value that isn't a real filter (a mosaic panel
+      name like `IC4604_1-1`, U2) or is a misspelling (`AstronimikL2`) no
+      longer survives `_filter_from_path`'s KNOWN_FILTERS guard (M2), so the
+      fresh scan reports `UnknownFilter`/`AstronomikL2` for a row the catalog
+      still holds under the old value.
+
+    Without canonicalizing both, each of those surfaces as an unrelated
+    delete + create — which on apply would drop the row's id/created_at,
+    processed_state and session_guiding row and re-add a bare one.
     """
+    filter_ = normalize_filter(row.get("filter") or "")
     return make_session_id(
         _normalize_target(row.get("target") or ""),
         row.get("obs_date") or "",
         row.get("ota") or "",
         row.get("camera") or "",
-        row.get("filter"),
+        filter_ if filter_ in KNOWN_FILTERS else None,
     )
 
 

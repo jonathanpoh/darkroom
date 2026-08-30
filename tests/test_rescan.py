@@ -701,3 +701,76 @@ def test_ambiguous_rename_candidates_are_left_as_create_and_delete(tmp_path):
 
     assert "rename" not in kinds, "ambiguity must decline to guess"
     assert kinds == ["create", "delete", "delete"]
+
+
+# ── rename pairing across filter canonicalisation (M2) ─────────────────────
+#
+# _filter_from_path's KNOWN_FILTERS guard means a stored filter that was never
+# a real filter (a mosaic panel name) or was misspelled no longer round-trips
+# from disk. Both sides have to be canonicalised or the row surfaces as an
+# unrelated delete + create. Live: 9 such pairs on the real archive — the 8
+# IC 4604 panels and one 'AstronimikL2' Moon session.
+
+def _stored_under_filter(tmp_path, stored_filter: str):
+    """One night whose folder name yields no filter; catalog holds a junk one.
+
+    The frames carry no FILTER header and sit in a folder named for something
+    that isn't a filter, so the disk side resolves to None (-> UnknownFilter)
+    exactly as the live IC 4604 panels do. The catalog still holds the old
+    non-canonical value.
+    """
+    archive = tmp_path / "archive"
+    lights = (
+        archive / DSO / "M 81" / "2026-02-19_FRA400_ZWOASI585MCPro"
+        / "Lights" / stored_filter
+    )
+    lights.mkdir(parents=True)
+    for i, hour in enumerate(["21:00:00", "22:00:00", "23:00:00"]):
+        hdu = fits.PrimaryHDU()
+        h = hdu.header
+        h["OBJECT"] = "M 81"
+        h["DATE-OBS"] = f"2026-02-19T{hour}"
+        h["EXPOSURE"] = 180.0
+        h["INSTRUME"] = "ZWOASI585MCPro"
+        h["FOCALLEN"] = 400.0
+        h["GAIN"] = 200
+        h["CCD-TEMP"] = -20.0
+        h["RA"] = 148.89
+        h["DEC"] = 69.07
+        # No FILTER card — the live rigs don't write one (CLAUDE.md), which is
+        # why the folder name was being trusted in the first place.
+        hdu.writeto(lights / f"{i:04d}.fit", overwrite=True)
+
+    db = _db(tmp_path)
+    backend = LocalBackend(db)
+
+    create = _only_create(archive, backend)
+    row = _catalog_row_from_create(create, create["session_id"])
+    # Whatever the disk resolved to ('UnknownFilter' for a junk folder name,
+    # the aliased spelling for a misspelled one) is what the id carries.
+    disk_filter = create["session_id"].rsplit("_", 1)[1]
+    row["filter"] = stored_filter
+    row["session_id"] = create["session_id"].replace(disk_filter, stored_filter, 1)
+    upsert_session(db, row)
+    return archive, backend, row["session_id"], create["session_id"]
+
+
+def test_mosaic_panel_name_in_filter_column_pairs_as_a_rename(tmp_path):
+    """U2's junk filter values must not read as delete + create."""
+    archive, backend, old_id, new_id = _stored_under_filter(tmp_path, "IC4604_1-1")
+
+    proposals = scan(archive, backend)
+
+    assert [p["kind"] for p in proposals] == ["rename"]
+    assert proposals[0]["session_id"] == old_id
+    assert proposals[0]["changes"]["filter"]["current"] == "IC4604_1-1"
+
+
+def test_misspelled_filter_pairs_as_a_rename(tmp_path):
+    """'AstronimikL2' -> 'AstronomikL2' is a rename, not a new session."""
+    archive, backend, old_id, _ = _stored_under_filter(tmp_path, "AstronimikL2")
+
+    proposals = scan(archive, backend)
+
+    assert [p["kind"] for p in proposals] == ["rename"]
+    assert proposals[0]["session_id"] == old_id

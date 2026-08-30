@@ -31,6 +31,7 @@ from darkroom.parse import (
     reclassify_flat_dark,
 )
 from darkroom.names import (
+    KNOWN_FILTERS,
     _format_gain,
     _normalize_camera,
     _normalize_target,
@@ -214,16 +215,35 @@ def _filter_from_path(lights_path: Path) -> str | None:
                 (FITS directly in session folder, no Lights subdir)
 
     Aliases are applied so e.g. 'LPro' normalises to 'L-Pro'.
+
+    The trailing component is only trusted when it actually names a filter
+    (`names.KNOWN_FILTERS`). Folder names carry things that are not filters —
+    `.../20250802_FRA400_NoFilter_RGB_Stars` is a broadband star layer shot to
+    be composited onto narrowband data, and taking its last component invented
+    `filter='Stars'` (M2). When the last component isn't a known filter, the
+    remaining components are searched for one — which recovers the `NoFilter`
+    that folder does state — and failing that this returns None, so the
+    session lands in the U2 review queue as UnknownFilter rather than
+    inventing a value. Same class of bug U2 cleaned up when mosaic panel
+    names ended up in the filter column.
     """
     if lights_path.parent.name == "Lights":
-        raw = lights_path.name
+        parts = [lights_path.name]
     elif lights_path.name == "Lights":
         parts = lights_path.parent.name.split("_")
-        raw = parts[-1] if len(parts) >= 4 else None
+        parts = parts if len(parts) >= 4 else []
     else:
         parts = lights_path.name.split("_")
-        raw = parts[-1] if len(parts) >= 4 else None
-    return normalize_filter(raw) if raw else None
+        parts = parts if len(parts) >= 4 else []
+
+    if not parts:
+        return None
+    # Last component first (the canonical position), then the rest.
+    for raw in [parts[-1], *parts[:-1]]:
+        candidate = normalize_filter(raw)
+        if candidate in KNOWN_FILTERS:
+            return candidate
+    return None
 
 
 def find_lights_folders(root: Path) -> list[Path]:
