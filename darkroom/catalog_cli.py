@@ -125,6 +125,120 @@ def _scan_processed_run(args: argparse.Namespace) -> None:
     print(f"\nApplied {applied} change(s), {len(transitions) - applied} unchanged")
 
 
+def _print_rescan_summary(proposals: list[dict]) -> None:
+    """Group proposals by target; show each proposal's tier and changed fields."""
+
+    def sort_key(p: dict) -> tuple[str, str, str]:
+        return (p.get("target") or "", p.get("obs_date") or "", p["session_id"])
+
+    for tgt, group in groupby(
+        sorted(proposals, key=sort_key), key=lambda p: p.get("target") or "(no target)"
+    ):
+        print(f"\n{tgt}")
+        for p in group:
+            print(f"  {p.get('obs_date') or '?'}  {p['session_id']}  [{p['kind']}/{p['tier']}]")
+            for field, delta in sorted(p["changes"].items()):
+                print(f"      {field}: {delta['current']!r} -> {delta['proposed']!r}")
+
+
+def _confirm_empty_disk(catalog_session_count: int, args: argparse.Namespace) -> bool:
+    """Warn + require confirmation before treating '0 sessions on disk' as real.
+
+    The archive root existing but the walk finding nothing (unmounted-but-
+    present mountpoint, wrong --archive subdirectory, permissions) must never
+    be waved through into a proposal to delete every catalog session. --yes
+    skips the prompt for non-interactive use; matching `ingest review`'s
+    posture (CLAUDE.md), no TTY and no --yes refuses rather than proceeding.
+    """
+    print(
+        f"WARNING: 0 sessions found on disk, but {catalog_session_count} session(s) "
+        f"are in the catalog — proceeding would push {catalog_session_count} "
+        "'delete' proposal(s) to the review queue.\n"
+        "This almost always means the archive isn't actually mounted/reachable "
+        "at --archive, not that it was genuinely wiped.",
+        file=sys.stderr,
+    )
+    if args.yes:
+        return True
+    if not sys.stdin.isatty():
+        print(
+            "Error: refusing without --yes (no TTY to confirm).",
+            file=sys.stderr,
+        )
+        return False
+    answer = input("Type 'yes' to proceed anyway, or press Enter to abort: ").strip()
+    return answer == "yes"
+
+
+def _rescan_archive_run(args: argparse.Namespace) -> None:
+    """Diff the archive against the catalog and queue divergences for review (F8).
+
+    Strictly read-only pass: rescans <archive>/01_Deep Sky Objects/ (the same
+    walk `scan-lights` uses) and diffs it against the catalog, classifying
+    each session_id found on either side as matching (no-op), diverging
+    (update), on-disk-only (create), or catalog-only (delete). Dry run by
+    default — prints a grouped summary, writes nothing.
+
+    --apply does NOT edit any session row. It calls
+    darkroom.rescan.apply -> backend.replace_rescan_proposals, which PUSHES
+    these findings to the rescan_proposals review queue (superseding the
+    previous pending set — applied/dismissed rows are left alone as the audit
+    trail). A human (or the queue's pre-approved 'safe' tier) still has to
+    apply each one from there; nothing about this command touches `sessions`.
+
+    Refuses outright if the archive's DSO root doesn't exist at all (an
+    unmounted NAS must never read as "archive is empty"), and warns +
+    requires confirmation (--yes, or a 'yes' at the prompt) if the root
+    exists but the walk finds 0 sessions while the catalog has some — that
+    shape is what a wrong/partially-mounted --archive looks like, and taking
+    it at face value would generate a delete proposal for every session in
+    the catalog. An empty catalog with a full disk (ordinary first run)
+    never triggers either guard.
+    """
+    from darkroom import rescan
+
+    backend = resolve_backend(
+        args.catalog, url_flag=args.catalog_url, token_flag=args.api_token
+    )
+    archive = resolve_path(args.archive, "DARKROOM_ARCHIVE", "archive_path")
+    if archive is None:
+        sys.exit("Error: --archive / DARKROOM_ARCHIVE / darkroom.toml archive_path required")
+
+    try:
+        proposals = rescan.scan(
+            archive, backend, pointing_tolerance_deg=args.pointing_tolerance
+        )
+    except rescan.ArchiveRootMissing as e:
+        sys.exit(
+            f"Error: {e}\n"
+            "Hint: check --archive / DARKROOM_ARCHIVE / darkroom.toml archive_path "
+            "— is the NAS actually mounted?"
+        )
+    except rescan.EmptyDiskDivergence as e:
+        if not _confirm_empty_disk(e.catalog_session_count, args):
+            sys.exit("Aborted.")
+        proposals = rescan.scan(
+            archive, backend, pointing_tolerance_deg=args.pointing_tolerance,
+            allow_empty_disk=True,
+        )
+
+    if not args.apply:
+        _print_rescan_summary(proposals)
+        counts = Counter(p["kind"] for p in proposals)
+        tiers = Counter(p["tier"] for p in proposals)
+        parts = [f"{n} {kind}" for kind, n in sorted(counts.items())]
+        summary = ", ".join(parts) if parts else "no divergences found"
+        print(
+            f"\n{summary} ({tiers.get('safe', 0)} safe, {tiers.get('review', 0)} review); "
+            "run with --apply to push these to the review queue "
+            "(this does NOT write to sessions)"
+        )
+        return
+
+    written = rescan.apply(backend, proposals)
+    print(f"Pushed {written} proposal(s) to the review queue ({len(proposals)} found)")
+
+
 def _scan_guiding_run(args: argparse.Namespace) -> None:
     """Match PHD2 guide-log segments to sessions by time and store the stats.
 
@@ -730,6 +844,38 @@ def add_subparser(subparsers) -> None:
     sp.add_argument("--apply", action="store_true",
                      help="Write proposed changes to the catalog (default: dry run, read-only)")
     sp.set_defaults(func=_scan_processed_run)
+
+    rs = sub.add_parser(
+        "rescan-archive", parents=[catalog_flag, catalog_url_flag],
+        help="Diff the archive against the catalog and queue divergences for review",
+        description="Strictly read-only pass over <archive>/01_Deep Sky Objects/ "
+                    "(the same walk `scan-lights` uses), diffed against the catalog "
+                    "(resolve_backend().query_sessions()). Classifies each session_id "
+                    "found on either side as matching (no-op), diverging (update), "
+                    "on-disk-only (create), or catalog-only (delete) — see BACKLOG.md "
+                    "F8. Dry run by default (prints a grouped summary, writes "
+                    "nothing). --apply does NOT edit any session row — it pushes the "
+                    "findings to the rescan_proposals review queue (superseding the "
+                    "previous pending set), for a human (or the queue's pre-approved "
+                    "'safe' tier — a pure frame_count/total_integration_sec change) "
+                    "to apply from there. Refuses outright if the archive's DSO root "
+                    "doesn't exist; warns and requires --yes (or a 'yes' at the "
+                    "prompt) if the root exists but 0 sessions are found on disk "
+                    "while the catalog is not empty, since taking that at face "
+                    "value would delete-propose every session in the catalog.",
+    )
+    rs.add_argument("--archive", metavar="PATH", help="Archive root (env: DARKROOM_ARCHIVE)")
+    rs.add_argument("--pointing-tolerance", type=float, default=0.5, metavar="DEG",
+                     help="RA/Dec divergence tolerance in degrees, wrapping RA at "
+                          "360 (default: 0.5)")
+    rs.add_argument("--apply", action="store_true",
+                     help="Push proposals to the review queue (default: dry run, "
+                          "read-only; this does NOT write to sessions)")
+    rs.add_argument("--yes", action="store_true",
+                     help="Skip the confirmation prompt when the disk scan finds "
+                          "0 sessions but the catalog is not empty (required for "
+                          "non-interactive use in that case)")
+    rs.set_defaults(func=_rescan_archive_run)
 
     sg = sub.add_parser(
         "scan-guiding", parents=[catalog_flag],
