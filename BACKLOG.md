@@ -1712,14 +1712,21 @@ neither.
 > pairs), 5 delete (C 49 ×3, IC 1805, NGC 7000 2026-06-16 — genuinely absent
 > from disk), 1 create, 16 update. Zero safe-tier, so nothing is
 > bulk-appliable on a catalog with this much legacy drift; every one needs an
-> individual look. **Not yet pushed to the queue** (`--apply` never run).
+> individual look. Pushed to the queue 2026-08-30 (`--apply`, 24 rows into
+> `rescan_proposals`); verified it wrote no session rows — counts unchanged and
+> zero sessions with today's `updated_at`.
 >
-> **Known false positive, deferred:** the 1 create is
-> `NGC7000_20250801_FRA400_Canon6D_Stars` — a `Stars` folder from processing
-> being read as a filter. Jonathan confirmed 2026-08-30 it's a processing
-> byproduct, to be discussed separately. It also drags one `update` with it
-> (that night's `end_utc` shifts, since those frames currently sit inside the
-> catalogued session's span).
+> **One proposal to leave pending — see M2.** The single `create` is
+> `NGC7000_20250801_FRA400_Canon6D_Stars`. First read of it (including in an
+> earlier revision of this entry) was that it's a processing byproduct
+> mis-scanned as lights. **That was wrong** — checking the files, the folder
+> holds 40 *raw* lights (20×10s + 20×30s @ ISO800), a short-exposure star
+> layer shot after the main 12×300s ISO1600 run. The create is therefore
+> *correct*: those frames really are uncatalogued. What's wrong is that the
+> folder name becomes `filter='Stars'`, so applying it writes a junk filter.
+> It also drags one `update` with it — the parent's `end_utc` shrinks, because
+> the stored span had swallowed the star layer's frames. That update is a
+> genuine correction. M2 owns the modelling question.
 >
 > **Both scope questions in this entry were decided before building:**
 > - *Shape:* CLI **plus** the `/queue`-style web view, not CLI-only. Forced by
@@ -2109,6 +2116,101 @@ follow once there is a second mosaic to test against.
 
 ---
 
+### M2. Sub-folders inside a session folder are scanned as sessions, and their name becomes the *filter*
+
+Filed 2026-08-30, out of F8's first live dry run, which proposed creating
+`NGC7000_20250801_FRA400_Canon6D_**Stars**` — a session whose "filter" is
+`Stars`. Same family as **M1** in that both are non-standard grouping *inside*
+a target that the scanner has no vocabulary for, but the two are not the same
+problem and shouldn't share a fix (see the split below).
+
+**What's actually on disk** (checked, not assumed — the first read of this was
+wrong):
+
+```
+NGC 7000/2025-08-01_FRA400_Canon6D/
+  Light_NGC 7000_300.0s_..._ISO1600_20250801-*.fit    ← 12 frames, the session
+  20250802_FRA400_NoFilter_RGB_Stars/
+    Light_NGC 7000_10.0s_..._ISO800_20250802-*.fit    ← 20 frames
+    Light_NGC 7000_30.0s_..._ISO800_20250802-*.fit    ← 20 frames
+```
+
+Those 40 files are **raw lights, not processed output** — a deliberate
+short-exposure star layer (10s/30s @ ISO800) shot after the main run
+(300s @ ISO1600) for star reduction/replacement during processing. The folder
+exists *for* processing, which is why it reads as a processed-data folder at a
+glance, but nothing in it is a processing artifact. `_Processed` is already in
+`cataloger._SKIP_DIR_NAMES_LOWER`; this folder is correctly *not* skipped.
+
+**So the create proposal is right and the diagnosis of "false positive" was
+wrong.** Those 40 frames genuinely are not in the catalog. Two things are
+wrong around it instead:
+
+1. **The folder name becomes the filter.** `find_lights_folders` collects any
+   directory holding FITS, and the filter falls out of the path, so
+   `..._RGB_Stars` yields `filter='Stars'`. The folder name even says
+   `NoFilter`. A filter value is being invented out of a folder name that
+   encodes *purpose*, not filtration — the same class of bug **U2** cleaned up
+   when mosaic panel names landed in the filter column.
+2. **The parent session's span silently covered it.** F8 also proposes
+   `end_utc: 2025-08-02T00:02:11 -> 2025-08-01T22:25:15` on the parent. The
+   stored value ran to the *star layer's* last frame, because at ingest both
+   sets were grouped into one session by imaging night. That proposal is a
+   genuine correction, and it's the same "one folder, two things" hazard F4
+   hit from the other direction (`backfill-times` had to filter frames to the
+   session's own night because one `lights_path` can hold several).
+
+**Jonathan's intent, confirmed 2026-08-30:** these were shot deliberately —
+*"RGB stars to be composited with the narrowband data"*. That's the standard
+narrowband workflow (broadband stars grafted onto an NB stack, because NB
+stars are colourless and bloated), so this is a **repeatable technique, not a
+one-off**. It will recur on every narrowband target he wants natural stars on,
+which moves this from "clean up one bad row" to "the catalog needs to be able
+to express this".
+
+**The real modelling question, and why it isn't M1's:** a night can contain
+more than one *acquisition run* — a narrowband main integration plus a short
+broadband star layer. M1's panel is a **spatial** subdivision of one run; this
+is a **purpose** subdivision of one night on the same framing.
+
+**But the confirmation above probably settles it cheaply.** The star layer is
+shot *through a different filter* from the narrowband run it serves — that's
+the entire point of it. Filter is already an identity component, so the two
+runs already produce distinct `session_id`s naturally, with no new dimension
+at all. On that reading the whole fix is: **take the filter from the frames,
+not the folder name**, and this becomes an ordinary second session for the
+night, correctly filtered `NoFilter`/RGB, sitting alongside the narrowband one.
+No `purpose` column, no schema change, and the per-filter breakdown in the UI
+already shows them separately.
+
+Two things to check before committing to that:
+- Does anything downstream assume one filter per night per rig? Flat matching
+  keys on OTA+camera+filter, so a `NoFilter` star layer wants its own flats —
+  which is correct behaviour, but confirm `find_flats` handles the night
+  having two.
+- Does WBPP prep do anything silly with two sessions on one night that are
+  *meant* to be stacked separately? They should be two SESSION_N dirs, which
+  is what `prep` already does per session row.
+
+The fallback, if that turns out not to hold: a `purpose`/`layer` column
+(`main`/`stars`/`hdr`, default `main`) parallel to M1's `panel`. Skipping the
+folder outright is the one option to reject — these are real lights that
+belong in the archive and the integration totals.
+
+**Do the cheap half first regardless of which:** a filter value should never be
+invented from a folder-name component that isn't a known filter.
+`names.KNOWN_FILTERS` already exists (U2) — refusing to accept `Stars` as a
+filter, and falling back to the FITS `FILTER` header or `NoFilter`, is a small
+fix that stops the bad value entering the catalog while the modelling question
+stays open. **Until it's decided, leave that create proposal pending in
+`/rescan`** — applying it writes `filter='Stars'` into the catalog.
+
+Live scope: one occurrence today (this NGC 7000 night). Like M1, nothing is
+currently broken by it — but unlike M1 it is *actively producing a wrong
+catalog row* the moment someone clicks Apply on the queue.
+
+---
+
 ## Suggested order for a future session
 1. **B1 + B2** (finish + flat-darks) — silent data-pipeline failures, with tests. ✅ DONE
    — **B12** (flat-morning ranking) ✅ DONE 2026-07-29 is the third of the same
@@ -2169,7 +2271,9 @@ follow once there is a second mosaic to test against.
     Filed 2026-08-29 out of the SH2-101 2026-07-19 mis-slew fixup (5 of 92
     subs actually on target; the rest needed hand-built catalog corrections
     because no rescan path reached the live catalog) — that hand-correction
-    is now `catalog rescan-archive`. Deployed to the LXC 2026-08-30.
-    **Open follow-up:** work the 24 proposals the first dry run found (run
-    `rescan-archive --apply` to push them to `/rescan`), and decide what to do
-    about processing byproduct folders like `_Stars` being read as filters.
+    is now `catalog rescan-archive`. Deployed to the LXC 2026-08-30, and its
+    first 24 proposals are queued in `/rescan` awaiting review.
+    **Open follow-up:** work that queue (hold the one `create` — see **M2**),
+    and re-run `scan-guiding` for any session whose `start_utc`/`end_utc` you
+    end up changing, since `backfill-times` only fills NULL spans and won't
+    revisit them.
