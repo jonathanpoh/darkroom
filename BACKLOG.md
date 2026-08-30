@@ -2197,17 +2197,44 @@ The fallback, if that turns out not to hold: a `purpose`/`layer` column
 folder outright is the one option to reject — these are real lights that
 belong in the archive and the integration totals.
 
-**Do the cheap half first regardless of which:** a filter value should never be
-invented from a folder-name component that isn't a known filter.
-`names.KNOWN_FILTERS` already exists (U2) — refusing to accept `Stars` as a
-filter, and falling back to the FITS `FILTER` header or `NoFilter`, is a small
-fix that stops the bad value entering the catalog while the modelling question
-stays open. **Until it's decided, leave that create proposal pending in
-`/rescan`** — applying it writes `filter='Stars'` into the catalog.
+#### The cheap half — ✅ DONE 2026-08-30 (`0e54759`)
 
-Live scope: one occurrence today (this NGC 7000 night). Like M1, nothing is
-currently broken by it — but unlike M1 it is *actively producing a wrong
-catalog row* the moment someone clicks Apply on the queue.
+`_filter_from_path` now only trusts the trailing component when it is in
+`names.KNOWN_FILTERS`; otherwise it searches the remaining components for one,
+and failing that returns `None` so the session reaches U2's queue as
+`UnknownFilter` rather than carrying an invented value. The NGC 7000 star
+layer now resolves to the `NoFilter` its own folder name states. Also aliased
+`AstronimikL2` → `AstronomikL2` (one archive folder is misspelt; with the
+guard in place an unaliased typo would silently demote a correctly-filtered
+session to `UnknownFilter`).
+
+**Two things this surfaced that were not visible before:**
+
+1. **It fixed 8 mosaic rows as a side effect.** The IC 4604 panel names
+   (`IC4604_1-1` …) were sitting in the filter column — U2 knew about this and
+   couldn't clean it up because nothing recomputed those rows. They now
+   resolve to `UnknownFilter` on disk and appear as **rename** proposals, so
+   M1's "the panel name is not a filter" half is already half-solved by the
+   guard; what M1 still owes is the `panel` column that gives them somewhere
+   correct to live.
+2. **`rescan._canonical_session_id` had to canonicalize filter too.** Without
+   it those 9 rows (8 panels + the misspelt Moon session) surfaced as
+   unrelated delete + create pairs rather than renames — which on apply would
+   have dropped `id`/`created_at`/`processed_state`/`session_guiding`. General
+   rule now encoded there: **every identity component must be canonicalized on
+   both sides, or drift in any one of them reads as "different session".**
+
+Live dry run went 24 → 33 proposals, but the composition is the point:
+5 delete (unchanged, all genuine), **12 rename** (was 2), 1 create (now
+correctly `NoFilter`, was `Stars`), 15 update.
+
+#### Still open
+
+The modelling question above — whether a star layer is just an ordinary second
+session separated by filter (likely), or wants a `purpose`/`layer` column. The
+`create` proposal in `/rescan` is now *safe to apply* (it writes `NoFilter`,
+not `Stars`), but applying it commits to the "ordinary second session" reading,
+so it's worth deciding first rather than by default.
 
 ---
 
