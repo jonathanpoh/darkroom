@@ -2067,6 +2067,28 @@ site lat/lon, angular separation.
 
 ### M1. Model mosaic panels as a session dimension, not as separate targets
 
+> **✅ INGEST HALF DONE 2026-08-30** (`66fd93a`, `9bbf42a`, `8cde7de`; tests in
+> `tests/test_panel.py`, suite 1142 → 1190). `parse_panel` + `panel_from_dirname`,
+> the nullable `sessions.panel` column, panel-aware `make_session_id` /
+> `session_dest_rel` (keyword-only `panel=None`, so every pre-M1 call is
+> byte-identical), and the wiring through `scanner` → `ingest` →
+> `ingest_review` → `catalog_db` → `webapi.SessionIn`. The 50mm blocker is
+> cleared: `parse_ota` has a 45–55 window and `KNOWN_OTAS` has the name.
+>
+> Two things landed beyond the touchpoint table below, because that table
+> predates F8 and would have left the archive-read side lying:
+> `cataloger._filter_from_path` now skips a trailing `P<panel>` dir (without it
+> every panel reads as `UnknownFilter`, since the panel dir sits where the
+> filter dir used to), `analyze_sessions` records the panel, and
+> `rescan._canonical_session_id` splits a legacy panel-in-target row so it
+> reads as a **rename** rather than a delete + create — the latter would drop
+> the row's `processed_state` and its `session_guiding` row on apply.
+>
+> **Still open (the deferred half):** per-panel WBPP trees
+> (`~/WBPP/M8_P1-1/`), `finish` → `_Processed/<date>/P1-1/`, the web UI's
+> panel-aware target rollups and its `_PANEL_SUFFIX_RE` suggestion, and the
+> live IC 4604 migration (still blocked on the lost filter for those 2 nights).
+
 Queued 2026-07-30, out of Jonathan's question: the U2 cleanup queue flags
 `IC 4604_1-1` … `IC 4604_2-2` as a probable 4-panel mosaic — so how should a
 mosaic actually be laid out in the archive?
@@ -2174,7 +2196,21 @@ The web-UI panel-aware totals and the per-panel WBPP prep can still follow.
   That is correct and expected, not a failure to debug.** F4's design already
   treats "no guiding data" as row-absent rather than an error.
 
-**⚠️ Blocker to clear before ingesting: 50mm has no OTA mapping.**
+**Headers read off the real frames 2026-08-30** (preliminary-processing copy at
+`~/02_Astrophotography/03_Processing/WBPP/M8_Mosaic/Lights/`), which corrects
+two assumptions above:
+
+| | |
+|---|---|
+| Folders | `M 8_1-1` … `M 8_4-2` — a **4×2 grid**, target with a space, panel after an underscore |
+| `FOCALLEN` | **51** on every panel, not a nominal 50 — same measured-vs-nominal drift as FRA400 reporting 402. The 45–55 window covers it with room to spare |
+| `INSTRUME` | **`ZWO ASI585MC Pro`** — ⚠️ *not* Canon6D, as the "Canon lens legacy" note below assumed. The 50mm is on the ZWO body, so the folder reads `2026-08-13_Canon50mm_ZWOASI585MCPro`. **Verify the lens is actually a Canon before this is baked in** |
+| `FILTER` | absent, as always — filter comes from the filename: `AstronimikL2`, already aliased to `AstronomikL2` (M2) and in `KNOWN_FILTERS` |
+| `OBJECT` | `'M 8_1-1'` — the panel is in the header too, so the archive-side scan needs `parse_panel`, not just the ingest scan |
+| Other | 30s subs, gain 200, 2026-08-13, `TELESCOP` `ZWO AM5N`, and a new `176deg` rotator component in the filename (harmless — `parse_filter` still reads `parts[-2]`) |
+
+**⚠️ Blocker to clear before ingesting: 50mm has no OTA mapping.** *(cleared —
+see the DONE banner; retained for the reasoning.)*
 `parse.parse_ota` only covers 170–190 (`FMA180`), 270–290 (`FRA400-07x`) and
 390–410 (`FRA400`); everything else returns `"Unknown"`. So all 8 panel
 sessions would ingest with `ota='Unknown'`, which (a) bakes `Unknown` into
@@ -2407,8 +2443,10 @@ so it's worth deciding first rather than by default.
     **B7**/**R1–R5** leftovers. R1, R2, R4, R5 and B7 all landed 2026-07-29;
     only R3 remains from that block. Litestream (continuous DB replication)
     also lands here as an optional upgrade over the nightly backup.
-13. **M1** (mosaic panels as a session dimension) — design settled 2026-07-30,
-    unbuilt. **⚠️ NOW THE TOP PRIORITY as of 2026-08-30: an 8-panel 50mm
+13. **M1** (mosaic panels as a session dimension) — **ingest half ✅ DONE
+    2026-08-30**; the WBPP/UI half and the IC 4604 migration remain. The
+    mosaic is now ingestable. Original note follows. **⚠️ WAS THE TOP
+    PRIORITY as of 2026-08-30: an 8-panel 50mm
     mosaic around M8 is shot and waiting to be ingested, and Jonathan is
     holding the ingest until this lands.** Ingesting first recreates the
     five-fake-targets mess (IC 4604 is currently 5 separate "targets") and
