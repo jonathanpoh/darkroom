@@ -1,6 +1,7 @@
 # darkroom — Command Cheatsheet
 
-Quick reference for the `darkroom` CLI. For the full design brief see `CLAUDE.md`.
+Quick reference for the `darkroom` CLI. For the full design brief see `CLAUDE.md`;
+for what's currently waiting on you, see `BLOCKERS.md`.
 
 ```
 SD card ──ingest──▶ NAS archive ──wbpp──▶ ~/WBPP/SESSION_N (symlinks)
@@ -8,6 +9,8 @@ SD card ──ingest──▶ NAS archive ──wbpp──▶ ~/WBPP/SESSION_N (
                         │                   PixInsight WBPP
                         │                        │
                         └────────finish──────────┘   (stacks back to archive + mark processed)
+
+ASIAir logs ──logs import──▶ NAS 00_Logs ──backfill-times──▶ scan-guiding ──▶ guiding stats
 
 catalog = the source of truth (astro_catalog.db).  triage = one-off archive cleanup.
 ```
@@ -103,7 +106,7 @@ had to clean up. `ingest review` recomputes all three (plus the per-file copy
 plan and the new/existing/topup verdict), which is the whole reason it exists.
 
 **Safe to hand-edit:** `notes`, and a file's `copy` flag.
-**Never by hand:** `target`, `filter`, `ota`, `camera`, `obs_date`,
+**Never by hand:** `target`, `filter`, `ota`, `camera`, `obs_date`, `panel`,
 `session_id`, `set_id`, `lights_rel_path`, `folder_rel_path`, any `dst`.
 
 #### CCC postflight
@@ -164,6 +167,24 @@ commit would break every copy.
 
 Sessions are grouped by **imaging night** (local noon-to-noon), so a run that crosses
 midnight stays one session, dated to the night it began.
+
+#### Mosaic panels
+
+The ASIAir writes one folder per panel (`M 8_1-1` … `M 8_4-2`). Ingest splits
+that into the base target `M 8` plus a `panel` of `1-1`, so the object stays
+one target and each panel-night gets its own session row:
+
+```
+M8_20260813_Canon50mm_ZWOASI585MCPro_AstronomikL2_P1-1
+01_Deep Sky Objects/M 8/2026-08-13_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P1-1/
+```
+
+`review` shows a `Panel` line when one is set and offers **Change mosaic
+panel** (blank it to make the session ordinary). `panel` is an identity field,
+so editing it recomputes the session_id and the destination like any other.
+
+> `wbpp` is **not** panel-aware yet — it would stack non-overlapping panels
+> together, which cannot register. Prep mosaics by hand until that lands.
 
 ---
 
@@ -278,6 +299,71 @@ manually / from disk.
 | `list [--target NAME]` | Browse sessions, with integration time and processed state. |
 | `mark <session_id> <state> [--date/--path/--notes]` | Set one session's `processed_state` by hand (`<state>` validated). |
 | `scan-processed --archive PATH [--apply]` | Reconcile `processed_state` from archive artifacts (dry run without `--apply`; only upgrades, never touches `skipped`). Uses PixInsight WBPP logs for **exact** night→edit attribution where they exist (`[log …]`), else a date-bound heuristic (`[date-bound …]`). |
+| `rescan-archive --archive PATH [--apply] [--yes]` | Diff the archive against the catalog and queue each divergence as a proposal in the web UI's `/rescan` page. Does not write session rows directly. |
+| `apply-renames --archive PATH [--apply]` | Execute the folder moves owed by web-UI identity edits (the server has no NAS mount, so it can only record them). |
+| `backfill-times [--archive PATH] [--apply]` | Fill `start_utc`/`end_utc` from DATE-OBS/EXPTIME. Only touches rows where they are **NULL**. |
+| `scan-guiding [--logs DIR] [--settle-exclude SEC] [--apply]` | Match archived PHD2 logs to sessions **by time** and store per-session guiding stats. Needs `backfill-times` first. |
+| `backfill-sites [--archive PATH] [--apply]` | Fill `site_lat`/`site_lon` from FITS SITELAT/SITELONG. |
+| `sites …` | Manage observing sites (used for SQM and home-equivalent hours). |
+
+### Archive ↔ catalog reconciliation
+
+```bash
+# What does the disk say that the catalog doesn't? (dry run)
+darkroom catalog rescan-archive --archive "$DARKROOM_ARCHIVE"
+#   → review the proposals at /rescan in the web UI, then:
+darkroom catalog rescan-archive --archive "$DARKROOM_ARCHIVE" --apply
+
+# Drain the rename ledger after editing identity fields in the web UI
+darkroom catalog apply-renames --archive "$DARKROOM_ARCHIVE"          # dry run
+darkroom catalog apply-renames --archive "$DARKROOM_ARCHIVE" --apply
+```
+
+Proposal kinds: `update` (frame count/integration changed — e.g. you culled bad
+subs), `rename` (an identity field diverged), `create` (folder with no catalog
+row), `delete` (row with no folder). They are queued rather than applied
+because a `delete` against an unmounted NAS looks exactly like a genuinely
+removed session.
+
+**The rename ledger exists because the server has no NAS mount.** Editing an
+identity field in the web UI recomputes `session_id` and `lights_path`
+immediately, but the folder move is recorded in `pending_renames` for the Mac
+to execute. Until you run `apply-renames`, catalog and archive disagree — by
+design, not by accident.
+
+### Guiding stats — `logs import` → `backfill-times` → `scan-guiding`
+
+```bash
+# 1. Get the logs off the SD card (it gets rotated and cleared)
+darkroom logs import --source /Volumes/ASIAIR/log            # dry run
+darkroom logs import --source /Volumes/ASIAIR/log --apply
+
+# 2. Give every session a UTC wall-clock span (one-off for legacy rows;
+#    ingest populates it for free on new ones)
+darkroom catalog backfill-times --apply
+
+# 3. Intersect the guide logs with those spans
+darkroom catalog scan-guiding --apply
+```
+
+Run them in that order — `scan-guiding` needs `start_utc`/`end_utc` to exist.
+
+- **Guide logs are matched by TIME ONLY, never by target name.** The names in
+  the logs are whatever was typed at acquisition and are sometimes wrong; the
+  catalog is the corrected truth. A whole date range matching nothing means the
+  ASIAir's clock/timezone was off — `scan-guiding` reports that both ways
+  (unmatched logs *and* unmatched sessions) and never auto-corrects it.
+- **`coverage` is the honest guard.** Guided seconds ÷ session wall span;
+  under 0.8 means a partial log and the UI says so.
+- **`--settle-exclude` (default 15s)** is how much post-dither settling is
+  discarded. Leave it alone — the stored numbers are only comparable across
+  sessions at one setting.
+- **Re-run `scan-guiding` after changing any session's span.** `backfill-times`
+  only fills NULLs and won't revisit a row, so a guiding row derived from an
+  old span stays stale silently.
+- **No guide log is not an error.** A session shot without the guidescope
+  simply has no `session_guiding` row; `scan-guiding` will list it as unmatched
+  and that is correct.
 
 ### `darkroom catalog migrate-archive` — one-off layout migration
 
@@ -340,6 +426,11 @@ darkroom finish --target "M 81"
 
 # Check the books
 darkroom catalog list --target "M 81"
+
+# D. Periodically: archive the ASIAir logs and refresh guiding stats
+darkroom logs import --source /Volumes/ASIAIR/log --apply
+darkroom catalog backfill-times --apply
+darkroom catalog scan-guiding --apply
 ```
 
 ---
@@ -362,6 +453,22 @@ darkroom catalog list --target "M 81"
 - **`ModuleNotFoundError` only when a prompt appears** → the bare `darkroom` on
   PATH is a `uv tool` install whose dependencies are stale. Fix:
   `uv tool install --force --editable .` from the repo. See below.
+- **Everything that writes is a dry run by default.** `--apply` is the verb that
+  writes, on `logs import`, `scan-processed`, `rescan-archive`, `apply-renames`,
+  `backfill-times`, `backfill-sites` and `scan-guiding`. `ingest` is the
+  exception: its write step is `commit`.
+- **`apply-renames` is owed after every web-UI identity edit** — the server
+  can't reach the NAS, so the folder move waits for you on the Mac.
+- **`backfill-times` only fills NULLs.** Change a session's span and you must
+  clear it before the backfill will revisit, then re-run `scan-guiding` or the
+  guiding row stays stale.
+- **A camera lens can impersonate a telescope.** OTA is inferred from
+  `FOCALLEN` alone, so a Canon 100-400 zoom shot at 180mm reads as `FMA180` and
+  at 400mm as `FRA400` — confidently wrong rather than `Unknown`, so nothing
+  flags it. Correct the OTA in `ingest review` when using a zoom.
+- **`uv run pytest` on a fresh checkout or worktree** fails with
+  `Failed to spawn: pytest` until you run `uv sync --extra dev` once — pytest
+  is in the `dev` extra, not the base dependencies.
 
 ## Bare `darkroom` vs `uv run darkroom`
 

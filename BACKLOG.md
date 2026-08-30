@@ -2160,8 +2160,8 @@ duplicate detection all keep working unchanged.
 One session row per **panel-night**: 4 panels × 2 nights = 8 rows, each with its
 own frame count and integration. That is the correct grain — panel `2-2`
 genuinely has less data than `1-1`, and panels accumulate across nights
-independently (live data: `1-1` was revisited on 2025-05-24, `2-1`/`2-2` were
-not).
+independently (live data: the 2025-04-26 and 2025-05-24 nights have different
+per-panel frame counts, and 2025-04-27 has a 2-frame tail on `1-2` alone).
 
 #### Why not the alternatives
 
@@ -2195,6 +2195,13 @@ nesting can't leak frames into a sibling panel's symlink set), and flat/dark
 matching never keys on target.
 
 #### Migrating the live IC 4604 rows (verified against the live catalog 2026-07-30)
+
+> **Re-verified against the live server 2026-08-30 — two corrections:** there
+> are **10** rows carrying `4604`, not nine; and **all four panels** were
+> revisited on 2025-05-24, not just `1-1`. So the mosaic is two complete
+> 4-panel nights (2025-04-26 and 2025-05-24) plus the 2-frame 2025-04-27 tail
+> and the bare 2023-07-15 single-pointing session. All 10 now have
+> `filter = NULL`. See `BLOCKERS.md` #3 for the per-row table.
 
 Nine rows carry `4604`. Eight are panels, and the panel name landed in **both**
 the target and the filter column (`target: 'IC 4604_1-1'`,

@@ -20,7 +20,17 @@ ASIAir SD ──[CCC]──▶ Mac staging ──[darkroom ingest]──▶ NAS 
                               [darkroom finish] ──▶ NAS _Processed/<date>/
                                      │
                                      └─▶ mark sessions processed in catalog
+
+ASIAir logs ──[darkroom logs import]──▶ NAS 00_Logs/ASIAir/
+                                             │
+                       [catalog backfill-times] ──▶ sessions.start_utc/end_utc
+                                             │
+                       [catalog scan-guiding] ──▶ per-session guiding quality
 ```
+
+See [`BLOCKERS.md`](BLOCKERS.md) for the tasks currently waiting on a human
+decision or a mounted NAS, and [`BACKLOG.md`](BACKLOG.md) for the engineering
+queue.
 
 ## Install
 
@@ -141,8 +151,16 @@ darkroom catalog scan-lights "/Volumes/Astrophotography/01_Deep Sky Objects"
 darkroom catalog scan-calibration "/Volumes/Astrophotography/00_Calibration"
 darkroom catalog list [--target "M 81"]
 darkroom catalog mark <session_id> <state> [--date Y] [--path P] [--notes T]
-darkroom catalog scan-processed --archive <path> [--apply]
+darkroom catalog scan-processed  --archive <path> [--apply]
+darkroom catalog rescan-archive  --archive <path> [--apply] [--yes]
+darkroom catalog apply-renames   --archive <path> [--apply]
+darkroom catalog backfill-times  [--archive <path>] [--apply]
+darkroom catalog scan-guiding    [--logs <dir>] [--settle-exclude SEC] [--apply]
+darkroom catalog backfill-sites  [--archive <path>] [--apply]
+darkroom catalog sites …
 ```
+
+Every one of these is a **dry run by default**; `--apply` is what writes.
 
 Processing status is a structured enum `processed_state`, one of:
 `unprocessed`, `in_progress` (stacked and/or editing, no final export yet),
@@ -173,8 +191,52 @@ Catalog write rules:
 - `Dark` frames with exposure < 10s are reclassified as `FlatDark` (ASIAir
   writes them into the same folder).
 
+`catalog rescan-archive` is the reverse of a scan: it diffs what's on disk
+against what the catalog claims and queues each divergence as a **proposal**
+for review in the web UI's `/rescan` page, rather than writing anything
+directly. Proposals come in three kinds — `update` (frame count or integration
+changed, e.g. after culling bad subs), `rename` (an identity field diverged),
+and `create`/`delete` (a session on disk with no row, or a row with no folder).
+Reviewing them by hand is deliberate: a `delete` proposal against an unmounted
+NAS would otherwise be indistinguishable from a genuinely removed session.
+
+`catalog apply-renames` drains the **rename ledger**. When you edit an identity
+field in the web UI, the server recomputes `session_id` and `lights_path` — but
+the server has no NAS mount, so it cannot move the folder. It records the move
+owed in `pending_renames`, and this command executes it from the Mac. Until you
+run it, the catalog and the archive disagree by design.
+
+`catalog backfill-times` then `catalog scan-guiding` turn archived PHD2 logs
+into per-session guiding quality. Order matters: `scan-guiding` intersects each
+log's guiding segments with a session's UTC wall-clock span, so it needs
+`start_utc`/`end_utc` to be populated first. `backfill-times` only fills rows
+where they are **NULL**, so if you later change a session's span you must clear
+it or the backfill will skip it — and any guiding row derived from the old span
+stays stale until you re-run `scan-guiding`.
+
+Guide logs are matched to sessions **by time only, never by the target name
+recorded in the log** — those names are whatever was typed at acquisition and
+are sometimes simply wrong, while the catalog is the corrected truth. A whole
+date range matching nothing means the ASIAir's clock or timezone was off;
+`scan-guiding` reports unmatched logs and unmatched sessions both ways and
+never auto-corrects it.
+
 Browse the catalog in the web UI served by `darkroom.webapi`
-(`uvicorn --factory darkroom.webapi.app:create_app_from_env`).
+(`uvicorn --factory darkroom.webapi.app:create_app_from_env`). It also hosts
+`/rescan` (the proposal queue above) and the session edit forms that populate
+the rename ledger.
+
+### `darkroom logs`
+
+```bash
+darkroom logs import [--source DIR] [--archive PATH] [--apply]
+```
+
+Copies `Autorun_Log_*.txt` and `PHD2_GuideLog_*.txt` off the SD-card copy into
+`<archive>/00_Logs/ASIAir/`. The SD card is rotated and cleared, so this has to
+happen before anything can read them. Skips `*_CHN.txt` (Chinese translations
+of identical content) and anything already archived at the same size. Dry run
+by default; the source is only ever read.
 
 ### `darkroom ingest`
 
@@ -194,20 +256,46 @@ darkroom ingest commit --asiair ~/staging/Autorun
   remain. Re-running on the same source detects already-archived sessions and
   becomes a no-op (or a top-up if new frames are present).
 - `review` is the one interactive step (`commit` never prompts). It walks every
-  session and calibration group and lets you confirm or correct the three values
-  that get parsed rather than read from a header — **target**, **filter** and
-  **OTA + camera** — picking from values already in the catalog so corrections
-  don't mint near-duplicates. A clean entry is one Enter; an entry with a
+  session and calibration group and lets you confirm or correct the values that
+  get parsed rather than read from a header — **target**, **filter**,
+  **OTA + camera** and **mosaic panel** — picking from values already in the
+  catalog so corrections don't mint near-duplicates. A clean entry is one Enter; an entry with a
   problem opens on the fix instead of on *Accept*. Corrections rewrite the
   session_id, destination path and per-file copy plan in place.
   `--flagged-only` restricts the walk to entries missing a filter.
 - **Correct a manifest with `review`, not a text editor.** `session_id`,
-  `lights_rel_path` and each file's `dst` are derived from target/OTA/camera/
-  filter and are *not* recomputed at commit, so hand-editing an identity field
+  `lights_rel_path` and each file's `dst` are derived from target/obs_date/
+  OTA/camera/filter/panel and are *not* recomputed at commit, so hand-editing an identity field
   leaves the catalog row and the folder layout disagreeing — silently, and with
   no warning at commit. See the CHEATSHEET for the field-by-field breakdown and
   the CCC postflight recipe.
 - Writes to the catalog atomically with the file copy.
+
+#### Mosaics
+
+A mosaic panel is a **fourth identity dimension on the session**, not a
+separate target. The ASIAir writes one folder per panel (`M 8_1-1`), and
+ingest splits that into the base target `M 8` plus panel `1-1`, so target
+browsing, `--target "M 8"`, flat matching and duplicate detection all keep
+working unchanged. Each panel-night is its own session row — which is the
+right grain, since panels accumulate independently across nights.
+
+```
+01_Deep Sky Objects/M 8/
+  2026-08-13_Canon50mm_ZWOASI585MCPro/
+    Lights/AstronomikL2/
+      P1-1/  P1-2/  P2-1/  P2-2/  …
+```
+
+`sessions.panel` is nullable and NULL for ordinary single-pointing sessions,
+which are the overwhelming majority. A target can legitimately hold **both** —
+that's the normal end state for an object shot single-frame first and
+mosaicked later.
+
+> Per-panel WBPP prep and panel-aware web-UI totals are not built yet. `wbpp`
+> currently stacks a target's sessions together, which is wrong for a mosaic
+> (non-overlapping panels can't register), so prep mosaic panels by hand for
+> now.
 
 ### `darkroom wbpp`
 
@@ -254,20 +342,33 @@ contributing session's `processed_state = processed` (recording the
 darkroom/
   cli.py            entry point — argparse dispatch
   config.py         shared --flag / env / toml resolution
-  cataloger.py      FITS extraction, scan-all/scan-calibration logic, DB schema, upsert/mark
+  cataloger.py      FITS extraction, scan-lights/scan-calibration logic, DB schema, upsert/mark
   catalog.py        read-only query helpers (find_darks, find_flats, …)
-  catalog_db.py     write/query API for the future web UI (open_db, query/count/update)
+  catalog_db.py     write/query API used by the web UI (open_db, query/count/update)
+  catalog_client.py backend abstraction — local SQLite or the remote HTTP API
   catalog_cli.py    `darkroom catalog …` subparser tree
-  names.py          stdlib-only name/coord helpers (make_session_id, normalize, …)
-  parse.py          filename parsing (parse_filter, parse_exposure, parse_datetime, …)
+  names.py          stdlib-only name/coord helpers (make_session_id, session_dest_rel, …)
+  parse.py          filename parsing (parse_filter, parse_ota, parse_panel, …)
   scanner.py        scan_source — produces Session/CalibrationGroup dataclasses
   ingest.py         `darkroom ingest`
+  ingest_review.py  the interactive `ingest review` pass (the only safe way to edit a manifest)
   prep.py           `darkroom wbpp`
   picker.py         interactive session picker for `darkroom wbpp`
   finish.py         `darkroom finish`
   procscan.py       `darkroom catalog scan-processed` — reconcile processed_state from disk
+  rescan.py         `darkroom catalog rescan-archive` — diff archive vs catalog, queue proposals
+  renames.py        `darkroom catalog apply-renames` — execute folder moves owed by identity edits
+  logs.py           `darkroom logs import` — archive ASIAir/PHD2 logs to the NAS
+  guidelog.py       PHD2 guide-log parser (segments, settling, RMS)
+  guidescan.py      `darkroom catalog scan-guiding` — intersect guide logs with session spans
+  sites.py          observing sites, SQM, and home-equivalent integration weighting
   wbpplog.py        parse PixInsight WBPP logs for exact session→edit attribution
   wbpp.py           symlink helpers used by prep/finish
+  webapi/
+    app.py          FastAPI app — JSON API (/api, bearer token) + UI mount
+    ui.py           server-rendered browse/edit UI
+    auth.py         password login → scrypt hash → signed cookie
+    passwd.py       `python -m darkroom.webapi.passwd` — generate a UI password hash
 ```
 
 ## Tests
@@ -276,11 +377,18 @@ darkroom/
 uv run pytest
 ```
 
-459 tests covering scanners, parsers, DB upsert/queries/migrations, the
-catalog write API, ingest manifest builders, WBPP symlink discovery, the
-interactive picker, processed-state reconciliation, and finish-side helpers.
-The new CLI dispatcher itself (`darkroom/cli.py`) is not yet covered by tests
-— if you change parsing, smoke-test with `uv run darkroom <subcmd> --help`.
+1190 tests covering scanners, parsers, DB upsert/queries/migrations, the
+catalog write API and its HTTP backend, ingest manifest builders and the
+review pass, WBPP symlink discovery, the interactive picker, processed-state
+reconciliation, archive rescan proposals, the rename ledger, guide-log parsing
+and session matching, observing sites, the web UI and its auth, and
+finish-side helpers. The CLI dispatcher itself (`darkroom/cli.py`) is still
+not covered — if you change parsing, smoke-test with
+`uv run darkroom <subcmd> --help`.
+
+`pytest` lives in the `dev` extra, so a fresh checkout (or a fresh git
+worktree) needs `uv sync --extra dev` once before a bare `uv run pytest`
+works — otherwise it fails with `Failed to spawn: pytest`.
 
 ## Canonical naming
 
@@ -296,3 +404,11 @@ The new CLI dispatcher itself (`darkroom/cli.py`) is not yet covered by tests
 | Date | ISO 8601, local night-start date | `2026-02-19` |
 | Separators | `_` between components, `-` within | `FRA400_ZWOASI585MCPro_L-Pro` |
 | Session ID | `{Target}_{YYYYMMDD}_{OTA}_{Camera}_{Filter}` | `M81_20260219_FRA400_ZWOASI585MCPro_L-Pro` |
+| Mosaic panel | `_P{row}-{col}` appended to the session ID | `M8_20260813_Canon50mm_ZWOASI585MCPro_AstronomikL2_P1-1` |
+
+**Optics are named by kind.** A telescope drops the brand (`FMA180`,
+`FRA400`, `FRA400-07x` — the `0.7x` reducer with the decimal removed); a
+**camera lens keeps it** (`Canon50mm`), because a lens is a family rather than
+one fixed optic and needs more differentiation. Focal ratio is deliberately
+absent: the EF adapter is purely mechanical with no aperture control, so every
+lens is always wide open and the ratio can never distinguish two sessions.
