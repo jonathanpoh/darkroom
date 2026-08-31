@@ -1958,30 +1958,57 @@ catalog has `ota='Unknown'`**.
 
 ---
 
-### F9a. Apply the F9 correction to the live catalog and the archive — OPEN
+### F9a. Apply the F9 correction to the live catalog and the archive — ✅ DONE 2026-08-31
 
-The code lands the rule; the 2023 corpus still carries the old answers. Three
-things need doing, in this order, and the middle one is the one with teeth.
+Executed the same day F9 was decided, against the live catalog and the mounted
+archive. Deployed on `c7a5ef7`.
 
-1. **28 session rows.** PATCH `ota` per session. `update_session_fields`
-   already does the rest: recomputes `session_id` and `lights_path`, re-keys
-   the `session_guiding` row (B15), and records a `pending_renames` entry for
-   the folder move the server cannot perform.
-2. **The NAS folder moves**, via `darkroom catalog apply-renames`. 28 session
-   folders, plus the flat folders in step 3 (`{100,135,200,300,400}mm_Canon6D`
-   → `Canon<n>mm_Canon6D_<filter>`), which the ledger does *not* cover —
-   calibration folders have no rename ledger.
-3. **31 flat sets.** 25 registered `Unknown`, 6 registered `FRA400`. There is
-   no PATCH for calibration sets, but `cataloger.py:1114` now derives the OTA
-   with the date-aware `parse_ota`, so a re-run of `catalog scan-calibration`
-   re-registers them correctly (`set_id` has no OTA component, so it is an
-   in-place update rather than a duplicate row).
+| Step | Result |
+|---|---|
+| Session OTAs | 28 rows PATCHed. Catalog now holds **zero `Unknown` OTAs**, and zero rows disagreeing with `parse_ota` |
+| Camera fix | `M42_20230415` `ASCOMCameraDriver` → `Canon6D` (confirmed by Jonathan: a non-ASIAir acquisition path, BackyardEOS or N.I.N.A., writing a generic driver string) |
+| Archive folders | 24 renames applied, 4 already_done, **0 conflict / 0 missing / 0 error**; ledger drained to 0 |
+| Frame split | 227 frames moved into 4 per-night folders (see below) |
+| Calibration | **175 sets** re-derived: 72 `FRA400`→`Canon400mm`, and 103 `Unknown`→`Canon{50,100,135,200,300}mm`. All dated 2023-04-15 → 2024-01-24; **nothing dated 2025+ moved** |
+| Stale row | The `60mm_Canon6D` flat set re-registered at its real path, `50mm_Canon6D/2023-08-10` (those flats read `FOCALLEN 59` — which is what the widened window is for) |
 
-**Also found, unrelated to F9 but adjacent:** the catalog's `60mm_Canon6D`
-flat set points at `00_Calibration/Flats/60mm_Canon6D/2023-08-10`, which no
-longer exists — the folder was renamed to `50mm_Canon6D` on disk and the
-catalog was never told. That row is currently unresolvable and should be
-re-pointed (or re-scanned) in the same pass.
+Backups on the LXC: `astro_catalog-pre-F9-20260831-222645.db`,
+`-pre-F9cal-20260831-224730.db`, `-pre-deploy-20260831-225233.db`.
+
+**Two legacy folders each held two sessions' frames** and had to be split
+before any rename could run (`apply-renames` moves whole directories and is
+all-or-nothing, so the 24 clean moves were blocked behind them):
+
+- `M 31/2023-11-18_FRA400_Canon6D_L-Pro/Lights` → 36 frames (night 2023-11-17)
+  + 87 (night 2023-11-20)
+- `C 49/2024-01-10_FMA180_Canon6D_L-Pro/Lights` → 49 (2024-01-10) + 55 (2024-01-11)
+
+Nights were assigned from `DATE-OBS` via `cataloger.compute_imaging_night`, and
+every count matched the catalog's own `frame_count` exactly before anything
+moved. Note both folder *names* were wrong at the time they were written by
+hand (`FRA400`/`FMA180` on frames reading 391-394mm) — the rename resolved a
+disagreement rather than creating one.
+
+**Residue — three follow-ups, none blocking:**
+
+1. **Three more shared-folder pairs exist**, same trap, found while verifying:
+   NGC 7000 2024-02-26/27 (10+100 frames in one folder), M 81 2025-03-25/28
+   (48+77), NGC 7000 2025-07-30/31 (11+60). Harmless until someone makes an
+   identity edit on one of those rows, which will then queue a rename that
+   would drag the other night with it. Also `IC4604_20250426_P1-2` has 35 files
+   on disk vs 33 in the catalog — a real 2-frame discrepancy, unrelated to F9.
+2. **`ASCOMCameraDriver` survives on 3 calibration sets.** `camera` is part of
+   `set_id`, so unlike `ota` it cannot be migrated by a rescan — correcting it
+   means new rows and orphaned old ones. Consequence: `M42_20230415` (now
+   `Canon6D`) matches none of its own flats, which sit in
+   `100mm_Canon6D/2023-04-17` under the old camera string. Fixing it properly
+   means normalising `ASCOMCameraDriver` → `Canon6D` at scan time *and*
+   retiring the three stale rows.
+3. **Flat coverage after the fix: 18 of 36 Canon-optic sessions match a flat
+   set.** The misses are genuine (no flats within ±3 days, or a filter
+   mismatch), not attribution errors — except the 8 M 8 mosaic panels, which
+   have no `Canon50mm` + `ZWOASI585MCPro` + `AstronomikL2` flats registered at
+   all. Worth checking whether those flats were shot.
 
 ---
 

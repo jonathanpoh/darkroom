@@ -11,12 +11,21 @@ something here is unblocked, the corresponding backlog item can move.
 > **2026-08-31**. Re-check before trusting them — `darkroom catalog list`, or
 > the web UI.
 
-## ⚡ Start here (2026-08-31)
+## ⚡ Start here (2026-08-31, evening)
 
-1. **One `/rescan` pair is a trap — do not apply it as-is.** See #2.
-2. **Deploy** — 20 local commits are unpushed (M3 + the rename fix). See #7.
-3. **The camera-lens / focal-length decision (F9)** — you said you'd come back
-   to this; the data you need is in #9.
+1. **One `/rescan` pair is a trap — do not apply it as-is.** See #2. Note the
+   NGC 7000 2023-09-14 row in that pair is now `Canon50mm` (F9), not `Unknown`.
+2. **Deploy ✅ done** — M3, the rename fix and F9 are live on the LXC
+   (`c7a5ef7`, restarted 22:52 WEST).
+3. **The camera-lens / focal-length decision (F9) ✅ done** — decided, built,
+   and applied to the whole 2023 corpus. See **F9** and **F9a** in BACKLOG.md.
+   The lasting rule: OTA is inferred from `FOCALLEN` **and** the session date,
+   because the FMA180 (Jan 2023) and FRA400 (Jan 2025) did not exist for the
+   earlier nights. A zoom night shot *today* at 180 or 400mm is still
+   ambiguous and needs a hand correction in `ingest review`.
+4. **Do the M 8 mosaic's flats exist?** None are registered for
+   `Canon50mm` + `ZWOASI585MCPro` + `AstronomikL2`, so all 8 panels currently
+   match no flat set. Check whether they were shot before stacking.
 
 ---
 
