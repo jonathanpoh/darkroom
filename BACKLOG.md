@@ -2128,11 +2128,21 @@ site lat/lon, angular separation.
 > reads as a **rename** rather than a delete + create — the latter would drop
 > the row's `processed_state` and its `session_guiding` row on apply.
 >
-> **Still open (the deferred half):** per-panel WBPP trees
-> (`~/WBPP/M8_P1-1/`) — now fully specified in **M3**, including the
-> `finish` changes this table gets wrong — `finish` → `_Processed/<date>/P1-1/`, the web UI's
-> panel-aware target rollups and its `_PANEL_SUFFIX_RE` suggestion, and the
-> live IC 4604 migration (still blocked on the lost filter for those 2 nights).
+> **Deferred half — status 2026-08-31.** ✅ Per-panel WBPP trees and the
+> panel-aware `finish` both landed as **M3**. ✅ The live IC 4604 migration is
+> done (Jonathan supplied `L-Pro`; 8 panelled rows + 1 NULL-panel row, folders
+> moved, ledger drained). Live catalog now holds 16 panelled sessions —
+> IC 4604 ×8 and M 8 ×8.
+>
+> **Still open — the web UI only.** `webapi/ui.py` has no `panel` awareness:
+> `_EDIT_FIELDS` (line 82) omits it, so the session edit form cannot set or
+> clear a panel even though `catalog_db` and the JSON API both accept it; there
+> are no panel-aware target rollups (a target view still implies 8 panel-hours
+> are 8 hours of depth); and `_PANEL_SUFFIX_RE` (line 419) still suggests a
+> **target-only** merge, which is the same-night collision M1 exists to
+> prevent. That last one is currently *latent* — no catalog target carries a
+> `_N-M` suffix any more, so it has nothing to fire on — but it would mis-handle
+> the next mosaic ingested the old way.
 
 Queued 2026-07-30, out of Jonathan's question: the U2 cleanup queue flags
 `IC 4604_1-1` … `IC 4604_2-2` as a probable 4-panel mosaic — so how should a
