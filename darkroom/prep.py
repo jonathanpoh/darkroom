@@ -359,6 +359,52 @@ def _resolve_rows(
     sys.exit("Specify --target or --session")
 
 
+def _confirm_mixed_panels(rows: list[dict], target_name: str) -> None:
+    """Refuse to prep mosaic panels and single-pointing nights in one go.
+
+    A target legitimately holds both — IC 4604 has a 4-panel mosaic and a
+    2023 single-pointing night of the same object — but they cannot share one
+    WBPP tree, because `<target>/Output/` means two different things at once:
+    the merge destination for a mosaic, and the WBPP output dir for an
+    ordinary session. `darkroom finish` resolves that ambiguity by treating a
+    target with any PANEL_* dir as a mosaic and ignoring target-level
+    SESSION_* entirely, so the single-pointing night would be built and then
+    silently never finished.
+
+    Keyed on the *resolved rows*, not on which flag was used, so it also
+    catches `--date A --date B` spanning a mosaic night and an ordinary one.
+    Prep is not destructive, but the tree it would produce is one finish
+    mishandles quietly — so this stops rather than warns.
+    """
+    panelled = [r for r in rows if r.get("panel")]
+    plain = [r for r in rows if not r.get("panel")]
+    if not (panelled and plain):
+        return
+
+    print(f"\n{target_name} has both mosaic panels and single-pointing nights:", file=sys.stderr)
+    for r in sorted(plain, key=lambda r: r["obs_date"]):
+        print(f"  single-pointing  {r['obs_date']}  {r['session_id']}", file=sys.stderr)
+    for r in sorted(panelled, key=lambda r: (panel_sort_key(r["panel"]), r["obs_date"])):
+        print(f"  panel {r['panel']:<5}      {r['obs_date']}  {r['session_id']}", file=sys.stderr)
+
+    plain_dates = sorted({r["obs_date"] for r in plain})
+    panel_dates = sorted({r["obs_date"] for r in panelled})
+    hint_plain = " ".join(f"--date {d}" for d in plain_dates)
+    hint_panel = " ".join(f"--date {d}" for d in panel_dates)
+    # Printed rather than folded into sys.exit's message so it reaches stderr
+    # even when the caller intercepts SystemExit (pytest does).
+    print(
+        "\nThese cannot share one WBPP tree: a mosaic's <target>/Output/ is the "
+        "merge destination, and `darkroom finish` ignores target-level SESSION_N "
+        "once any PANEL_* dir exists — so the single-pointing night would be "
+        "built and then never finished.\n\nRe-run them separately:\n"
+        f'  darkroom wbpp --target "{target_name}" {hint_panel}\n'
+        f'  darkroom wbpp --target "{target_name}" {hint_plain}',
+        file=sys.stderr,
+    )
+    sys.exit("Aborted: mosaic panels and single-pointing nights in one prep.")
+
+
 def build_wbpp_sessions(
     rows: list[dict],
     *,
@@ -369,6 +415,7 @@ def build_wbpp_sessions(
     overwrite: bool = False,
     flat_window: int = 3,
     dark_temp_tolerance: float = DEFAULT_DARK_TEMP_TOLERANCE,
+    allow_mixed_panels: bool = False,
 ) -> None:
     """Build SESSION_N dirs under wbpp_root/<slug>/ for the given (resolved) rows.
 
@@ -383,6 +430,9 @@ def build_wbpp_sessions(
     for a non-mosaic target it's the only one; for a mosaic it's where the
     hand-merged panels are expected to land (`darkroom finish` reads it).
     """
+    if not allow_mixed_panels:
+        _confirm_mixed_panels(rows, target_name)
+
     slug = target_slug(target_name)
     target_dir = wbpp_root / slug
     target_dir.mkdir(parents=True, exist_ok=True)

@@ -319,25 +319,74 @@ def test_build_wbpp_sessions_null_panel_unchanged_layout(tmp_path):
     )
 
 
-def test_build_wbpp_sessions_mixed_null_and_panels(tmp_path):
-    """A target with both an ordinary night and panelled nights: the ordinary
-    one builds at target level, the panels get their own dirs."""
-    archive = tmp_path / "archive"
-    backend = _empty_backend(tmp_path)
-    wbpp_root = tmp_path / "WBPP"
-    rows = [
+def _mixed_rows(archive):
+    """One single-pointing night plus two panels of a mosaic night."""
+    return [
         _panel_row(archive, obs_date="2026-04-20", panel=None),
         _panel_row(archive, obs_date="2026-04-26", panel="1-1"),
         _panel_row(archive, obs_date="2026-04-26", panel="1-2"),
     ]
 
-    build_wbpp_sessions(rows, backend=backend, output=archive, wbpp_root=wbpp_root,
-                         target_name="IC 4604")
+
+def test_build_wbpp_sessions_refuses_to_mix_panels_and_single_pointing(tmp_path, capsys):
+    """Mosaic panels and ordinary nights cannot share one WBPP tree.
+
+    `<target>/Output/` would mean two things at once — the mosaic's merge
+    destination and the ordinary session's WBPP output dir — and `finish`
+    resolves that by ignoring target-level SESSION_N once any PANEL_* exists,
+    so the single-pointing night would be built and then never finished.
+    """
+    archive = tmp_path / "archive"
+    backend = _empty_backend(tmp_path)
+    wbpp_root = tmp_path / "WBPP"
+
+    with pytest.raises(SystemExit):
+        build_wbpp_sessions(_mixed_rows(archive), backend=backend, output=archive,
+                            wbpp_root=wbpp_root, target_name="IC 4604")
+
+    err = capsys.readouterr().err
+    # Must name which is which, so the user can re-run with the right --date.
+    assert "single-pointing  2026-04-20" in err
+    assert "panel 1-1" in err
+    assert "panel 1-2" in err
+    # And hand back runnable commands rather than just complaining.
+    assert '--target "IC 4604" --date 2026-04-26' in err
+    assert '--target "IC 4604" --date 2026-04-20' in err
+    # Nothing built.
+    assert not (wbpp_root / "IC4604").exists()
+
+
+def test_build_wbpp_sessions_mixed_null_and_panels(tmp_path):
+    """With the guard bypassed, the layout is still correct: the ordinary night
+    builds at target level, the panels get their own dirs."""
+    archive = tmp_path / "archive"
+    backend = _empty_backend(tmp_path)
+    wbpp_root = tmp_path / "WBPP"
+
+    build_wbpp_sessions(_mixed_rows(archive), backend=backend, output=archive,
+                        wbpp_root=wbpp_root, target_name="IC 4604",
+                        allow_mixed_panels=True)
 
     target_dir = wbpp_root / "IC4604"
     assert (target_dir / "SESSION_1").is_dir()
     assert (target_dir / "PANEL_1-1" / "SESSION_1").is_dir()
     assert (target_dir / "PANEL_1-2" / "SESSION_1").is_dir()
+
+
+def test_build_wbpp_sessions_guard_allows_panels_only(tmp_path):
+    """The guard must not fire on an all-panel prep — the normal mosaic case."""
+    archive = tmp_path / "archive"
+    backend = _empty_backend(tmp_path)
+    wbpp_root = tmp_path / "WBPP"
+    rows = [
+        _panel_row(archive, obs_date="2026-04-26", panel="1-1"),
+        _panel_row(archive, obs_date="2026-04-26", panel="1-2"),
+    ]
+
+    build_wbpp_sessions(rows, backend=backend, output=archive, wbpp_root=wbpp_root,
+                        target_name="IC 4604")
+
+    assert (wbpp_root / "IC4604" / "PANEL_1-1" / "SESSION_1").is_dir()
 
 
 def test_build_wbpp_sessions_lights_isolated_per_panel(tmp_path):
