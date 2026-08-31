@@ -11,8 +11,9 @@ from darkroom.cataloger import init_db, upsert_calibration_set, upsert_session
 from darkroom.finish import (
     _find_processing_date, _build_dest, _copy_flat,
     _list_session_dirs, _confirm_and_delete, _resolve_session_ids,
-    _mark_sessions_processed, cmd_finish,
+    _mark_sessions_processed, _panel_dirs, cmd_finish,
 )
+from darkroom.names import wbpp_panel_dir
 from darkroom.prep import _build_night, _no_darks_note, add_subparser as prep_add_subparser
 
 
@@ -27,7 +28,7 @@ def test_find_processing_date_returns_today(tmp_path):
     processed = tmp_path / "processed"
     master.mkdir()
     touch(master / "masterLight_BIN-1_3840x2160_FILTER-L-Extreme_RGB.xisf")
-    result = _find_processing_date(master, processed, None)
+    result = _find_processing_date([master, processed], None)
     assert result == date.today().isoformat()
 
 
@@ -42,7 +43,7 @@ def test_find_processing_date_prefers_processed(tmp_path):
     # Make master file 2 days older than processed
     past = time.time() - 2 * 86400
     os.utime(older, (past, past))
-    result = _find_processing_date(master, processed, None)
+    result = _find_processing_date([master, processed], None)
     assert result == date.today().isoformat()
 
 
@@ -51,7 +52,7 @@ def test_find_processing_date_override(tmp_path):
     processed = tmp_path / "processed"
     master.mkdir()
     touch(master / "masterLight.xisf")
-    assert _find_processing_date(master, processed, "2025-12-31") == "2025-12-31"
+    assert _find_processing_date([master, processed], "2025-12-31") == "2025-12-31"
 
 
 def test_find_processing_date_no_files_exits(tmp_path):
@@ -59,7 +60,25 @@ def test_find_processing_date_no_files_exits(tmp_path):
     processed = tmp_path / "processed"
     master.mkdir(); processed.mkdir()
     with pytest.raises(SystemExit):
-        _find_processing_date(master, processed, None)
+        _find_processing_date([master, processed], None)
+
+
+def test_find_processing_date_scans_every_dir_in_list(tmp_path):
+    """Regression for M3: a mosaic passes every panel's dirs plus the
+    target-level processed/ — the latest mtime across ALL of them wins, not
+    just the first two."""
+    import os, time
+    a, b, c = tmp_path / "a", tmp_path / "b", tmp_path / "c"
+    a.mkdir(); b.mkdir(); c.mkdir()
+    old1 = touch(a / "x.xisf")
+    old2 = touch(b / "y.xisf")
+    newest = touch(c / "z.xisf")
+    past = time.time() - 2 * 86400
+    os.utime(old1, (past, past))
+    os.utime(old2, (past, past))
+    result = _find_processing_date([a, b, c], None)
+    assert result == date.today().isoformat()
+    assert newest.stat().st_mtime > old1.stat().st_mtime
 
 
 def test_build_dest(tmp_path):
@@ -231,7 +250,7 @@ def test_mark_sessions_processed_sets_structured_state(tmp_path):
 
     status = "01_Deep Sky Objects/M 81/_Processed/2026-05-15"
     _mark_sessions_processed(
-        wbpp_target, archive, status, "2026-05-15", LocalBackend(catalog)
+        [wbpp_target], archive, status, "2026-05-15", LocalBackend(catalog)
     )
 
     with sqlite3.connect(catalog) as conn:
@@ -800,3 +819,162 @@ def test_cmd_finish_rerun_is_idempotent(tmp_path, capsys):
                    backend=LocalBackend(catalog), date_override="2026-07-01", dry_run=False)
     dest = archive / "01_Deep Sky Objects" / "M 81" / "_Processed" / "2026-07-01"
     assert (dest / "logs" / "20260705173607.log").exists()
+
+
+# ── M3: mosaic finish — panel dirs finish separately, the merge finishes the target ─
+
+def _mosaic_session(catalog, archive, *, panel, filter_="L-Pro"):
+    """Register one catalog session + its light frame on disk. Returns (session_id, light_path)."""
+    lights_rel = (
+        f"01_Deep Sky Objects/IC 4604/2026-05-26_FRA400_ZWOASI585MCPro/Lights/{filter_}/P{panel}"
+    )
+    sid = f"IC4604_20260526_FRA400_ZWOASI585MCPro_{filter_}_P{panel}"
+    upsert_session(catalog, {
+        "session_id": sid, "target": "IC 4604", "obs_date": "2026-05-26",
+        "ota": "FRA400", "camera": "ZWOASI585MCPro", "filter": filter_, "panel": panel,
+        "gain": 200, "temperature_c": -20.0, "exposure_sec": 180.0,
+        "focal_length": 400.0, "frame_count": 1, "total_integration_sec": 180,
+        "ra_deg": None, "dec_deg": None, "lights_path": lights_rel, "notes": "",
+    })
+    light = touch(archive / lights_rel / f"Light_IC4604_P{panel}_0001.fit")
+    return sid, light
+
+
+def _mosaic_finish_setup(tmp_path, *, panels=("1-1", "1-2"), with_merge):
+    """Two-panel (default) mosaic WBPP tree + matching catalog rows, ready for cmd_finish.
+
+    Each panel gets its own Output/master/ (so _finish_panel has something to
+    copy) and its own SESSION_1/Lights/.../ symlink resolving to that panel's
+    catalog session. with_merge=True additionally populates the target-level
+    Output/processed/ with the hand-merged mosaic file.
+    """
+    archive = tmp_path / "archive"
+    catalog = tmp_path / "cat.db"
+    init_db(catalog)
+
+    wbpp_root = tmp_path / "WBPP"
+    wbpp_target = wbpp_root / "IC4604"
+    sids = {}
+    for panel in panels:
+        sid, light = _mosaic_session(catalog, archive, panel=panel)
+        sids[panel] = sid
+        panel_dir = wbpp_target / wbpp_panel_dir(panel)
+        touch(panel_dir / "Output" / "master" / f"masterLight_P{panel}.xisf")
+        link_dir = panel_dir / "SESSION_1" / "Lights" / "FILTER_L-Pro"
+        link_dir.mkdir(parents=True)
+        (link_dir / light.name).symlink_to(light.resolve())
+
+    if with_merge:
+        touch(wbpp_target / "Output" / "processed" / "mosaic_merged.xisf")
+
+    return archive, catalog, wbpp_root, sids
+
+
+def test_cmd_finish_mosaic_panels_only_marks_in_progress(tmp_path, capsys):
+    """No target-level merge yet: each panel's master/ lands under its own
+    _Processed/<date>/<panel>/, sessions go in_progress, and finish says the
+    merge is still outstanding rather than treating it as an error."""
+    archive, catalog, wbpp_root, sids = _mosaic_finish_setup(tmp_path, with_merge=False)
+    backend = LocalBackend(catalog)
+    with patch("builtins.input", return_value=""):
+        cmd_finish(output=archive, wbpp_root=wbpp_root, target="IC 4604",
+                   backend=backend, date_override="2026-05-29", dry_run=False)
+
+    dest = archive / "01_Deep Sky Objects" / "IC 4604" / "_Processed" / "2026-05-29"
+    assert (dest / "1-1" / "master" / "masterLight_P1-1.xisf").exists()
+    assert (dest / "1-2" / "master" / "masterLight_P1-2.xisf").exists()
+    assert not (dest / "processed").exists()  # no merge yet -> no top-level deliverable
+
+    for panel, sid in sids.items():
+        row = backend.query_sessions(session_id=sid)[0]
+        assert row["processed_state"] == "in_progress", panel
+
+    out = capsys.readouterr().out
+    assert "Merged mosaic not found" in out
+    assert "normal state" in out
+
+
+def test_cmd_finish_mosaic_merge_marks_all_panels_processed(tmp_path):
+    """A populated target-level Output/processed/ is the merged deliverable:
+    it lands at _Processed/<date>/ top level and flips every panel's sessions
+    to processed together, since none is individually finished."""
+    archive, catalog, wbpp_root, sids = _mosaic_finish_setup(tmp_path, with_merge=True)
+    backend = LocalBackend(catalog)
+    with patch("builtins.input", return_value=""):
+        cmd_finish(output=archive, wbpp_root=wbpp_root, target="IC 4604",
+                   backend=backend, date_override="2026-05-29", dry_run=False)
+
+    dest = archive / "01_Deep Sky Objects" / "IC 4604" / "_Processed" / "2026-05-29"
+    assert (dest / "processed" / "mosaic_merged.xisf").exists()
+    assert (dest / "1-1" / "master" / "masterLight_P1-1.xisf").exists()
+
+    for panel, sid in sids.items():
+        row = backend.query_sessions(session_id=sid)[0]
+        assert row["processed_state"] == "processed", panel
+        assert row["processed_path"] == str(dest.relative_to(archive))
+
+
+def test_cmd_finish_panel_flag_touches_only_that_panel(tmp_path):
+    """--panel 1-1 finishes exactly one panel: the other panel's dir and
+    session are left untouched."""
+    archive, catalog, wbpp_root, sids = _mosaic_finish_setup(tmp_path, with_merge=False)
+    backend = LocalBackend(catalog)
+    with patch("builtins.input", return_value=""):
+        cmd_finish(output=archive, wbpp_root=wbpp_root, target="IC 4604",
+                   backend=backend, date_override="2026-05-29", dry_run=False, panel="1-1")
+
+    dest = archive / "01_Deep Sky Objects" / "IC 4604" / "_Processed" / "2026-05-29"
+    assert (dest / "1-1" / "master" / "masterLight_P1-1.xisf").exists()
+    assert not (dest / "1-2").exists()
+
+    row_11 = backend.query_sessions(session_id=sids["1-1"])[0]
+    assert row_11["processed_state"] == "in_progress"
+    row_12 = backend.query_sessions(session_id=sids["1-2"])[0]
+    assert row_12["processed_state"] == "unprocessed"
+
+    # The untouched panel's WBPP dir must survive too.
+    assert (wbpp_root / "IC4604" / wbpp_panel_dir("1-2") / "Output" / "master").exists()
+
+
+def test_cmd_finish_panel_flag_unknown_panel_exits(tmp_path):
+    archive, catalog, wbpp_root, _ = _mosaic_finish_setup(tmp_path, with_merge=False)
+    with pytest.raises(SystemExit):
+        cmd_finish(output=archive, wbpp_root=wbpp_root, target="IC 4604",
+                   backend=LocalBackend(catalog), date_override="2026-05-29",
+                   dry_run=False, panel="9-9")
+
+
+def test_cmd_finish_mosaic_dry_run_writes_nothing(tmp_path):
+    """--dry-run on a mosaic must copy no files and change no catalog state,
+    for panels and the merge alike."""
+    archive, catalog, wbpp_root, sids = _mosaic_finish_setup(tmp_path, with_merge=True)
+    backend = LocalBackend(catalog)
+    cmd_finish(output=archive, wbpp_root=wbpp_root, target="IC 4604",
+               backend=backend, date_override="2026-05-29", dry_run=True)
+
+    dest = archive / "01_Deep Sky Objects" / "IC 4604" / "_Processed" / "2026-05-29"
+    assert not dest.exists()
+    for panel, sid in sids.items():
+        row = backend.query_sessions(session_id=sid)[0]
+        assert row["processed_state"] == "unprocessed", panel
+
+    # WBPP working trees are untouched too.
+    assert (wbpp_root / "IC4604" / wbpp_panel_dir("1-1") / "SESSION_1").exists()
+
+
+def test_panel_dirs_empty_for_non_mosaic_target(tmp_path):
+    """_panel_dirs must return {} for an ordinary single-pointing target so
+    cmd_finish takes the non-mosaic path — no PANEL_* dir anywhere."""
+    target_dir = tmp_path / "M81"
+    (target_dir / "SESSION_1").mkdir(parents=True)
+    (target_dir / "Output").mkdir()
+    assert _panel_dirs(target_dir) == {}
+
+
+def test_panel_dirs_finds_panel_subdirs(tmp_path):
+    target_dir = tmp_path / "IC4604"
+    (target_dir / wbpp_panel_dir("1-1")).mkdir(parents=True)
+    (target_dir / wbpp_panel_dir("2-10")).mkdir(parents=True)
+    result = _panel_dirs(target_dir)
+    assert set(result) == {"1-1", "2-10"}
+    assert result["1-1"] == target_dir / wbpp_panel_dir("1-1")
