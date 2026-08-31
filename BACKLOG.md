@@ -1897,47 +1897,91 @@ stall. Confirms the classification this entry proposes, and narrows the
 
 ---
 
-### F9. A camera lens can impersonate a telescope, and `parse_ota` can't tell
+### F9. A camera lens can impersonate a telescope — ✅ DECIDED + BUILT 2026-08-31
 
-Filed 2026-08-30, out of M1's `Canon50mm` naming decision. Jonathan also shoots
-a **Canon EF 100–400mm zoom**, and `parse_ota` infers the optic from `FOCALLEN`
-alone. Checked against the current windows:
+Filed 2026-08-30 out of M1's `Canon50mm` naming decision; decided and
+implemented 2026-08-31 (`parse.py`, `tests/test_ota_lenses.py`).
 
-| Zoom shot at | `parse_ota` returns | Actually |
-|---|---|---|
-| 180mm | **`FMA180`** | Canon 100–400 |
-| 400mm | **`FRA400`** | Canon 100–400 |
-| 100 / 135 / 200 / 250 / 300 / 350mm | `Unknown` | Canon 100–400 |
+**The filed premise was wrong in the one way that mattered.** This entry said
+"the zoom has not been used for a catalogued session yet ... low urgency". A
+read of the live catalog on 2026-08-31 found **28 sessions** already shot on
+Canon glass, spanning 2023-04-15 → 2024-01-11, all on the Canon 6D:
 
-Two of those are **silently wrong rather than unknown**, which is the dangerous
-half. An `Unknown` OTA is loud — U2 badges it, `ingest_review.suggested_action`
-lands the cursor on "Change OTA / camera", and `entry_issues` prints a ⚠. A
-confidently wrong `FRA400` does none of that: it sails through review, bakes a
-false optic into the `session_id` and the folder name, and then **matches flats
-belonging to a genuinely different telescope** (flat matching keys on
-OTA + camera + filter), which is a real data-correctness bug, not a cosmetic one.
+| Catalogued as | Rows | Actually | Tell |
+|---|---|---|---|
+| `FRA400` | 8 | Canon zoom @ 391–395mm | dated 2023-11 → 2024-01, a year before the FRA400 was bought |
+| `Unknown` | 18 | Canon zoom @ 100/104/136/200/202/301/386mm | between the scope windows |
+| `Unknown` | 2 | `Canon50mm` | M 17 2023-08-09 (fl 56) and NGC 7000 2023-09-14 (fl 53) |
 
-**There is no header that disambiguates them.** `FOCALLEN` collides by
-construction, and `TELESCOP` is the mount (`ZWO AM5N`), not the optic. So this
-cannot be auto-detected — it has to be a human correction at review time, and
-the design question is how to make the wrong answer *loud*.
+The 8 `FRA400` rows are the damage this entry predicted: a wrong optic baked
+into `session_id` and the folder name, and — worse — the matching flat sets
+(`00_Calibration/Flats/400mm_Canon6D*`, 6 sets) were registered `ota=FRA400`
+too, so the wrong-optic attribution was self-consistent and invisible.
 
-Sketch, not a decision:
+**The decision.**
 
-- Give the zoom a name family (`Canon100-400mm@200mm`? `Canon100-400mm` plus
-  the existing `focal_length` column?) and add it to `KNOWN_OTAS` so review can
-  actually offer it — today it can't be picked at all.
-- Consider a "focal length is ambiguous" issue in `entry_issues` that fires
-  when `FOCALLEN` falls in a window shared by kit that is in `KNOWN_OTAS`, so
-  180 and 400 stop being confidently answered.
-- Aperture is **not** part of this: the EF adapter is purely mechanical with no
-  electronic aperture control, so both Canon lenses are always wide open. Focal
-  ratio therefore never varies per session and is not an identity component —
-  which is why `Canon50mm` carries no `-f18` suffix (confirmed 2026-08-30).
+1. **Each marked zoom stop is its own OTA**: `Canon100mm`, `Canon135mm`,
+   `Canon200mm`, `Canon300mm`, `Canon400mm`, alongside the existing
+   `Canon50mm`. *Not* a single `Canon100-400`. Flat matching keys on
+   OTA + camera + filter, so one name for the whole range makes a 100mm flat a
+   legal match for a 400mm light — the same class of bug this entry exists to
+   prevent, merely relocated. The archive already separates them by hand
+   (`Flats/{100,135,200,300,400}mm_Canon6D`), so per-stop names map 1:1 onto
+   what is on disk.
+2. **The date breaks the tie.** `OTA_ACQUIRED` records when each scope entered
+   service — FMA180Pro January 2023, FRA400 (and its 0.7x reducer) January
+   2025. `parse_ota` gained a keyword-only `obs_date`: when a scope window
+   matches but the session predates that scope, inference falls through to the
+   lens of the same focal length. Without `obs_date` the result is
+   byte-identical to before, so every legacy call site is unchanged. Wired at
+   the four call sites that have a date in hand (`scanner.py:169,223`,
+   `cataloger.py:947,1114`).
+3. **The 50mm window now reaches 60.** The M 17 2023-08-09 session reports
+   `FOCALLEN 56` but plate-solves to **51mm**, and its flats live in
+   `50mm_Canon6D/2023-08-10` (flat-morning +1). The header is simply wrong at
+   that end; nothing of Jonathan's lives between 60 and 95, so the slack is
+   free.
+4. **Aperture stays out of it** (unchanged from the original filing): the EF
+   adapter is mechanical with no aperture control, so both Canon lenses are
+   always wide open and focal ratio is not an identity component.
 
-Low urgency: the zoom has not been used for a catalogued session yet. It stops
-being theoretical the first night it is, and the damage is retroactive
-(a rename of rows + folders), so decide the naming before that night.
+**What the rule cannot do.** It is retrospective only. A zoom night shot
+*today* at 180 or 400mm is genuinely indistinguishable from the scope, and
+`parse_ota` will answer with the scope. That still needs a hand correction in
+`ingest review` — which is now possible, since `KNOWN_OTAS` carries the lens
+names. Off-stop focal lengths (250, 350, …) stay `Unknown`, deliberately: an
+off-mark reading is not snapped to the nearest stop.
+
+**Verified against the live catalog** before anything was written: exactly the
+28 rows above change, nothing else moves, and afterwards **no session in the
+catalog has `ota='Unknown'`**.
+
+---
+
+### F9a. Apply the F9 correction to the live catalog and the archive — OPEN
+
+The code lands the rule; the 2023 corpus still carries the old answers. Three
+things need doing, in this order, and the middle one is the one with teeth.
+
+1. **28 session rows.** PATCH `ota` per session. `update_session_fields`
+   already does the rest: recomputes `session_id` and `lights_path`, re-keys
+   the `session_guiding` row (B15), and records a `pending_renames` entry for
+   the folder move the server cannot perform.
+2. **The NAS folder moves**, via `darkroom catalog apply-renames`. 28 session
+   folders, plus the flat folders in step 3 (`{100,135,200,300,400}mm_Canon6D`
+   → `Canon<n>mm_Canon6D_<filter>`), which the ledger does *not* cover —
+   calibration folders have no rename ledger.
+3. **31 flat sets.** 25 registered `Unknown`, 6 registered `FRA400`. There is
+   no PATCH for calibration sets, but `cataloger.py:1114` now derives the OTA
+   with the date-aware `parse_ota`, so a re-run of `catalog scan-calibration`
+   re-registers them correctly (`set_id` has no OTA component, so it is an
+   in-place update rather than a duplicate row).
+
+**Also found, unrelated to F9 but adjacent:** the catalog's `60mm_Canon6D`
+flat set points at `00_Calibration/Flats/60mm_Canon6D/2023-08-10`, which no
+longer exists — the folder was renamed to `50mm_Canon6D` on disk and the
+catalog was never told. That row is currently unresolvable and should be
+re-pointed (or re-scanned) in the same pass.
 
 ---
 

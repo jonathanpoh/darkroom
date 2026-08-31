@@ -53,7 +53,14 @@ darkroom finish ──→ NAS: 01_Deep Sky Objects/<Target>/_Processed/<date>/
 - **Never delete source files**: SD card originals stay until user manually clears them.
 - **Filter from filename, not header**: ASIAir does not write FILTER to FITS headers.
   Use `darkroom/parse.py:parse_filter()` everywhere.
-- **OTA from FOCALLEN header**: `180 → FMA180`, `400 → FRA400`. See `parse.py:ota_from_focallen()`.
+- **OTA from FOCALLEN header + session date**: `180 → FMA180`, `400 → FRA400`,
+  `100/135/200/300/400 → Canon<focal>mm`, `45-60 → Canon50mm`. See
+  `parse.py:parse_ota()`. Focal length alone is ambiguous — the Canon EF 100-400
+  zoom sits at the same focal lengths as the scopes — so `parse_ota` also takes
+  `obs_date` and falls through to the lens when the session predates the scope
+  (`OTA_ACQUIRED`: FMA180 Jan 2023, FRA400 Jan 2025). Each zoom stop is its own
+  OTA name, because flat matching keys on OTA and a 100mm flat must never match
+  a 400mm light.
 - **Session date = start date**: local calendar date the session began (before midnight),
   not the date it ended (sessions routinely run past midnight).
 

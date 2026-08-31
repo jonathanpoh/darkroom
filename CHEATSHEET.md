@@ -487,10 +487,14 @@ darkroom catalog scan-guiding --apply
 - **`backfill-times` only fills NULLs.** Change a session's span and you must
   clear it before the backfill will revisit, then re-run `scan-guiding` or the
   guiding row stays stale.
-- **A camera lens can impersonate a telescope.** OTA is inferred from
-  `FOCALLEN` alone, so a Canon 100-400 zoom shot at 180mm reads as `FMA180` and
-  at 400mm as `FRA400` — confidently wrong rather than `Unknown`, so nothing
-  flags it. Correct the OTA in `ingest review` when using a zoom.
+- **A camera lens can still impersonate a telescope, but only forwards.** OTA
+  comes from `FOCALLEN` *and* the session date: a Canon 100-400 zoom at 400mm
+  reads as `FRA400` — unless the night predates January 2025, when there was no
+  FRA400 to shoot with, and it resolves to `Canon400mm` instead (same for
+  `FMA180` before January 2023). That fixes the whole 2023 archive, but it
+  cannot help *today*: a zoom night shot now at 180 or 400mm is indistinguishable
+  from the scope, so correct the OTA by hand in `ingest review`. The off-scope
+  stops (100/135/200/300mm) and the 50mm are named automatically.
 - **`uv run pytest` on a fresh checkout or worktree** fails with
   `Failed to spawn: pytest` until you run `uv sync --extra dev` once — pytest
   is in the `dev` extra, not the base dependencies.
