@@ -8,8 +8,15 @@ call about your own data.
 something here is unblocked, the corresponding backlog item can move.
 
 > Catalog figures below were read from the live server (`darkroom.jpoh.net`) on
-> **2026-08-30**. Re-check before trusting them — `darkroom catalog list`, or
+> **2026-08-31**. Re-check before trusting them — `darkroom catalog list`, or
 > the web UI.
+
+## ⚡ Start here (2026-08-31)
+
+1. **One `/rescan` pair is a trap — do not apply it as-is.** See #2.
+2. **Deploy** — 11 local commits are unpushed (M3 + the rename fix). See #7.
+3. **The camera-lens / focal-length decision (F9)** — you said you'd come back
+   to this; the data you need is in #9.
 
 ---
 
@@ -99,6 +106,25 @@ Notes for the migration pass:
 - Then run `darkroom catalog apply-renames --archive … --apply` to move the
   folders (see #6).
 
+### 2b. ⚠️ One `/rescan` pair would destroy a `processed` row
+
+Queue as of 2026-08-31: **6 `delete` + 2 `create` pending** (16 updates and 21
+renames already applied). One create/delete pair is the *same session*:
+
+```
+delete  NGC7000_20230914_Unknown_Canon6D_UnknownFilter    fl=53.0, state=processed
+create  NGC7000_20230914_Canon50mm_Canon6D_UnknownFilter
+```
+
+M1's `Canon50mm` window (45–55) retroactively reclassified that 2023 night,
+which shot at 53mm. `rescan` can't pair an OTA change across the session_id, so
+it proposes delete + create — and **applying that drops the row's `processed`
+state and any guiding row** (the B15 failure mode).
+
+**Do this instead:** edit its OTA to `Canon50mm` in the web UI. That is an
+identity edit, so it renames the row in place and carries everything forward,
+then `apply-renames` moves the folder. Only this one session is affected.
+
 ### 4. Decide how a `Stars` sub-folder should be modelled (M2's open half)
 
 A session folder can contain a sub-folder that is **not** a filter and not a
@@ -175,15 +201,19 @@ darkroom catalog apply-renames --archive "$DARKROOM_ARCHIVE" --apply
 
 Until this runs, the catalog and the archive disagree about those 13 folders.
 
-### 7. Push and deploy M1 ✅ done 2026-08-31
+### 7. Push and deploy — 11 commits waiting
 
 Deployed to the LXC (prod on `718f3cd`); the `panel` migration applied cleanly,
 240 sessions and 151 guiding rows intact. Rollback backup on the server at
 `/var/lib/darkroom/backups/astro_catalog-pre-M1-20260831-090848.db`.
 
-**A later fix is not yet deployed:** `acc9bc7` (nested rename classification).
-It only affects `apply-renames`, which runs on the Mac, so the server does not
-need it urgently — but it should go out with the next deploy.
+**Not yet pushed or deployed (11 commits on local `main`):** `acc9bc7` (nested
+rename classification) and all of **M3** — panel-aware `wbpp` prep, the
+two-stage `finish`, the mixed-target guard and the picker fix.
+
+None of it is urgent for the server: `wbpp`, `finish` and `apply-renames` all
+run on the Mac, and the `panel` column the web UI needs is already deployed. Push
+when convenient.
 
 ### 8. One session still has a NULL `start_utc`
 
@@ -226,13 +256,33 @@ encoded because the mechanical EF adapter can't stop down. What's open is how
 to express a *variable* focal length. Sketch: `Canon100-400mm` plus the
 existing `focal_length` column, vs. a per-focal-length name.
 
-**Cheap now, expensive later** — the zoom has no catalogued session yet. The
-first night it does, changing this becomes a rename of rows plus folders.
+**Cheap now, expensive later** — changing this later is a rename of rows plus
+folders.
 
-### 10. The bulk no-filter backlog — 95 of 240 sessions
+**The data you need, read live 2026-08-31.** 20 sessions sit at
+`ota='Unknown'`; here are their focal lengths:
 
-Verified live 2026-08-30: **95 sessions have no filter recorded** (40% of the
-catalog).
+| FOCALLEN | rows | probably |
+|---|---|---|
+| 53 | 1 | the 50mm — **now auto-resolves to `Canon50mm`**, see #2b |
+| 56 | 1 | the same 50mm reporting high? If so widen the window, don't add a name |
+| 100, 104 | 1 + 7 | the 100-400 zoom, wide end |
+| 136 | 3 | zoom |
+| 200, 202 | 3 + 1 | zoom |
+| 301 | 1 | zoom |
+| 386 | 2 | zoom — and uncomfortably close to `FRA400`'s 390–410 window |
+
+So **18 of the 20 are the zoom across its range**, and they all get names the
+moment this is decided. Two things that decision should settle: whether `56` is
+the fifty (a window widening) or something else, and how a zoom is named at all
+given the focal length varies per session — `Canon100-400mm` plus the existing
+`focal_length` column, or a per-focal-length name like `Canon200mm`.
+
+### 10. The bulk no-filter backlog
+
+Verified live 2026-08-30: **95 of 240 sessions had no filter recorded** (40% of
+the catalog). Recheck — the catalog is now 247 sessions and you have corrected
+a batch since.
 
 | | |
 |---|---|
