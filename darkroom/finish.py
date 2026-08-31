@@ -10,30 +10,34 @@ from pathlib import Path
 
 from darkroom.catalog_client import CatalogBackend, resolve_backend
 from darkroom.config import resolve_path
-from darkroom.names import target_slug
+from darkroom.names import parse_wbpp_panel_dir, processed_panel_dir, target_slug
 
 
 # ── core helpers ──────────────────────────────────────────────────────────────
 
-def _find_processing_date(
-    master_dir: Path, processed_dir: Path, override: str | None
-) -> str:
+def _find_processing_date(dirs: list[Path], override: str | None) -> str:
     """Return YYYY-MM-DD for the _Processed/<date>/ folder name.
 
     If override is given (--date), use it verbatim. Otherwise return the
-    latest mtime across files in master/ and processed/ — captures the
+    latest mtime across files in every directory in *dirs* — captures the
     most recent processing activity, whether WBPP-only or with hand finishing.
+
+    Takes a list (not a fixed master/processed pair) so a mosaic can fold in
+    every panel's master/+processed/ plus the target-level processed/ and
+    derive one shared date — the archive holds one dated _Processed/<date>/
+    per mosaic, not one per panel (BACKLOG.md M3).
     """
     if override:
         return override
     times: list[float] = []
-    for d in (master_dir, processed_dir):
+    for d in dirs:
         if d.exists():
             for f in d.iterdir():
                 if f.is_file():
                     times.append(f.stat().st_mtime)
     if not times:
-        sys.exit(f"No files in {master_dir} or {processed_dir} — cannot derive date")
+        joined = ", ".join(str(d) for d in dirs)
+        sys.exit(f"No files in {joined} — cannot derive date")
     return datetime.fromtimestamp(max(times)).date().isoformat()
 
 
@@ -77,6 +81,10 @@ def _resolve_session_ids(
     Fetches every session via ``backend.query_sessions()`` and filters
     client-side for a non-null ``lights_path`` — the catalog is ~200 rows,
     and there's no server-side "lights_path is not null" filter.
+
+    ``wbpp_target`` is whichever directory holds the SESSION_* dirs to
+    resolve — the WBPP target root for a non-mosaic target, or one panel dir
+    for a mosaic (each panel has its own SESSION_* numbering).
     """
     light_dirs = _collect_light_dirs(wbpp_target)
     if not light_dirs:
@@ -90,29 +98,59 @@ def _resolve_session_ids(
 
 
 def _mark_sessions_processed(
-    wbpp_target: Path,
+    wbpp_targets: list[Path],
     archive_root: Path,
     status: str,
     date_str: str,
     backend: CatalogBackend,
+    *,
+    state: str = "processed",
 ) -> None:
-    """Mark every session resolved from wbpp_target as processed.
+    """Mark every session resolved from wbpp_targets as *state*.
 
-    Sets the structured processed_state='processed', with processed_path=status
+    Takes a list (not one dir) so a mosaic merge can resolve sessions across
+    every panel dir at once — the merged mosaic marks all panels' sessions
+    together, since none of them is individually finished (BACKLOG.md M3). A
+    non-mosaic or single-panel caller just passes a one-element list.
+
+    Sets the structured processed_state=*state*, with processed_path=status
     (the archive-relative _Processed/<date>/ path) and processed_date=date_str.
     Both the read (_resolve_session_ids) and the write go through ``backend``.
     """
-    session_ids = _resolve_session_ids(wbpp_target, backend, archive_root)
+    session_ids = sorted({
+        sid
+        for wbpp_target in wbpp_targets
+        for sid in _resolve_session_ids(wbpp_target, backend, archive_root)
+    })
     if not session_ids:
         print("\nWarning: no catalog sessions matched symlinks — nothing to mark.")
         return
-    print(f"\nMarking {len(session_ids)} session(s) as processed:")
+    print(f"\nMarking {len(session_ids)} session(s) as {state}:")
     for sid in session_ids:
         ok = backend.set_processed_state(
-            sid, state="processed", processed_path=status, processed_date=date_str
+            sid, state=state, processed_path=status, processed_date=date_str
         )
         mark = "✓" if ok else "✗ (not found)"
         print(f"  {mark} {sid}")
+
+
+def _preview_mark(wbpp_targets: list[Path], backend: CatalogBackend, archive_root: Path, *, state: str) -> None:
+    """--dry-run counterpart to _mark_sessions_processed: read-only, prints what would happen."""
+    session_ids = sorted({
+        sid
+        for wbpp_target in wbpp_targets
+        for sid in _resolve_session_ids(wbpp_target, backend, archive_root)
+    })
+    if session_ids:
+        print(f"\n[dry-run] would mark {len(session_ids)} session(s) as {state}:")
+        for sid in session_ids:
+            print(f"  {sid}")
+    else:
+        print(
+            "\n[dry-run] WARNING: no catalog sessions matched the SESSION_N "
+            "symlinks — a real run would copy files but mark nothing. "
+            "Check --archive points at the archive the symlinks resolve into."
+        )
 
 
 def _copy_flat(src_dir: Path, dest_dir: Path, *, dry_run: bool) -> int:
@@ -141,6 +179,39 @@ def _copy_flat(src_dir: Path, dest_dir: Path, *, dry_run: bool) -> int:
                 print(f"  {f.name} → {dest}")
                 count += 1
     return count
+
+
+# ── mosaic helpers ────────────────────────────────────────────────────────────
+
+def _panel_dirs(wbpp_target: Path) -> dict[str, Path]:
+    """Return {panel_label: dir} for every PANEL_* dir directly under wbpp_target.
+
+    Empty for a non-mosaic target — the presence of any PANEL_* dir is exactly
+    how a mosaic is detected (BACKLOG.md M3): no grouping keyword can keep WBPP
+    from merging panels at final integration, so each panel got its own tree.
+    """
+    panels: dict[str, Path] = {}
+    for p in wbpp_target.iterdir():
+        if not p.is_dir():
+            continue
+        label = parse_wbpp_panel_dir(p.name)
+        if label is not None:
+            panels[label] = p
+    return panels
+
+
+def _panel_sort_key(label: str) -> tuple[int, int]:
+    """Numeric sort for panel labels ("2-10" after "2-9", not lexicographic "2-10" < "2-9")."""
+    row, col = label.split("-")
+    return int(row), int(col)
+
+
+def _require_output(wbpp_output: Path, master_dir: Path, where: str) -> None:
+    """Shared existence checks for one WBPP Output/ dir — target-level or one panel's."""
+    if not wbpp_output.exists():
+        sys.exit(f"Output/ not found in {where} — did you set the WBPP output dir correctly?")
+    if not master_dir.exists():
+        sys.exit(f"master/ not found in {wbpp_output}")
 
 
 # ── cleanup helpers ──────────────────────────────────────────────────────────
@@ -177,31 +248,17 @@ def _confirm_and_delete(dirs: list[Path], label: str, *, dry_run: bool) -> None:
 
 # ── main command ──────────────────────────────────────────────────────────────
 
-def cmd_finish(
-    *,
-    output: Path,
-    wbpp_root: Path,
-    target: str,
-    backend: CatalogBackend,
-    date_override: str | None,
-    dry_run: bool,
+def _finish_simple(
+    wbpp_target: Path, *, output: Path, target: str, backend: CatalogBackend,
+    date_str: str, dry_run: bool,
 ) -> None:
-    slug = target_slug(target)
-    wbpp_target = wbpp_root / slug
+    """Finish a non-mosaic target — today's exact single-tree behavior, unchanged."""
     wbpp_output = wbpp_target / "Output"
     master_dir = wbpp_output / "master"
     processed_dir = wbpp_output / "processed"
+    _require_output(wbpp_output, master_dir, str(wbpp_target))
 
-    if not wbpp_target.exists():
-        sys.exit(f"WBPP target dir not found: {wbpp_target}")
-    if not wbpp_output.exists():
-        sys.exit(f"Output/ not found in {wbpp_target} — did you set the WBPP output dir correctly?")
-    if not master_dir.exists():
-        sys.exit(f"master/ not found in {wbpp_output}")
-
-    date_str = _find_processing_date(master_dir, processed_dir, date_override)
     dest = _build_dest(output, target, date_str)
-
     print(f"Destination: {dest}")
 
     if not any(f.is_file() for f in master_dir.iterdir()):
@@ -233,19 +290,9 @@ def cmd_finish(
     if dry_run:
         # Resolution is read-only, and it's the step most sensitive to a wrong
         # --archive root — surface it in the dry run instead of skipping it.
-        session_ids = _resolve_session_ids(wbpp_target, backend, output)
-        if session_ids:
-            print(f"\n[dry-run] would mark {len(session_ids)} session(s) as processed:")
-            for sid in session_ids:
-                print(f"  {sid}")
-        else:
-            print(
-                "\n[dry-run] WARNING: no catalog sessions matched the SESSION_N "
-                "symlinks — a real run would copy files but mark nothing. "
-                "Check --archive points at the archive the symlinks resolve into."
-            )
+        _preview_mark([wbpp_target], backend, output, state="processed")
     else:
-        _mark_sessions_processed(wbpp_target, output, status, date_str, backend)
+        _mark_sessions_processed([wbpp_target], output, status, date_str, backend, state="processed")
 
     _confirm_and_delete(
         [wbpp_output] if wbpp_output.exists() else [],
@@ -256,6 +303,179 @@ def cmd_finish(
         _list_session_dirs(wbpp_target),
         "SESSION_N directories to delete",
         dry_run=dry_run,
+    )
+
+
+def _finish_panel(
+    panel_dir: Path, label: str, *, output: Path, target: str, backend: CatalogBackend,
+    date_str: str, dry_run: bool,
+) -> None:
+    """Finish one mosaic panel: its Output/ -> _Processed/<date>/<label>/, sessions in_progress.
+
+    Not `processed` — a stacked-but-unmerged panel is exactly what in_progress
+    means ("stacked and/or editing, no final export yet"). The panel's sessions
+    only flip to processed once the mosaic-level merge lands, and they flip
+    together with every other panel's (see _finish_mosaic_merge).
+    """
+    print(f"\n── Panel {label} ──")
+    wbpp_output = panel_dir / "Output"
+    master_dir = wbpp_output / "master"
+    processed_dir = wbpp_output / "processed"
+    _require_output(wbpp_output, master_dir, str(panel_dir))
+
+    dest = _build_dest(output, target, date_str) / processed_panel_dir(label)
+    print(f"Destination: {dest}")
+
+    if not any(f.is_file() for f in master_dir.iterdir()):
+        sys.exit(f"Error: no files in {master_dir} — aborting (nothing to archive for panel {label})")
+    print("\nCopying master/")
+    _copy_flat(master_dir, dest / "master", dry_run=dry_run)
+
+    processed_files = (
+        [f for f in processed_dir.iterdir() if f.is_file()] if processed_dir.exists() else []
+    )
+    if not processed_files:
+        print("\nWarning: processed/ is empty — skipping")
+    else:
+        print("\nCopying processed/")
+        _copy_flat(processed_dir, dest / "processed", dry_run=dry_run)
+
+    for log_name in ("logs", "asiair_logs"):
+        log_dir = wbpp_output / log_name
+        if log_dir.exists() and any(f.is_file() for f in log_dir.iterdir()):
+            print(f"\nCopying {log_name}/")
+            _copy_flat(log_dir, dest / log_name, dry_run=dry_run)
+
+    status = str(dest.relative_to(output))
+    if dry_run:
+        _preview_mark([panel_dir], backend, output, state="in_progress")
+    else:
+        _mark_sessions_processed([panel_dir], output, status, date_str, backend, state="in_progress")
+
+    _confirm_and_delete(
+        [wbpp_output] if wbpp_output.exists() else [],
+        f"Panel {label} WBPP Output/ directory to delete (intermediates + master + processed)",
+        dry_run=dry_run,
+    )
+    _confirm_and_delete(
+        _list_session_dirs(panel_dir),
+        f"Panel {label} SESSION_N directories to delete",
+        dry_run=dry_run,
+    )
+
+
+def _finish_mosaic_merge(
+    wbpp_target: Path, panel_dirs: list[Path], *, output: Path, target: str,
+    backend: CatalogBackend, date_str: str, dry_run: bool,
+) -> None:
+    """Finish the merged mosaic: target-level Output/processed/ -> _Processed/<date>/ top level.
+
+    The merge happens by hand in PixInsight — WBPP never merges non-overlapping
+    panels, which is the whole reason each panel got its own tree — so there is
+    no master/ here, only whatever the merge was saved as under processed/.
+    Every panel's sessions flip to `processed` together here, because the
+    merged image is not any single panel's output (BACKLOG.md M3).
+    """
+    wbpp_output = wbpp_target / "Output"
+    processed_dir = wbpp_output / "processed"
+    processed_files = (
+        [f for f in processed_dir.iterdir() if f.is_file()] if processed_dir.exists() else []
+    )
+    if not processed_files:
+        print(
+            "\nMerged mosaic not found — target-level Output/processed/ is empty. "
+            "This is the normal state between stacking the panels and merging them "
+            "by hand in PixInsight, not an error; sessions stay in_progress until "
+            "you save the merge there and re-run finish."
+        )
+        return
+
+    print("\n── Merged mosaic ──")
+    dest = _build_dest(output, target, date_str)
+    print(f"Destination: {dest}")
+    print("\nCopying processed/")
+    _copy_flat(processed_dir, dest / "processed", dry_run=dry_run)
+
+    for log_name in ("logs", "asiair_logs"):
+        log_dir = wbpp_output / log_name
+        if log_dir.exists() and any(f.is_file() for f in log_dir.iterdir()):
+            print(f"\nCopying {log_name}/")
+            _copy_flat(log_dir, dest / log_name, dry_run=dry_run)
+
+    status = str(dest.relative_to(output))
+    if dry_run:
+        _preview_mark(panel_dirs, backend, output, state="processed")
+    else:
+        _mark_sessions_processed(panel_dirs, output, status, date_str, backend, state="processed")
+
+    _confirm_and_delete(
+        [wbpp_output] if wbpp_output.exists() else [],
+        "Target-level WBPP Output/ directory to delete (merged mosaic)",
+        dry_run=dry_run,
+    )
+
+
+def cmd_finish(
+    *,
+    output: Path,
+    wbpp_root: Path,
+    target: str,
+    backend: CatalogBackend,
+    date_override: str | None,
+    dry_run: bool,
+    panel: str | None = None,
+) -> None:
+    slug = target_slug(target)
+    wbpp_target = wbpp_root / slug
+    if not wbpp_target.exists():
+        sys.exit(f"WBPP target dir not found: {wbpp_target}")
+
+    panels = _panel_dirs(wbpp_target)
+
+    if panel is not None:
+        if not panels:
+            sys.exit(f"--panel given but {wbpp_target} has no PANEL_* subdirectories (not a mosaic)")
+        if panel not in panels:
+            avail = ", ".join(sorted(panels, key=_panel_sort_key))
+            sys.exit(f"Panel {panel!r} not found under {wbpp_target} — available: {avail}")
+        panel_dir = panels[panel]
+        panel_output = panel_dir / "Output"
+        date_str = _find_processing_date(
+            [panel_output / "master", panel_output / "processed"], date_override
+        )
+        _finish_panel(panel_dir, panel, output=output, target=target, backend=backend,
+                       date_str=date_str, dry_run=dry_run)
+        return
+
+    if not panels:
+        wbpp_output = wbpp_target / "Output"
+        date_str = _find_processing_date(
+            [wbpp_output / "master", wbpp_output / "processed"], date_override
+        )
+        _finish_simple(wbpp_target, output=output, target=target, backend=backend,
+                        date_str=date_str, dry_run=dry_run)
+        return
+
+    # Mosaic, full run: one WBPP run per panel (BACKLOG.md M3 — no grouping
+    # keyword survives final integration), plus a target-level Output/ for the
+    # merge. All of it shares one _Processed/<date>/ — the date the whole
+    # mosaic files under, not one date per panel — so derive it from every
+    # panel's master/+processed/ together with the target-level processed/.
+    labels = sorted(panels, key=_panel_sort_key)
+    print(f"Mosaic detected: {len(labels)} panel(s) — {', '.join(labels)}")
+    dirs = [wbpp_target / "Output" / "processed"]
+    for label in labels:
+        panel_output = panels[label] / "Output"
+        dirs += [panel_output / "master", panel_output / "processed"]
+    date_str = _find_processing_date(dirs, date_override)
+
+    for label in labels:
+        _finish_panel(panels[label], label, output=output, target=target, backend=backend,
+                       date_str=date_str, dry_run=dry_run)
+
+    _finish_mosaic_merge(
+        wbpp_target, [panels[label] for label in labels], output=output, target=target,
+        backend=backend, date_str=date_str, dry_run=dry_run,
     )
 
 
@@ -276,6 +496,7 @@ def run(args: argparse.Namespace) -> None:
         backend=resolve_backend(args.catalog),
         date_override=args.date,
         dry_run=args.dry_run,
+        panel=args.panel,
     )
 
 
@@ -296,6 +517,11 @@ def add_subparser(subparsers) -> None:
                    help="Name the _Processed/<date>/ output folder (default: derived "
                         "from WBPP output mtimes). Does NOT select a night — finish "
                         "always processes the whole WBPP target.")
+    p.add_argument("--panel", metavar="N-M",
+                   help='Finish only this mosaic panel (e.g. "1-1"), marking its sessions '
+                        "in_progress. Without this flag, a mosaic target finishes every "
+                        "panel and then, if the merged mosaic is present in the target-level "
+                        "Output/processed/, marks every panel's sessions processed.")
     p.add_argument("--dry-run", action="store_true",
                    help="Print what would be copied/deleted without making changes")
     p.set_defaults(func=run)
