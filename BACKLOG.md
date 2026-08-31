@@ -2155,7 +2155,7 @@ duplicate detection all keep working unchanged.
           P1-1/  P1-2/  P2-1/  P2-2/          ← lights_path points here, per panel
     _Processed/
       2025-05-29/
-        P1-1/ …                               ← already the manual convention on disk
+        1-1/ …                                ← the manual convention on disk (bare, no "P" — verified 2026-08-31)
 ```
 
 One session row per **panel-night**: 4 panels × 2 nights = 8 rows, each with its
@@ -2485,19 +2485,85 @@ nested `PANEL_` level, on the strength of the calibration stages working.
 Also superseded: the confirmation that flats need no `PANEL_` level — true,
 but moot, since each panel now gets its own tree and its own flats.)
 
-#### The design: panel folded into the WBPP target slug
+#### The design: a panel level *inside* the target dir
 
-Back to M1's original spec. Each panel is its own WBPP target, with its own
-complete hierarchy:
+One WBPP run per panel (that part is forced), but nested under the target
+rather than as sibling top-level dirs — Jonathan's refinement 2026-08-31:
 
 ```
-~/WBPP/IC4604_P1-1/
-  SESSION_1/  SESSION_2/          <- that panel's nights
-    Lights/FILTER_L-Pro/
-    Darks/  Flats/FILTER_L-Pro/  FlatDarks/
-  Output/
-~/WBPP/IC4604_P1-2/  …            <- and so on, one per panel
+~/WBPP/IC4604/                      <- target_slug(target), unchanged
+  PANEL_1-1/
+    SESSION_1/  SESSION_2/          <- that panel's nights
+      Lights/FILTER_L-Pro/
+      Darks/  Flats/FILTER_L-Pro/  FlatDarks/
+    Output/                         <- one WBPP run's output, per panel
+  PANEL_1-2/  PANEL_2-1/  PANEL_2-2/
+  Output/                           <- target level: the merged mosaic
 ```
+
+Preferred over sibling `~/WBPP/IC4604_P1-1/` dirs because `finish --target
+"IC 4604"` resolves one directory and iterates panels inside it, rather than
+globbing `IC4604_P*` siblings at the WBPP root, and `~/WBPP/` keeps one entry
+per target. **It does not, however, make the finish change smaller** —
+`finish.py:56` globs `wbpp_target/SESSION_*` and `finish.py:191` expects
+`wbpp_target/Output`; with panels one level down, both miss either way.
+
+Calibration is symlinked into every panel's tree. Real duplication — N copies
+of each dark/flat set — but they are **symlinks into the archive**, so the cost
+is inodes, not gigabytes. Accepted deliberately; correctness first.
+
+A non-mosaic target is unaffected: `panel IS NULL` keeps producing
+`~/WBPP/IC4604/SESSION_N/` exactly as today, with no `PANEL_` level.
+
+#### ⚠️ The finished mosaic belongs to the TARGET, not to any panel
+
+Raised by Jonathan 2026-08-31, and it is the part that makes mosaics
+structurally different from everything else in the pipeline. Panels are
+stacked separately and then **merged into a single image**. That merged result
+is the real deliverable, and it is not any panel's output — so writing it to
+`_Processed/<date>/P1-1/` would be wrong for every panel equally.
+
+The archive already encodes the right answer (checked, not assumed):
+
+```
+_Processed/2023-07-17/            <- ordinary target
+  masters/  process/              <- intermediates, in subdirs
+  result_600s.fit                 <- the deliverable, at the TOP level
+  starless_result_600s.fit  starmask_result_600s.fit
+
+_Processed/2025-05-29/            <- the IC 4604 mosaic
+  1-1/  1-2/  2-1/  2-2/          <- per-panel WBPP output (master/, logs/)
+  (no top-level result — not merged yet)
+```
+
+Same rule both times: **intermediates in subdirectories, the deliverable at
+`_Processed/<date>/` top level.** A mosaic simply has one subdir per panel
+where an ordinary target has `masters/`.
+
+Note the existing dirs are bare `1-1`, **not** `P1-1` — M1's layout sketch
+claims `P1-1/` is "already the manual convention on disk", which is wrong.
+Match the disk (`1-1`) unless deliberately changing it; the `P` prefix earns
+its place in the *session_id* (where it disambiguates a flat identifier) but
+not inside a directory that already means "panel".
+
+So finish becomes two operations:
+
+| | copies | to | marks sessions |
+|---|---|---|---|
+| per panel | `PANEL_<n>/Output/master/` + `processed/` | `_Processed/<date>/<n>/` | `in_progress` |
+| the mosaic | target-level `Output/processed/` | `_Processed/<date>/` (top) | `processed` |
+
+That falls straight out of the existing `processed_state` enum, which already
+distinguishes `in_progress` ("stacked and/or editing, no final export yet")
+from `processed`. A stacked-but-unmerged panel is *exactly* `in_progress`, and
+a mosaic's panels all become `processed` together when the merge is filed —
+which is also correct, since none of them is individually finished.
+
+**Open question for Jonathan:** the merge happens by hand in PixInsight, so
+finish cannot find it in a WBPP `Output/master/`. Proposal above is that it
+goes in a target-level `~/WBPP/IC4604/Output/processed/`, reusing the existing
+"hand-finished work lands in `Output/processed/`" convention one level up.
+Confirm that, or name where the merged file actually gets saved.
 
 Calibration is symlinked into every panel's tree. That is real duplication —
 N copies of each dark/flat set — but they are **symlinks into the archive**,
@@ -2539,7 +2605,8 @@ sides call, rather than either side concatenating `_P{panel}` itself.
   existing per-night loop. Leave the NULL-panel path byte-identical.
 - `picker.py`: a mosaic target needs a panel step, or an "all panels" choice
   that emits N trees in one go.
-- `finish.py`: the two points above.
+- `finish.py`: panel-level SESSION/Output discovery, plus the two-operation
+  split above (per-panel -> `in_progress`, merged mosaic -> `processed`).
 - `names.py`: `wbpp_slug(target, panel)`.
 
 **Tests:** one night with four panel sessions plus a NULL-panel session on
