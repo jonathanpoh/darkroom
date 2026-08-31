@@ -549,7 +549,8 @@ def rename_target(conn: sqlite3.Connection, old_target: str, new_target: str) ->
 
 def delete_session(conn: sqlite3.Connection, session_id: str) -> bool:
     """Delete a session row by session_id, along with any pending_renames row
-    owed for it (U2 — a deleted session can't have a rename left dangling).
+    owed for it (U2 — a deleted session can't have a rename left dangling) and
+    its session_guiding row (F4).
     Returns True if the session row was deleted, False if session_id matched
     nothing. Catalog rows only — never touches archive files."""
     row = conn.execute(
@@ -558,6 +559,13 @@ def delete_session(conn: sqlite3.Connection, session_id: str) -> bool:
     if row is None:
         return False
     conn.execute("DELETE FROM pending_renames WHERE session_row_id = ?", (row["id"],))
+    # session_guiding keys on session_id TEXT rather than the numeric id, and
+    # SQLite has no cascade here — so a delete used to leave the guiding row
+    # behind forever, invisible except as a count mismatch. B15 fixed the
+    # *rename* side of this (update_session_fields re-keys the row); the delete
+    # side was still open. Found live 2026-08-31: one orphan, left by the
+    # IC 4604 2025-04-27 tail row removed during the mosaic migration.
+    conn.execute("DELETE FROM session_guiding WHERE session_id = ?", (session_id,))
     cur = conn.execute("DELETE FROM sessions WHERE id = ?", (row["id"],))
     conn.commit()
     return cur.rowcount > 0

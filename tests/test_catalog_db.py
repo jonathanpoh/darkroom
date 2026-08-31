@@ -875,3 +875,26 @@ def test_non_identity_edit_leaves_guiding_row_alone(tmp_path):
 
         rows = conn.execute("SELECT session_id FROM session_guiding").fetchall()
         assert [r["session_id"] for r in rows] == [sid]
+
+
+def test_delete_session_removes_its_guiding_row(tmp_path):
+    """The other half of the same gap: a *delete* must take the guiding row too.
+
+    The rename path was fixed when F8's proposals orphaned 11 rows. The delete
+    path stayed open, and left one orphan in the live catalog — the IC 4604
+    2025-04-27 tail row removed during the mosaic migration, whose guiding row
+    outlived it and showed up only as session_guiding counting one higher than
+    its join against sessions.
+    """
+    conn = open_db(make_db(tmp_path))
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    _guiding(conn, sid)
+    assert conn.execute(
+        "SELECT COUNT(*) FROM session_guiding WHERE session_id = ?", (sid,)
+    ).fetchone()[0] == 1
+
+    assert delete_session(conn, sid) is True
+
+    assert conn.execute(
+        "SELECT COUNT(*) FROM session_guiding WHERE session_id = ?", (sid,)
+    ).fetchone()[0] == 0, "the guiding row outlived its session"

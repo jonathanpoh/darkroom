@@ -24,8 +24,8 @@ something here is unblocked, the corresponding backlog item can move.
 3. **Rewrite `INSTRUME` on 154 April-2023 files** (**#14**) — the last of the
    `ASCOMCameraDriver` mess. Fixes the M 42 session that currently matches none
    of its own flats.
-4. **`darkroom logs import` has still never been run** (**#5**). The ASIAir
-   logs exist only on the Mac, and the SD card gets cleared.
+4. **Rename one mangled log filename** — `Autorun_Log_2026-08-07_182931._2txt`
+   in the ASIAir log folder (see **#5**). Cosmetic; nothing parses Autorun logs.
 
 **Done today, no action needed** — deploy (prod on `c7a5ef7`), the F9 optics
 decision applied across the whole corpus, the rename ledger drained to zero,
@@ -163,19 +163,23 @@ proposal stays queued.
 
 ## 🟠 Do soon — not blocking, but degrading
 
-### 5. Run `darkroom logs import` — it has never been run
+### 5. Run `darkroom logs import` ✅ done
 
-The ASIAir logs still exist **only on the Mac**. The SD card gets rotated and
-cleared, so anything not yet copied off is at risk, and `scan-guiding` can only
-see what has been archived.
+Run by Jonathan (the file just didn't get updated). Verified 2026-08-31:
+**291 of 292** non-CHN files in `~/02_Astrophotography/01_ASIAir/ASIAIR/log`
+are archived under `00_Logs/ASIAir/`, byte-for-byte identical, with nothing
+stale on the archive side.
 
-```bash
-darkroom logs import --source <asiair-log-dir>            # dry run first
-darkroom logs import --source <asiair-log-dir> --apply
-```
+**The one miss is a typo, not a bug:** `Autorun_Log_2026-08-07_182931._2txt`
+has its extension mangled (`._2txt` rather than `_2.txt`), so it doesn't match
+the `*.txt` glob. It's an Autorun log, which nothing parses — rename it at the
+source and re-run if you want the set complete.
 
-Read-only on the source; skips `*_CHN.txt` and anything already archived at the
-same size.
+`scan-guiding` against the archived logs reports **118 logs, 2212 guiding
+segments, 150 sessions matched** — which is exactly what the catalog already
+holds, so the import brought no new guiding coverage. 5 logs match no session;
+that is expected (the M 8 mosaic night has no guide log at all, since no
+guidescope is used at 50mm).
 
 ### 6. Drain the rename ledger ✅ done — 0 pending
 

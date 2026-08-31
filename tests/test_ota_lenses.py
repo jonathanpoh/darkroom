@@ -109,3 +109,4 @@ def test_rescan_can_correct_a_calibration_set_ota(tmp_path):
             "SELECT ota FROM calibration_sets WHERE set_id = ?", (base["set_id"],)
         ).fetchall()
     assert rows == [("Canon400mm",)], "a rescan must be able to correct the optic"
+
