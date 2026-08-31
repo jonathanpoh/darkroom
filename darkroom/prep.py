@@ -97,6 +97,28 @@ def _overwrite_target_dir(target_dir: Path) -> None:
                 shutil.rmtree(p)
 
 
+def _has_existing_sessions(target_dir: Path) -> bool:
+    """True if target_dir already holds SESSION_N dirs — including inside PANEL_*.
+
+    `next_session_num` only inspects a directory's direct children, which is
+    right for numbering (each panel numbers its own sessions independently) but
+    wrong for "has this target been prepped before?": a mosaic's SESSION_N dirs
+    live one level down, under `PANEL_1-1/` and friends, so a target-level check
+    alone reports a fully-prepped mosaic as empty and the interactive picker
+    skips its Append/Regenerate/Abort prompt.
+    """
+    if next_session_num(target_dir) > 1:
+        return True
+    if not target_dir.exists():
+        return False
+    return any(
+        parse_wbpp_panel_dir(p.name) is not None
+        and p.is_dir()
+        and next_session_num(p) > 1
+        for p in target_dir.iterdir()
+    )
+
+
 def _resolve_flat(
     cal_rows: list[dict], filter_name: str, obs_date: str, window_days: int
 ) -> dict | None:
@@ -549,7 +571,7 @@ def _run_interactive(
     target_name = rows[0]["target"]
     target_dir = wbpp_root / target_slug(target_name)
 
-    if next_session_num(target_dir) > 1:
+    if _has_existing_sessions(target_dir):
         action = questionary.select(
             f"{target_dir} already has SESSION_N dirs. What now?",
             choices=[

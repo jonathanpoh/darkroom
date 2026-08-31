@@ -15,7 +15,7 @@ from darkroom.wbpp import (
 from darkroom.cataloger import init_db, upsert_calibration_set
 from darkroom.catalog_client import LocalBackend
 from darkroom.names import make_session_id, parse_wbpp_panel_dir, session_dest_rel
-from darkroom.prep import build_wbpp_sessions
+from darkroom.prep import _has_existing_sessions, build_wbpp_sessions
 
 
 def touch(p: Path, content: bytes = b"") -> Path:
@@ -484,3 +484,46 @@ def test_build_wbpp_sessions_overwrite_refuses_real_files_without_tty(tmp_path, 
         build_wbpp_sessions(rows, backend=backend, output=archive, wbpp_root=wbpp_root,
                              target_name="IC 4604", overwrite=True)
     assert real.exists()
+
+
+# ── M3 follow-up: the interactive picker's "already prepped?" check ───────────
+#
+# next_session_num only inspects direct children — correct for numbering (each
+# panel numbers its own sessions), wrong for "has this been prepped before?",
+# since a mosaic's SESSION_N dirs sit under PANEL_*/. Without this the picker
+# skipped its Append/Regenerate/Abort prompt on a fully-prepped mosaic and
+# silently appended a second set of trees.
+
+
+def test_has_existing_sessions_false_when_empty(tmp_path):
+    assert _has_existing_sessions(tmp_path / "IC4604") is False
+    (tmp_path / "IC4604").mkdir()
+    assert _has_existing_sessions(tmp_path / "IC4604") is False
+
+
+def test_has_existing_sessions_true_at_target_level(tmp_path):
+    target = tmp_path / "IC4604"
+    (target / "SESSION_1").mkdir(parents=True)
+    assert _has_existing_sessions(target) is True
+
+
+def test_has_existing_sessions_true_inside_a_panel_dir(tmp_path):
+    """The regression: nothing at target level, SESSION_1 one level down."""
+    target = tmp_path / "IC4604"
+    (target / "PANEL_1-1" / "SESSION_1").mkdir(parents=True)
+    assert next_session_num(target) == 1        # the old check saw nothing
+    assert _has_existing_sessions(target) is True
+
+
+def test_has_existing_sessions_ignores_an_empty_panel_dir(tmp_path):
+    """A panel dir with only Output/ (prepped then cleared) is not 'existing'."""
+    target = tmp_path / "IC4604"
+    (target / "PANEL_1-1" / "Output" / "processed").mkdir(parents=True)
+    assert _has_existing_sessions(target) is False
+
+
+def test_has_existing_sessions_ignores_non_panel_dirs(tmp_path):
+    target = tmp_path / "IC4604"
+    (target / "Output" / "processed").mkdir(parents=True)
+    (target / "notes").mkdir()
+    assert _has_existing_sessions(target) is False
