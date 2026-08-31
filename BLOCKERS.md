@@ -14,7 +14,7 @@ something here is unblocked, the corresponding backlog item can move.
 ## ⚡ Start here (2026-08-31)
 
 1. **One `/rescan` pair is a trap — do not apply it as-is.** See #2.
-2. **Deploy** — 11 local commits are unpushed (M3 + the rename fix). See #7.
+2. **Deploy** — 20 local commits are unpushed (M3 + the rename fix). See #7.
 3. **The camera-lens / focal-length decision (F9)** — you said you'd come back
    to this; the data you need is in #9.
 
@@ -201,13 +201,13 @@ darkroom catalog apply-renames --archive "$DARKROOM_ARCHIVE" --apply
 
 Until this runs, the catalog and the archive disagree about those 13 folders.
 
-### 7. Push and deploy — 11 commits waiting
+### 7. Push and deploy — 20 commits waiting
 
 Deployed to the LXC (prod on `718f3cd`); the `panel` migration applied cleanly,
 240 sessions and 151 guiding rows intact. Rollback backup on the server at
 `/var/lib/darkroom/backups/astro_catalog-pre-M1-20260831-090848.db`.
 
-**Not yet pushed or deployed (11 commits on local `main`):** `acc9bc7` (nested
+**Not yet pushed or deployed (20 commits on local `main`, since `718f3cd`):** `acc9bc7` (nested
 rename classification) and all of **M3** — panel-aware `wbpp` prep, the
 two-stage `finish`, the mixed-target guard and the picker fix.
 
