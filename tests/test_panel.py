@@ -32,16 +32,23 @@ def test_real_mosaic_focallen_is_recognised():
     assert parse_ota(51) == "Canon50mm"
 
 
-@pytest.mark.parametrize("fl", [45, 50, 51, 55])
+@pytest.mark.parametrize("fl", [45, 50, 51, 55, 56, 60])
 def test_canon50mm_window_bounds(fl):
+    # F9 widened the top of the window to 60: the M 17 2023-08-09 session
+    # reports FOCALLEN 56 and plate-solves to 51mm, so the header is simply
+    # wrong at that end. Nothing lives between 60 and 95 to collide with.
     assert parse_ota(fl) == "Canon50mm"
 
 
-@pytest.mark.parametrize("fl", [44, 56, 100])
+@pytest.mark.parametrize("fl", [44, 61, 94])
 def test_canon50mm_window_does_not_overreach(fl):
-    # 100mm in particular: the archive has a lens-named 100mm folder, and
-    # inventing a Canon50mm for it would be worse than Unknown.
     assert parse_ota(fl) == "Unknown"
+
+
+def test_100mm_is_the_canon_zoom_not_a_fifty(fl=100):
+    # The archive has a lens-named 100mm_Canon6D flat folder; before F9 this
+    # was Unknown, which was at least loud. Now it is named.
+    assert parse_ota(fl) == "Canon100mm"
 
 
 # ── identity round-trip: what we write, we can read back ─────────────────────

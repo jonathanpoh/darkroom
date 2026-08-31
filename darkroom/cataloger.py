@@ -944,7 +944,7 @@ class SessionAnalyzer:
             sessions.append({
                 "target": _normalize_target(base_target),
                 "obs_date": night,
-                "ota": parse_ota(focallen),
+                "ota": parse_ota(focallen, obs_date=night),
                 "camera": first["camera"],
                 "filter": filter_,
                 "panel": panel,
@@ -1111,7 +1111,7 @@ class CalibrationCataloger:
                         "temperature_c": float(temp),
                         "capture_date": obs_date,
                         "folder_path": folder,
-                        "ota": parse_ota(meta.get("focallen")),
+                        "ota": parse_ota(meta.get("focallen"), obs_date=obs_date),
                         "filter": filter_,
                         "count": 0,
                     }

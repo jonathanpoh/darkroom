@@ -166,7 +166,7 @@ def _scan_lights(light_root: Path) -> list[Session]:
                 target=base_target,
                 panel=panel,
                 obs_date=night,
-                ota=parse_ota(focallen),
+                ota=parse_ota(focallen, obs_date=night),
                 camera=_normalize_camera(first_meta["camera"]),
                 filter=filter_,
                 gain=first_meta["gain"],
@@ -220,7 +220,7 @@ def _scan_calibration(source: Path) -> list[CalibrationGroup]:
             temp_rounded = round(meta["temperature"])
             camera = _normalize_camera(meta["camera"])
             exposure = _round_exposure(meta["exposure"])
-            ota = parse_ota(meta.get("focallen"))
+            ota = parse_ota(meta.get("focallen"), obs_date=capture_date)
             # Flats and FlatDarks are temperature-insensitive (like bias frames),
             # so don't split groups by temperature.
             temp_key = None if frame_type in ("Flat", "FlatDark", "Bias") else temp_rounded

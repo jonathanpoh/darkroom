@@ -120,43 +120,110 @@ def flat_morning_date(end_dt: datetime) -> date:
     return end_dt.date() if end_dt.hour < 12 else end_dt.date() + timedelta(days=1)
 
 
-def parse_ota(focallen) -> str:
-    """Infer OTA name from FOCALLEN header value.
+# The telescopes, and the date each entered service. FOCALLEN alone cannot
+# tell a scope from the Canon 100-400 zoom parked at the same focal length
+# (F9): the zoom reads 180 like an FMA180 and 394 like an FRA400, and no
+# header disambiguates them — TELESCOP is the mount. What *is* decidable is
+# that a session shot before a scope was bought was not shot with it. Confirmed
+# 2026-08-31: FMA180Pro from January 2023, FRA400 (and its 0.7x reducer) from
+# January 2025. Every FMA180 row in the catalog is 2023-12 or later, so the
+# rule only ever fires on the 400 end, where it is worth 8 mislabelled sessions
+# and their 6 flat sets.
+OTA_ACQUIRED = {
+    "FMA180": "2023-01-01",
+    "FRA400": "2025-01-01",
+    "FRA400-07x": "2025-01-01",
+}
 
-    Tolerance windows — ASIAir reports measured focal length, not nominal
-    (e.g. FRA400 reports 402).
+# Tolerance windows — ASIAir reports measured focal length, not nominal
+# (e.g. FRA400 reports 402, the 50mm reports 51-56).
+_SCOPE_WINDOWS = (
+    (170, 190, "FMA180"),
+    (270, 290, "FRA400-07x"),
+    (390, 410, "FRA400"),
+)
+
+# Canon EF glass, named Canon<nominal focal>mm. The zoom is only ever used at
+# its marked stops (100/135/200/300/400), and each stop gets its own name
+# rather than one "Canon100-400": flat matching keys on OTA + camera + filter,
+# so a single name for the whole range would make a 100mm flat a legal match
+# for a 400mm light. The archive already separates them this way by hand
+# (00_Calibration/Flats/{100,135,200,300,400}mm_Canon6D).
+#
+# The 50mm window reaches to 60 because the header lies at that end: the M 17
+# 2023-08-09 session reports FOCALLEN 56 and plate-solves to 51mm. Nothing of
+# Jonathan's lives between 60 and 95, so the slack costs nothing.
+_LENS_WINDOWS = (
+    (45, 60, "Canon50mm"),
+    (95, 110, "Canon100mm"),
+    (125, 145, "Canon135mm"),
+    (192, 215, "Canon200mm"),
+    (285, 315, "Canon300mm"),
+    (380, 410, "Canon400mm"),
+)
+
+
+def _predates_acquisition(ota: str, obs_date) -> bool:
+    """True if `obs_date` falls before `ota` was acquired (F9)."""
+    acquired = OTA_ACQUIRED.get(ota)
+    # An empty/missing date is "unknown", never "before" — a blank DATE-OBS
+    # must not silently reassign an optic (`"" < "2025-01-01"` is True).
+    if acquired is None or not obs_date:
+        return False
+    return str(obs_date) < acquired
+
+
+def parse_ota(focallen, *, obs_date=None) -> str:
+    """Infer OTA name from FOCALLEN, disambiguated by the session date.
+
+    `obs_date` (an ISO date string or `datetime.date`) is optional and
+    keyword-only: without it the answer is exactly what it was before F9, so
+    every legacy call site is unchanged. With it, a scope window that predates
+    the scope's acquisition falls through to the Canon lens of the same focal
+    length — which is what a 394mm frame from 2023 actually was.
     """
     try:
         fl = int(focallen)
     except (TypeError, ValueError):
         return "Unknown"
-    if 45 <= fl <= 55:
-        return "Canon50mm"
-    if 170 <= fl <= 190:
-        return "FMA180"
-    if 270 <= fl <= 290:
-        return "FRA400-07x"
-    if 390 <= fl <= 410:
-        return "FRA400"
+
+    for lo, hi, name in _SCOPE_WINDOWS:
+        if lo <= fl <= hi:
+            if not _predates_acquisition(name, obs_date):
+                return name
+            break  # the scope did not exist yet — it was the zoom
+
+    for lo, hi, name in _LENS_WINDOWS:
+        if lo <= fl <= hi:
+            return name
+
     return "Unknown"
 
 
-def ota_from_focallen(focal_length: int | float | None) -> str:
+def ota_from_focallen(focal_length: int | float | None, *, obs_date=None) -> str:
     """Alias kept for backward compatibility."""
-    return parse_ota(focal_length)
+    return parse_ota(focal_length, obs_date=obs_date)
 
 
 # Every OTA name parse_ota can produce, excluding the "Unknown" fallback —
 # the pick-list offered when focal-length inference has to be corrected by hand
-# (darkroom.ingest_review). Keep in step with parse_ota's tolerance windows.
+# (darkroom.ingest_review). Keep in step with the windows above.
 #
-# "Canon50mm" follows the Canon<focal>mm convention for Canon lenses that fall
-# outside the scope OTAs' tolerance windows and would otherwise ingest as
-# ota="Unknown" (unfixable, since this pick-list is the only correction path).
-# The other Unknown-OTA sessions seen so far are Canon lenses too, so this is
-# the naming convention going forward — do not add windows for other focal
-# lengths without a matching decision.
-KNOWN_OTAS = ("FMA180", "FRA400-07x", "FRA400", "Canon50mm")
+# The Canon<focal>mm names are the convention for Canon lenses (brand in the
+# name; scopes don't carry one). Canon400mm is never *inferred* for a session
+# after January 2025 — at ~400mm the scope window wins — so it is here mainly
+# so review can correct a night that really was shot on the zoom.
+KNOWN_OTAS = (
+    "FMA180",
+    "FRA400-07x",
+    "FRA400",
+    "Canon50mm",
+    "Canon100mm",
+    "Canon135mm",
+    "Canon200mm",
+    "Canon300mm",
+    "Canon400mm",
+)
 
 
 # A mosaic panel label on its own ("1-1"). Digit runs are bounded to 1-2 each

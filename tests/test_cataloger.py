@@ -63,7 +63,12 @@ class TestParseOta:
         assert parse_ota(None) == "Unknown"
 
     def test_other_value_is_unknown(self):
-        assert parse_ota(300) == "Unknown"
+        assert parse_ota(240) == "Unknown"
+
+    def test_300_is_the_canon_zoom(self):
+        # F9: 300mm is a marked stop on the Canon 100-400, and the archive has
+        # a 300mm_Canon6D flat set to prove it was used there.
+        assert parse_ota(300) == "Canon300mm"
 
     def test_string_coerced(self):
         # FITS headers sometimes return strings
