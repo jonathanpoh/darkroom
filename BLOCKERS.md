@@ -24,8 +24,8 @@ something here is unblocked, the corresponding backlog item can move.
 3. **Rewrite `INSTRUME` on 154 April-2023 files** (**#14**) — the last of the
    `ASCOMCameraDriver` mess. Fixes the M 42 session that currently matches none
    of its own flats.
-4. **Rename one mangled log filename** — `Autorun_Log_2026-08-07_182931._2txt`
-   in the ASIAir log folder (see **#5**). Cosmetic; nothing parses Autorun logs.
+4. **Then work the `/rescan` deletes** (**#2b**) — safe to apply now that the
+   orphan-guiding fix is deployed; before it, each delete left a stale row.
 
 **Done today, no action needed** — deploy (prod on `c7a5ef7`), the F9 optics
 decision applied across the whole corpus, the rename ledger drained to zero,
@@ -165,15 +165,17 @@ proposal stays queued.
 
 ### 5. Run `darkroom logs import` ✅ done
 
-Run by Jonathan (the file just didn't get updated). Verified 2026-08-31:
-**291 of 292** non-CHN files in `~/02_Astrophotography/01_ASIAir/ASIAIR/log`
-are archived under `00_Logs/ASIAir/`, byte-for-byte identical, with nothing
-stale on the archive side.
+Run by Jonathan (the file just didn't get updated). Verified after his
+re-import, 2026-08-31: **292 of 292** non-CHN files in
+`~/02_Astrophotography/01_ASIAir/ASIAIR/log` are archived under
+`00_Logs/ASIAir/`, byte-for-byte identical, with nothing stale on the archive
+side.
 
-**The one miss is a typo, not a bug:** `Autorun_Log_2026-08-07_182931._2txt`
-has its extension mangled (`._2txt` rather than `_2.txt`), so it doesn't match
-the `*.txt` glob. It's an Autorun log, which nothing parses — rename it at the
-source and re-run if you want the set complete.
+The one earlier miss was a mangled extension (`._2txt` instead of `_2.txt`) on
+a `_2`-disambiguated duplicate filename, so the `*.txt` glob could not see it.
+Renamed at the source and re-imported. Worth knowing the ASIAir can emit two
+logs with the *same* filename, and the `_N` suffix is Jonathan's manual
+disambiguation — `logs import` has no opinion about it.
 
 `scan-guiding` against the archived logs reports **118 logs, 2212 guiding
 segments, 150 sessions matched** — which is exactly what the catalog already
@@ -205,9 +207,10 @@ darkroom catalog apply-renames --archive "$DARKROOM_ARCHIVE" --apply
 The old `IC4604_20250427` 2-frame row is gone, and its 2 frames sit
 unregistered in the 2025-04-26 `P1-2` folder — see Start here #6.
 
-### 7. Push and deploy ✅ done — prod on `c7a5ef7`
+### 7. Push and deploy ✅ done — prod on `1d232db`
 
-Deployed **2026-08-31, 22:52 WEST**. That shipped `acc9bc7` (nested rename
+Deployed **2026-08-31, 23:45 WEST** (an earlier deploy that evening put
+`c7a5ef7` live; this one adds the F10 filing and the orphan-guiding fix). That shipped `acc9bc7` (nested rename
 classification), all of **M3** (panel-aware `wbpp` prep, two-stage `finish`,
 mixed-target guard, picker fix) and **F9** (Canon lens OTAs + the
 acquisition-date rule), including the calibration-upsert fix that lets a rescan
@@ -217,8 +220,9 @@ Rollback backups on the server, newest last:
 `astro_catalog-pre-M1-20260831-090848.db`, `-pre-F9-20260831-222645.db`,
 `-pre-F9cal-20260831-224730.db`, `-pre-deploy-20260831-225233.db`.
 
-**Two doc commits are waiting for your push** (`75add1e`, `d103738`) — the F9a
-results and the F10 filing. Neither affects the server.
+Everything local is pushed and deployed. Post-deploy state, read from the
+server: **247 sessions, 150 guiding rows (150 joined), 1050 calibration sets,
+0 pending renames, 0 `Unknown` OTAs.**
 
 ### 8. One session still has a NULL `start_utc`
 
