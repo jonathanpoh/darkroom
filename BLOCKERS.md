@@ -23,9 +23,15 @@ something here is unblocked, the corresponding backlog item can move.
    because the FMA180 (Jan 2023) and FRA400 (Jan 2025) did not exist for the
    earlier nights. A zoom night shot *today* at 180 or 400mm is still
    ambiguous and needs a hand correction in `ingest review`.
-4. **Do the M 8 mosaic's flats exist?** None are registered for
-   `Canon50mm` + `ZWOASI585MCPro` + `AstronomikL2`, so all 8 panels currently
-   match no flat set. Check whether they were shot before stacking.
+4. **The M 8 mosaic has no flats** — none were shot that night (confirmed
+   2026-08-31). Not a bug; stack it with flats from another
+   `Canon50mm` + `ZWOASI585MCPro` occasion, or without.
+5. **Rewrite `INSTRUME` on 154 April-2023 files** so `ASCOM Camera Driver`
+   becomes the real camera and a rescan derives `Canon6D` by itself — see
+   **F9a** residue #2 for the exact folders and why an alias in the code was
+   rejected. Retire the 3 stale calibration rows afterwards.
+6. **2 unregistered frames** in `IC 4604/2025-04-26_.../P1-2` are from the
+   night of 2025-04-27 (a 4-minute aborted start). Register or relocate.
 
 ---
 

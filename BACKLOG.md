@@ -1991,24 +1991,123 @@ disagreement rather than creating one.
 
 **Residue — three follow-ups, none blocking:**
 
-1. **Three more shared-folder pairs exist**, same trap, found while verifying:
-   NGC 7000 2024-02-26/27 (10+100 frames in one folder), M 81 2025-03-25/28
-   (48+77), NGC 7000 2025-07-30/31 (11+60). Harmless until someone makes an
-   identity edit on one of those rows, which will then queue a rename that
-   would drag the other night with it. Also `IC4604_20250426_P1-2` has 35 files
-   on disk vs 33 in the catalog — a real 2-frame discrepancy, unrelated to F9.
+1. **Three more shared-folder pairs existed** — NGC 7000 2024-02-26/27
+   (10+100 frames in one folder), M 81 2025-03-25/28 (48+77), NGC 7000
+   2025-07-30/31 (11+60). ✅ **All three split 2026-08-31**, 306 frames, same
+   method: assign by `compute_imaging_night`, verify against `frame_count`,
+   move, then re-send an unchanged identity field so `update_session_fields`
+   recomputes `lights_path` and queues the rename. The catalog now has **zero
+   `lights_path`s shared by more than one session**.
+
+   Two of the six came back from `apply-renames` as `conflict` rather than
+   `already_done`, correctly: their old path still existed because it now held
+   the *other* session's `Lights/`. Both were verified satisfied (right frames
+   at the new path, no loose frames at the old) and their ledger rows deleted
+   by hand. Worth knowing that "deepening" splits produce this shape.
+
+   `IC4604_20250426_P1-2`'s 35-vs-33 turned out **not** to be a discrepancy:
+   33 frames are from the night of 2025-04-26 (timestamped `20250427-02:41` →
+   `04:12`) and 2 are from `20250428-00:05`, i.e. the night of 2025-04-27 — a
+   4-minute aborted start, panel 1-2 only, with no session row. The catalog's
+   33 is correct. Those 2 frames are still unregistered; decide whether to
+   register or relocate them.
 2. **`ASCOMCameraDriver` survives on 3 calibration sets.** `camera` is part of
    `set_id`, so unlike `ota` it cannot be migrated by a rescan — correcting it
    means new rows and orphaned old ones. Consequence: `M42_20230415` (now
    `Canon6D`) matches none of its own flats, which sit in
-   `100mm_Canon6D/2023-04-17` under the old camera string. Fixing it properly
-   means normalising `ASCOMCameraDriver` → `Canon6D` at scan time *and*
-   retiring the three stale rows.
+   `100mm_Canon6D/2023-04-17` under the old camera string.
+
+   **Decided 2026-08-31: fix the headers, not the code.** A
+   `_CAMERA_ALIASES` entry was considered and rejected — `ASCOM Camera Driver`
+   is a *generic driver string*, not a camera, so aliasing it to `Canon6D`
+   would be silently wrong the first time the ZWO is driven through
+   N.I.N.A./ASCOM, with no date available to disambiguate it the way F9 has.
+   The archive instead needs `INSTRUME` rewritten to the real camera, after
+   which a rescan derives `Canon6D` on its own. Scope, measured 2026-08-31:
+   **154 files, all April 2023**, in 6 folders —
+   `Bias/Canon6D/Raw/2023-04-17` (26), `Darks/Canon6D/Raw/20s/2023-04-15` (40),
+   `Flats/100mm_Canon6D/2023-04-17` (40),
+   `M 42/2023-04-15_Canon100mm_Canon6D/Lights/L-Pro` (40), and 8 in
+   `M 42/_Processed/`. The calibration folders are themselves named `Canon6D`,
+   which is the corroboration. Note the rewrite changes `set_id` for the
+   affected calibration sets, so the 3 old rows must be retired by hand
+   afterwards. `_Processed` outputs are derived products and can be left.
 3. **Flat coverage after the fix: 18 of 36 Canon-optic sessions match a flat
    set.** The misses are genuine (no flats within ±3 days, or a filter
-   mismatch), not attribution errors — except the 8 M 8 mosaic panels, which
-   have no `Canon50mm` + `ZWOASI585MCPro` + `AstronomikL2` flats registered at
-   all. Worth checking whether those flats were shot.
+   mismatch), not attribution errors. The 8 M 8 mosaic panels match nothing
+   because **no flats were shot that night** — confirmed by Jonathan
+   2026-08-31, so this is a fact about the data, not a matching bug. Stacking
+   that mosaic will need flats from another `Canon50mm` + `ZWOASI585MCPro`
+   occasion, or none at all.
+
+---
+
+### F10. `.darkroom-ignore` — a directory marker that keeps rejects out of the catalog
+
+Filed 2026-08-31 at Jonathan's request, out of the F9a archive sweep.
+
+**The problem.** Rejected subs are kept on disk, in a subfolder beside the good
+ones, because "bad" is a judgement that gets revisited — slight eccentricity
+often turns out to be usable at a lower weight. But the archive walkers have no
+way to know a folder is a holding pen, so those frames get catalogued as
+sessions: their name becomes the *filter* (the M2 mechanism) and their
+integration time is counted as real depth.
+
+Measured on the live archive, 2026-08-31: **14 such folders holding 404
+frames**, of which **4 are already catalogued as sessions, contributing 6.83
+hours of integration time that does not exist**:
+
+| Session | Frames | Counted |
+|---|---|---|
+| `IC 1805/2023-12-14_FMA180_Canon6D_L-Extreme/bad` | 35 | 1.75h |
+| `C 49/2024-01-20_FMA180_Canon6D_L-Extreme/bad` | 91 | 3.03h |
+| `C 49/2024-01-21_FMA180_Canon6D_L-Extreme/delete` | 20 | 1.00h |
+| `C 49/2024-01-22_FMA180_Canon6D_L-Extreme/delete` | 21 | 1.05h |
+
+**Why a marker file and not a name list.** The folders in the archive today are
+named `reject`, `Rejects`, `Rejected`, `delete`, `Delete`, `bad` and `Bad` —
+seven spellings across 14 folders, and that is only what has been used so far.
+Name matching would be both leaky (the next spelling is not in the list) and
+dangerous (a legitimately named target or filter folder could match). An
+explicit opt-out file is unambiguous, is visible in the folder it affects, and
+is created with `touch`.
+
+**Design.**
+
+1. A directory containing `.darkroom-ignore` is skipped by every archive
+   walker, **along with everything beneath it**. One helper — the same
+   single-source-of-truth discipline as `parse.py` — checked by
+   `cataloger.scan_lights`, `scan_calibration`, `rescan`, `procscan`,
+   `backfill-times`/`backfill-sites` and `guidescan`. Never re-implement the
+   check inline.
+2. **It never deletes or moves a file.** The marker is a catalog-visibility
+   control, and the "never delete source files" rule is unchanged. The frames
+   stay exactly where they are.
+3. **Existing rows must be cleaned up, not orphaned.** `catalog rescan-archive`
+   already diffs the archive against the catalog, so an ignored folder that
+   still has a session row becomes a `delete` proposal in `/rescan` — reusing
+   the confirm-before-delete path added in `840605b` rather than deleting
+   silently. That is the whole cleanup mechanism; nothing new is needed on the
+   web side.
+4. **It has to be reversible.** Remove the marker, rescan, and the session
+   comes back. This matters because the workflow it serves is explicitly
+   "blink through these again later" — the marker records *undecided*, not
+   *condemned*.
+
+**Not the same problem as M2.** M2 is about a sub-folder holding real data with
+a role the scanner has no vocabulary for (`NGC 7000/.../20250802_..._RGB_Stars`
+is a broadband star layer, deliberately shot to be composited). F10 is about a
+sub-folder holding data that should not count at all. Do not let one fix absorb
+the other: a `.darkroom-ignore` in the `Stars` folder would hide data Jonathan
+wants, and M2's answer (a role/kind on the session) would wrongly dignify a
+reject pile.
+
+**Follow-on, deliberately out of scope.** The end state Jonathan wants is not
+binary. After re-blinking, a marginal sub should be able to contribute at a
+*lower weight* rather than being in or out — which is F6's weighted-hours
+machinery applied at frame level, and shares the per-frame problem already
+scoped in **F7**. F10 is the cheap half: stop counting the obviously-bad, keep
+the files, keep the option open.
 
 ---
 
