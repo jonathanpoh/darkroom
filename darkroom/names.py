@@ -194,6 +194,17 @@ def parse_wbpp_panel_dir(name: str) -> str | None:
     return label if PANEL_LABEL_RE.fullmatch(label) else None
 
 
+def panel_sort_key(panel: str) -> tuple[int, int]:
+    """Sort panels numerically: "2-10" after "2-9", not lexicographic.
+
+    Shared by `darkroom.prep` (which orders the trees it builds) and
+    `darkroom.finish` (which orders the panels it finishes) so a wide mosaic
+    lists its panels the same way on both sides of the handoff.
+    """
+    row, _, col = panel.partition("-")
+    return int(row), int(col)
+
+
 def processed_panel_dir(panel: str) -> str:
     """Subdirectory for one panel's stack under `_Processed/<date>/`.
 

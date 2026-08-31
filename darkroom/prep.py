@@ -22,7 +22,12 @@ from darkroom.catalog import (
 )
 from darkroom.catalog_client import CatalogBackend, resolve_backend
 from darkroom.config import resolve_path
-from darkroom.names import parse_wbpp_panel_dir, target_slug, wbpp_panel_dir
+from darkroom.names import (
+    panel_sort_key,
+    parse_wbpp_panel_dir,
+    target_slug,
+    wbpp_panel_dir,
+)
 from darkroom.parse import fits_files
 from darkroom.picker import group_nights, pick_sessions, picker_style
 from darkroom.wbpp import (
@@ -389,7 +394,7 @@ def build_wbpp_sessions(
     output_dir = target_dir / "Output"
     (output_dir / "processed").mkdir(parents=True, exist_ok=True)
 
-    panels = sorted({r["panel"] for r in rows if r.get("panel")})
+    panels = sorted({r["panel"] for r in rows if r.get("panel")}, key=panel_sort_key)
     # NULL-panel rows build at target_dir root (group key None) first, then
     # each distinct panel gets its own group/root.
     groups: list[tuple[str | None, list[dict]]] = [
@@ -441,7 +446,13 @@ def build_wbpp_sessions(
             "hand-merge the results into the target-level Output/processed/ below."
         )
 
-    print(f"\nSet WBPP output directory to: {output_dir}/")
+    if panels:
+        # For a mosaic this dir is NOT a WBPP output dir — each panel's own
+        # Output/ is (printed above). This one receives the hand-merged result,
+        # and is what `darkroom finish` reads to mark the mosaic processed.
+        print(f"\nMerged mosaic goes in: {output_dir}/processed/")
+    else:
+        print(f"\nSet WBPP output directory to: {output_dir}/")
 
 
 def cmd_prep(

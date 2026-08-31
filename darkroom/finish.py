@@ -10,7 +10,12 @@ from pathlib import Path
 
 from darkroom.catalog_client import CatalogBackend, resolve_backend
 from darkroom.config import resolve_path
-from darkroom.names import parse_wbpp_panel_dir, processed_panel_dir, target_slug
+from darkroom.names import (
+    panel_sort_key,
+    parse_wbpp_panel_dir,
+    processed_panel_dir,
+    target_slug,
+)
 
 
 # ── core helpers ──────────────────────────────────────────────────────────────
@@ -198,12 +203,6 @@ def _panel_dirs(wbpp_target: Path) -> dict[str, Path]:
         if label is not None:
             panels[label] = p
     return panels
-
-
-def _panel_sort_key(label: str) -> tuple[int, int]:
-    """Numeric sort for panel labels ("2-10" after "2-9", not lexicographic "2-10" < "2-9")."""
-    row, col = label.split("-")
-    return int(row), int(col)
 
 
 def _require_output(wbpp_output: Path, master_dir: Path, where: str) -> None:
@@ -436,7 +435,7 @@ def cmd_finish(
         if not panels:
             sys.exit(f"--panel given but {wbpp_target} has no PANEL_* subdirectories (not a mosaic)")
         if panel not in panels:
-            avail = ", ".join(sorted(panels, key=_panel_sort_key))
+            avail = ", ".join(sorted(panels, key=panel_sort_key))
             sys.exit(f"Panel {panel!r} not found under {wbpp_target} — available: {avail}")
         panel_dir = panels[panel]
         panel_output = panel_dir / "Output"
@@ -461,7 +460,7 @@ def cmd_finish(
     # merge. All of it shares one _Processed/<date>/ — the date the whole
     # mosaic files under, not one date per panel — so derive it from every
     # panel's master/+processed/ together with the target-level processed/.
-    labels = sorted(panels, key=_panel_sort_key)
+    labels = sorted(panels, key=panel_sort_key)
     print(f"Mosaic detected: {len(labels)} panel(s) — {', '.join(labels)}")
     dirs = [wbpp_target / "Output" / "processed"]
     for label in labels:
