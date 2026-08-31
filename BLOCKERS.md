@@ -13,25 +13,30 @@ something here is unblocked, the corresponding backlog item can move.
 
 ## ⚡ Start here (2026-08-31, evening)
 
-1. **One `/rescan` pair is a trap — do not apply it as-is.** See #2. Note the
-   NGC 7000 2023-09-14 row in that pair is now `Canon50mm` (F9), not `Unknown`.
-2. **Deploy ✅ done** — M3, the rename fix and F9 are live on the LXC
-   (`c7a5ef7`, restarted 22:52 WEST).
-3. **The camera-lens / focal-length decision (F9) ✅ done** — decided, built,
-   and applied to the whole 2023 corpus. See **F9** and **F9a** in BACKLOG.md.
-   The lasting rule: OTA is inferred from `FOCALLEN` **and** the session date,
-   because the FMA180 (Jan 2023) and FRA400 (Jan 2025) did not exist for the
-   earlier nights. A zoom night shot *today* at 180 or 400mm is still
-   ambiguous and needs a hand correction in `ingest review`.
-4. **The M 8 mosaic has no flats** — none were shot that night (confirmed
-   2026-08-31). Not a bug; stack it with flats from another
-   `Canon50mm` + `ZWOASI585MCPro` occasion, or without.
-5. **Rewrite `INSTRUME` on 154 April-2023 files** so `ASCOM Camera Driver`
-   becomes the real camera and a rescan derives `Canon6D` by itself — see
-   **F9a** residue #2 for the exact folders and why an alias in the code was
-   rejected. Retire the 3 stale calibration rows afterwards.
-6. **2 unregistered frames** in `IC 4604/2025-04-26_.../P1-2` are from the
-   night of 2025-04-27 (a 4-minute aborted start). Register or relocate.
+**Actually waiting on you, in order:**
+
+1. **One `/rescan` pair is a trap — do not apply it as-is.** See **#2b**. Edit
+   that session's OTA in the web UI instead of applying delete + create. (Its
+   row now reads `Canon50mm` rather than `Unknown`, but the trap is unchanged.)
+2. **Decide the `Stars` sub-folder** (**#4**) — it is the only thing holding
+   the `create` proposal in `/rescan`, and it is a modelling call nobody else
+   can make.
+3. **Rewrite `INSTRUME` on 154 April-2023 files** (**#14**) — the last of the
+   `ASCOMCameraDriver` mess. Fixes the M 42 session that currently matches none
+   of its own flats.
+4. **`darkroom logs import` has still never been run** (**#5**). The ASIAir
+   logs exist only on the Mac, and the SD card gets cleared.
+
+**Done today, no action needed** — deploy (prod on `c7a5ef7`), the F9 optics
+decision applied across the whole corpus, the rename ledger drained to zero,
+and every folder that held two sessions' frames split apart. The catalog now
+has **zero `Unknown` OTAs** and **zero `lights_path`s shared by two sessions**.
+
+**Two small loose ends:** 2 unregistered frames in
+`IC 4604/2025-04-26_.../P1-2` (they belong to the night of 2025-04-27 — a
+4-minute aborted start; register or relocate), and the M 8 mosaic has no flats
+because none were shot that night (**#1**) — stack it with flats from another
+`Canon50mm` + `ZWOASI585MCPro` occasion, or without.
 
 ---
 
@@ -172,63 +177,44 @@ darkroom logs import --source <asiair-log-dir> --apply
 Read-only on the source; skips `*_CHN.txt` and anything already archived at the
 same size.
 
-### 6. Drain the rename ledger — 12 pending, 8 of them the IC 4604 panel moves
+### 6. Drain the rename ledger ✅ done — 0 pending
 
-Verified live **2026-08-31**: **12 pending**, dry run reports
-`8 applied, 1 already_done, 2 conflict, 1 missing`.
+Verified live **2026-08-31, evening**: the ledger is **empty**. The 8 IC 4604
+panel moves, the 28 F9 renames and the 6 session-split recomputes have all been
+applied. The two `Sh2-101` case-only conflicts are gone with them.
 
-**The 8 IC 4604 panel folder moves are queued and ready** — they collapse the
-four fake top-level targets (`IC 4604_1-1` …) back under `IC 4604` with proper
-`P1-1` … `P2-2` panel dirs. Nothing is wrong with them; they just have not been
-applied yet. Note the rename ledger is a **separate queue from `/rescan`** —
-`/rescan` holds proposals, folder moves only ever show up here.
+Two notes worth keeping, both learned the hard way today:
 
-```bash
-darkroom catalog apply-renames --archive "$DARKROOM_ARCHIVE"           # dry run
-darkroom catalog apply-renames --archive "$DARKROOM_ARCHIVE" --apply
-```
-
-The leftovers, all diagnosed 2026-08-31:
-
-- **2 × `Sh2-101` conflicts — deferred by you, a known one-off.** `SH2-101` and
-  `Sh2-101` are the *same inode* on the case-insensitive SMB mount, so the
-  "both old and new exist" guard is trivially true for any case-only rename.
-  The move is already done in substance. Left as-is deliberately; revisit only
-  if case normalisation comes up again.
-- **1 `missing` — `IC4604_20250427_..._P1-2`, the 2-frame tail. Your call.**
-  Its frames were swept into the 2025-04-26 folder during the consolidation
-  (disk holds 35 frames there against the catalog's 30, and 30 vs 23 on
-  05-24). That row is orphaned: delete it, then re-run `rescan-archive` to
-  true up the two frame counts.
-- ~~1 `conflict` on `NGC 7380/2025-09-13`~~ ✅ **fixed in code** (`acc9bc7`) —
-  it was a false alarm, not a data problem. See below.
-
-Verified live 2026-08-30: **13 pending renames**.
-
-Every one is a folder move the server owes but cannot perform — the LXC has no
-NAS mount, so a web-UI identity edit updates the catalog immediately and
-records the move for the Mac to execute.
+- **A "conflict" can mean the move is already done.** When two sessions used to
+  share one folder, splitting them leaves the old path existing (it now holds
+  the *other* session's `Lights/`), so `apply-renames` correctly refuses. Verify
+  the new path holds the right frame count and the old path has no loose
+  frames, then delete that ledger row (`DELETE /api/pending-renames/{id}`).
+- **The ledger is a separate queue from `/rescan`.** `/rescan` holds proposals;
+  folder moves only ever appear here.
 
 ```bash
 darkroom catalog apply-renames --archive "$DARKROOM_ARCHIVE"           # dry run
 darkroom catalog apply-renames --archive "$DARKROOM_ARCHIVE" --apply
 ```
 
-Until this runs, the catalog and the archive disagree about those 13 folders.
+The old `IC4604_20250427` 2-frame row is gone, and its 2 frames sit
+unregistered in the 2025-04-26 `P1-2` folder — see Start here #6.
 
-### 7. Push and deploy — 20 commits waiting
+### 7. Push and deploy ✅ done — prod on `c7a5ef7`
 
-Deployed to the LXC (prod on `718f3cd`); the `panel` migration applied cleanly,
-240 sessions and 151 guiding rows intact. Rollback backup on the server at
-`/var/lib/darkroom/backups/astro_catalog-pre-M1-20260831-090848.db`.
+Deployed **2026-08-31, 22:52 WEST**. That shipped `acc9bc7` (nested rename
+classification), all of **M3** (panel-aware `wbpp` prep, two-stage `finish`,
+mixed-target guard, picker fix) and **F9** (Canon lens OTAs + the
+acquisition-date rule), including the calibration-upsert fix that lets a rescan
+correct an `ota` at all.
 
-**Not yet pushed or deployed (20 commits on local `main`, since `718f3cd`):** `acc9bc7` (nested
-rename classification) and all of **M3** — panel-aware `wbpp` prep, the
-two-stage `finish`, the mixed-target guard and the picker fix.
+Rollback backups on the server, newest last:
+`astro_catalog-pre-M1-20260831-090848.db`, `-pre-F9-20260831-222645.db`,
+`-pre-F9cal-20260831-224730.db`, `-pre-deploy-20260831-225233.db`.
 
-None of it is urgent for the server: `wbpp`, `finish` and `apply-renames` all
-run on the Mac, and the `panel` column the web UI needs is already deployed. Push
-when convenient.
+**Two doc commits are waiting for your push** (`75add1e`, `d103738`) — the F9a
+results and the F10 filing. Neither affects the server.
 
 ### 8. One session still has a NULL `start_utc`
 
@@ -241,57 +227,75 @@ folder before re-running the backfill.
 
 ---
 
+### 14. Rewrite `INSTRUME` on the 154 April-2023 files
+
+Those frames record `INSTRUME = 'ASCOM Camera Driver'` — the acquisition
+software's generic driver string (BackyardEOS or N.I.N.A., not the ASIAir),
+not a camera. It is your **Canon 6D**, confirmed 2026-08-31.
+
+`camera` is read from that header, so the string propagates into `session_id`,
+folder names and `set_id`. The M 42 2023-04-15 session row has already been
+corrected by hand, but its own flats have not — which is why that session
+currently matches **none** of its flats.
+
+**Why not just alias it in code.** A `_CAMERA_ALIASES` entry mapping
+`ASCOMCameraDriver → Canon6D` was considered and rejected: the string is
+generic, so the alias becomes silently wrong the first time the ZWO is driven
+through N.I.N.A./ASCOM — and unlike F9's optics, there is no date that could
+disambiguate it. Fix the data, not the inference.
+
+**Scope, measured live 2026-08-31 — 154 files in 6 folders:**
+
+| Files | Folder |
+|---|---|
+| 26 | `00_Calibration/Bias/Canon6D/Raw/2023-04-17` |
+| 40 | `00_Calibration/Darks/Canon6D/Raw/20s/2023-04-15` |
+| 40 | `00_Calibration/Flats/100mm_Canon6D/2023-04-17` |
+| 40 | `01_Deep Sky Objects/M 42/2023-04-15_Canon100mm_Canon6D/Lights/L-Pro` |
+| 8 | `01_Deep Sky Objects/M 42/_Processed/2023-04-{17,18}` |
+
+Three of those folders are themselves named `Canon6D`, which is the
+corroboration. The 8 `_Processed` files are derived products and can be left.
+
+```bash
+# per file, in place:  fits.setval(path, "INSTRUME", value="Canon EOS 6D")
+darkroom catalog scan-calibration "$DARKROOM_ARCHIVE/00_Calibration"
+```
+
+**Two catches.**
+
+- `camera` is part of `set_id`, so the rescan creates **new** calibration rows
+  rather than updating the old ones — unlike `ota`, which now updates in place
+  (`c7a5ef7`). The 3 stale `ASCOMCameraDriver` flat rows must be retired by
+  hand afterwards; there is no calibration-delete endpoint, so it is an
+  `ssh` + `sqlite3` job on the LXC.
+- This writes to original archive files. Take a backup of the 154 first — it is
+  the only step in this queue that modifies frame data rather than moving it.
+
+---
+
 ## 🟡 Decisions with no deadline — but cheaper now than later
 
-### 9. Name the Canon EF 100-400mm zoom (backlog **F9**)
+### 9. Name the Canon EF 100-400mm zoom ✅ decided and applied
 
-`parse_ota` infers the optic from `FOCALLEN` alone, and the zoom **collides
-with your actual telescopes**:
+Settled 2026-08-31. Each marked zoom stop is its own OTA — `Canon100mm`,
+`Canon135mm`, `Canon200mm`, `Canon300mm`, `Canon400mm` — rather than one
+`Canon100-400`, because flat matching keys on OTA and a single name for the
+whole range would let a 100mm flat match a 400mm light.
 
-| Zoom shot at | Catalogued as | Actually |
-|---|---|---|
-| 180mm | `FMA180` | Canon 100-400 |
-| 400mm | `FRA400` | Canon 100-400 |
-| anything else | `Unknown` | Canon 100-400 |
+The tie between the zoom and the scopes is broken by **date**: you bought the
+FMA180 Pro in January 2023 and the FRA400 in January 2025, so a 394mm frame
+from 2023 cannot be an FRA400. `parse_ota` takes an `obs_date` and falls
+through to the lens when a scope window matches a night that predates it.
 
-The 180/400 cases are **silently wrong rather than unknown**, which is the
-dangerous half: an `Unknown` OTA gets a badge in the web UI, a ⚠ in `ingest
-review`, and the cursor defaulting to "Change OTA / camera". A confident
-`FRA400` gets none of that — it sails through review, bakes a false optic into
-the session_id and folder name, and then **matches flats belonging to a
-different telescope**.
+Applied to the whole corpus: **28 sessions and 175 calibration sets**
+corrected, no session in the catalog is `Unknown` any more, and the `56mm`
+question resolved as the fifty — the flats read `FOCALLEN 59` and it
+plate-solves to 51mm, so the window now runs 45–60.
 
-No header disambiguates them (`TELESCOP` is the mount, `ZWO AM5N`), so this
-must be a human correction at review time — which needs a name in
-`parse.KNOWN_OTAS` first, since today the zoom cannot be picked at all.
-
-The naming convention is already settled by the 50mm decision: **lenses keep
-the brand** (`Canon50mm`), telescopes drop it, and focal ratio is never
-encoded because the mechanical EF adapter can't stop down. What's open is how
-to express a *variable* focal length. Sketch: `Canon100-400mm` plus the
-existing `focal_length` column, vs. a per-focal-length name.
-
-**Cheap now, expensive later** — changing this later is a rename of rows plus
-folders.
-
-**The data you need, read live 2026-08-31.** 20 sessions sit at
-`ota='Unknown'`; here are their focal lengths:
-
-| FOCALLEN | rows | probably |
-|---|---|---|
-| 53 | 1 | the 50mm — **now auto-resolves to `Canon50mm`**, see #2b |
-| 56 | 1 | the same 50mm reporting high? If so widen the window, don't add a name |
-| 100, 104 | 1 + 7 | the 100-400 zoom, wide end |
-| 136 | 3 | zoom |
-| 200, 202 | 3 + 1 | zoom |
-| 301 | 1 | zoom |
-| 386 | 2 | zoom — and uncomfortably close to `FRA400`'s 390–410 window |
-
-So **18 of the 20 are the zoom across its range**, and they all get names the
-moment this is decided. Two things that decision should settle: whether `56` is
-the fifty (a window widening) or something else, and how a zoom is named at all
-given the focal length varies per session — `Canon100-400mm` plus the existing
-`focal_length` column, or a per-focal-length name like `Canon200mm`.
+**Still ambiguous going forward:** a zoom night shot *today* at 180 or 400mm is
+indistinguishable from the scope, and needs a hand correction in `ingest
+review`. The date rule is retrospective only.
 
 ### 10. The bulk no-filter backlog
 
@@ -309,10 +313,9 @@ enough to be worth recovering while you still remember. These surface in the
 web UI's filter queue. Not urgent; it's a long, low-intensity pass rather than
 a blocker, and worth doing in batches by night.
 
-Related: **20 sessions sit at `ota='Unknown'`** (19 Canon6D + 1
-`ASCOMCameraDriver`). Those are the Canon-lens sessions the `Canon<focal>mm`
-convention was designed for — once #9 settles the zoom naming, they can be
-corrected in the same style.
+~~Related: 20 sessions sit at `ota='Unknown'`~~ ✅ **all resolved** by F9 —
+the catalog now holds zero `Unknown` OTAs. The filter backlog above is
+unaffected and still stands.
 
 ### 11. Shoot more Canon darks, so F5 can bracket (backlog **F5**)
 
