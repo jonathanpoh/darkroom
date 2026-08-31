@@ -2494,12 +2494,41 @@ strictly better:
   panel), so they stay at the `SESSION_N` level and are shared. Emitting a tree
   per panel would have duplicated every calibration set N times.
 
+**Confirmed in PixInsight 2026-08-31 — calibration must NOT be panel-split.**
+Jonathan added flats by hand and checked what WBPP actually does: a
+`PANEL_*` level under `Lights/` does **not** oblige a matching level under
+`Flats/`. This is correct and is what we want:
+
+```
+SESSION_1/
+  Lights/FILTER_L-Pro/PANEL_1-1/ …/PANEL_2-2/    <- split by panel
+  Flats/FILTER_L-Pro/Flat_..._0001.fit           <- NOT split; matches all four
+```
+
+So when M3 is built, add the `PANEL_` level to the **Lights branch only**.
+Leave `Flats/`, `Darks/` and `FlatDarks/` exactly as they are — the temptation
+to mirror the new level across all four branches is wrong, and would need every
+flat symlinked N times to achieve nothing.
+
+**The corresponding trap, also confirmed empirically:** the grouping keywords
+are what create the separation, so *removing* `SESSION` from WBPP's keyword
+list merges the flats from different nights together — and merges the mosaic
+panels right along with them. In other words the directory layout alone does
+not protect the panels; it only works while `SESSION` and `PANEL` are both
+registered as grouping keywords in WBPP. A correct tree stacked with the wrong
+keyword set silently reproduces the exact bug M3 exists to fix, with no error.
+Worth stating in the `wbpp` output and the docs, not just assuming the
+keywords are configured.
+
 **Scope.** Small: add the `PANEL_<panel>` level in `_build_night` when
-`sess["panel"]` is set, and leave the path unchanged when it is NULL so every
-non-mosaic prep is byte-identical. The `SESSION_N` summary line
-(`prep.py:377`, currently target · night · filters · lights) should name the
-panels too, otherwise a mosaic night prints one line implying a single
-pointing.
+`sess["panel"]` is set — **to the Lights branch only** (see above) — and leave
+the path unchanged when it is NULL so every non-mosaic prep is byte-identical.
+The `SESSION_N` summary line (`prep.py:377`, currently target · night ·
+filters · lights) should name the panels too, otherwise a mosaic night prints
+one line implying a single pointing. When a prep emits any `PANEL_` dir, the
+output should also remind the user to register `PANEL` as a WBPP grouping
+keyword alongside `SESSION` — that is the half of this that lives in
+PixInsight's settings rather than on disk, and getting it wrong is silent.
 
 **Test to write:** one night, four panel sessions plus — separately — a
 NULL-panel session, asserting the panelled ones land under distinct

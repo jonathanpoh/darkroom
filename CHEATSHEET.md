@@ -233,6 +233,18 @@ when there's no TTY).
 After it runs: in PixInsight, add each `SESSION_N/` dir to WBPP and set the output dir to
 the printed `Output/` path.
 
+**WBPP grouping keywords.** The directory layout only separates frames if WBPP is
+configured to group on it. `SESSION` is the normal one. For a **mosaic**, add
+`PANEL` as well — WBPP supports nested keywords and will list frames as
+`SESSION 1 : PANEL 1-1`. Dropping `SESSION` merges flats across nights *and*
+merges the mosaic panels into one stack, silently and with no error, so the
+keyword set matters as much as the tree.
+
+> Note: calibration is deliberately **not** panel-split — one
+> `Flats/FILTER_<name>/` set serves every panel of that night, and WBPP matches
+> it to all of them. Don't add `PANEL_` dirs under `Flats/`, `Darks/` or
+> `FlatDarks/`.
+
 ---
 
 ### 3. `darkroom finish` — push stacks back and mark processed
