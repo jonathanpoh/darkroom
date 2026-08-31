@@ -10,6 +10,8 @@ import re
 from pathlib import Path
 from typing import overload
 
+from darkroom.parse import PANEL_LABEL_RE
+
 _DSLR_RE = re.compile(r"canon|nikon|sony|pentax|fuji", re.IGNORECASE)
 
 # Physical filters that have actually been used, in dropdown order. 'NoFilter'
@@ -147,6 +149,59 @@ def session_dest_rel(
     if panel:
         rel = rel / f"P{panel}"
     return rel
+
+
+# ── mosaic panel directory names ─────────────────────────────────────────────
+#
+# Three different places spell a panel differently, on purpose, and the
+# distinctions have already caused one documentation error — so they live here
+# rather than being formatted inline at each call site:
+#
+#   session_id            ..._L-Pro_P1-1   the "P" disambiguates a flat string
+#   archive Lights/       Lights/L-Pro/P1-1/            (session_dest_rel)
+#   WBPP target dir       IC4604/PANEL_1-1/SESSION_N/   (this module, below)
+#   archive _Processed/   _Processed/<date>/1-1/        bare — see below
+#
+# The WBPP form is verbose because it sits beside SESSION_N and reads as a
+# grouping level. The _Processed form is bare because Jonathan's archive
+# already uses `1-1/` there and a "P" prefix adds nothing inside a directory
+# whose siblings are all panels.
+
+WBPP_PANEL_PREFIX = "PANEL_"
+
+
+def wbpp_panel_dir(panel: str) -> str:
+    """Directory name for one mosaic panel inside a WBPP target dir.
+
+    `"1-1"` -> `"PANEL_1-1"`. Panels get a directory of their own because a
+    panel is not a stacking boundary to WBPP: a custom grouping keyword groups
+    the calibration stages and then integration merges every panel anyway
+    (tested 2026-08-31). Only a separate WBPP run keeps them apart, and a
+    separate run means a separate directory with its own `Output/`.
+    """
+    return f"{WBPP_PANEL_PREFIX}{panel}"
+
+
+def parse_wbpp_panel_dir(name: str) -> str | None:
+    """Inverse of `wbpp_panel_dir`: `"PANEL_1-1"` -> `"1-1"`, else None.
+
+    How `darkroom.finish` discovers whether a WBPP target holds a mosaic,
+    and which panel each subdirectory belongs to.
+    """
+    if not name.startswith(WBPP_PANEL_PREFIX):
+        return None
+    label = name[len(WBPP_PANEL_PREFIX):]
+    return label if PANEL_LABEL_RE.fullmatch(label) else None
+
+
+def processed_panel_dir(panel: str) -> str:
+    """Subdirectory for one panel's stack under `_Processed/<date>/`.
+
+    Bare (`"1-1"`), matching what is already on disk — deliberately *not*
+    `P1-1`. Trivial today, but it is the one place to change if that
+    convention ever moves, and the P-prefix confusion has bitten once already.
+    """
+    return panel
 
 
 def target_slug(target: str) -> str:
