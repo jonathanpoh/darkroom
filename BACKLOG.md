@@ -2129,7 +2129,8 @@ site lat/lon, angular separation.
 > the row's `processed_state` and its `session_guiding` row on apply.
 >
 > **Still open (the deferred half):** per-panel WBPP trees
-> (`~/WBPP/M8_P1-1/`), `finish` → `_Processed/<date>/P1-1/`, the web UI's
+> (`~/WBPP/M8_P1-1/`) — now fully specified in **M3**, including the
+> `finish` changes this table gets wrong — `finish` → `_Processed/<date>/P1-1/`, the web UI's
 > panel-aware target rollups and its `_PANEL_SUFFIX_RE` suggestion, and the
 > live IC 4604 migration (still blocked on the lost filter for those 2 nights).
 
@@ -2186,7 +2187,7 @@ per-panel frame counts, and 2025-04-27 has a 2-frame tail on `1-2` alone).
 | `parse.py` | new `parse_panel()`: split a trailing `_N-M` off the ASIAir object name. The panel already arrives there — real frames are `Light_IC4604_1-1_120.0s_Bin1_ISO1600_20250427-041855_14.0C_0001.fit` |
 | `ingest.py` | use it at scan time so base target and panel are separated before anything is copied |
 | `ingest_review.py` | show panel in the summary block, editable like filter |
-| `prep.py` / `wbpp.py` | **the one real behaviour change** — panels must not be stacked together. ⚠️ **Superseded 2026-08-31, see M3:** the design here was one tree per panel (`~/WBPP/IC4604_P1-1/SESSION_1..N/`) plus a picker step. Jonathan tested WBPP's **nested grouping keywords** instead, so it is one tree per target with a `PANEL_<n>` level under `FILTER_<name>/` — no slug change, no picker change, no duplicated calibration |
+| `prep.py` / `wbpp.py` | **the one real behaviour change** — panels must not be stacked together, so a mosaic prep emits one tree per panel: `~/WBPP/IC4604_P1-1/SESSION_1..N/`. Picker grows a panel step (or "all panels" → N trees in one go). ✅ **Re-confirmed 2026-08-31** after the nested-grouping-keyword alternative was tested and failed at integration — see **M3**. ⚠️ But "keeps the `wbpp → finish` handoff working unchanged" below is **wrong**: `finish.py:189` looks up `wbpp_root/target_slug(target)` and would never find `IC4604_P1-1`. See M3 for what finish actually needs |
 | `finish.py` | output to `_Processed/<date>/P1-1/` |
 | `webapi/ui.py` | the `_PANEL_SUFFIX_RE` suggestion must set target **and** panel in one edit (target-only hits the collision); target view shows "4 panels · 2.1h/panel" rather than implying that 8.4h of panel-time is 8.4h of depth |
 
