@@ -285,3 +285,120 @@ def test_dotdot_new_path_rejected(archive, backend):
     results = apply_renames(archive, backend, apply=True)
     assert results[0].outcome == ERROR
     assert len(backend.list_pending_renames()) == 1
+
+
+# ---------------------------------------------------------------------------
+# "deepening" edits: new_path nested inside old_path
+#
+# A legacy row whose lights_path predates the Lights/<Filter>/ level gets that
+# level added the moment any identity edit recomputes the path through
+# session_dest_rel. old_path is then new_path's own ancestor, so it always
+# exists — the generic "both exist" conflict would be a false alarm that can
+# never clear, and there is no CLI way to ack a stuck conflict.
+#
+# Found live on NGC 7380/2025-09-13 (2026-08-31): 0 frames at the old level,
+# 100 already in Lights/NoFilter, reported as a permanent conflict.
+# ---------------------------------------------------------------------------
+
+
+def _make_deepening_rename(backend: LocalBackend, archive: Path) -> dict:
+    """Legacy shallow lights_path -> canonical Lights/<Filter>/ under it."""
+    sid = "NGC7380_20250913_FRA400_ZWOASI585MCPro_L-Pro"
+    shallow = "01_Deep Sky Objects/NGC 7380/2025-09-13_FRA400_ZWOASI585MCPro"
+    backend.upsert_session(_session(
+        sid, target="NGC 7380", obs_date="2025-09-13", lights_path=shallow,
+    ))
+    backend.update_session_fields(sid, filter="L-Extreme")
+    rename = backend.list_pending_renames()[0]
+    assert rename["old_path"] == shallow
+    assert rename["new_path"].startswith(shallow + "/")   # genuinely nested
+    return rename
+
+
+def test_deepening_already_done_when_frames_sit_at_new(archive, backend):
+    rename = _make_deepening_rename(backend, archive)
+    new_dir = archive / rename["new_path"]
+    new_dir.mkdir(parents=True)
+    (new_dir / "light_0001.fit").write_bytes(b"data")
+
+    results = apply_renames(archive, backend, apply=True)
+
+    assert results[0].outcome == ALREADY_DONE
+    assert "already holds the frames" in results[0].detail
+    assert backend.list_pending_renames() == []          # acked, not stuck
+    assert (new_dir / "light_0001.fit").exists()         # nothing moved
+
+
+def test_deepening_not_acked_under_dry_run(archive, backend):
+    rename = _make_deepening_rename(backend, archive)
+    new_dir = archive / rename["new_path"]
+    new_dir.mkdir(parents=True)
+    (new_dir / "light_0001.fit").write_bytes(b"data")
+
+    results = apply_renames(archive, backend, apply=False)
+
+    assert results[0].outcome == ALREADY_DONE
+    assert len(backend.list_pending_renames()) == 1
+
+
+def test_deepening_conflicts_when_frames_still_loose_in_old(archive, backend):
+    """Not a rename — shutil.move would move a directory into itself."""
+    rename = _make_deepening_rename(backend, archive)
+    old_dir = archive / rename["old_path"]
+    old_dir.mkdir(parents=True)
+    (old_dir / "light_0001.fit").write_bytes(b"data")
+    (archive / rename["new_path"]).mkdir(parents=True)
+
+    results = apply_renames(archive, backend, apply=True)
+
+    assert results[0].outcome == CONFLICT
+    assert "migrate-archive" in results[0].detail
+    assert len(backend.list_pending_renames()) == 1
+    assert (old_dir / "light_0001.fit").exists()         # untouched
+
+
+def test_deepening_conflicts_when_neither_side_holds_frames(archive, backend):
+    rename = _make_deepening_rename(backend, archive)
+    (archive / rename["new_path"]).mkdir(parents=True)
+
+    results = apply_renames(archive, backend, apply=True)
+
+    assert results[0].outcome == CONFLICT
+    assert len(backend.list_pending_renames()) == 1
+
+
+def test_sibling_rename_still_a_plain_conflict(archive, backend):
+    """Regression guard: the deepening branch must not swallow real conflicts."""
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    session = _session(sid)
+    backend.upsert_session(session)
+    old_dir = archive / session["lights_path"]
+    old_dir.mkdir(parents=True)
+    (old_dir / "light_0001.fit").write_bytes(b"data")
+    backend.update_session_fields(sid, filter="L-Extreme")
+    rename = backend.list_pending_renames()[0]
+    new_dir = archive / rename["new_path"]
+    new_dir.mkdir(parents=True)
+    (new_dir / "light_0002.fit").write_bytes(b"data")
+
+    results = apply_renames(archive, backend, apply=True)
+
+    assert results[0].outcome == CONFLICT
+    assert results[0].detail == "both old and new paths exist — left pending"
+    assert len(backend.list_pending_renames()) == 1
+
+
+@pytest.mark.parametrize("new_path,old_path,expected", [
+    ("a/b/Lights/NoFilter", "a/b", True),
+    ("a/b/c/d", "a/b", True),
+    ("a/b", "a/b", False),                 # identical, not nested
+    ("a/c", "a/b", False),                 # siblings
+    ("a/bb/c", "a/b", False),              # prefix of the *string*, not a component
+    # Case-only rename on a case-insensitive mount: the same inode, but not
+    # nesting. Compared on path components so the filesystem can't confuse it.
+    ("Sh2-101/2026-07-19/Lights/L", "SH2-101/2026-07-19/Lights/L", False),
+])
+def test_is_nested(new_path, old_path, expected):
+    from darkroom.renames import _is_nested
+
+    assert _is_nested(new_path, old_path) is expected

@@ -1,0 +1,585 @@
+meta:
+  asiair: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan
+  archive: /Volumes/Photography 4TB/Astrophotography
+  catalog: /Users/jpoh/.config/darkroom/astro_catalog.db
+  catalog_url: https://darkroom.jpoh.net
+  generated: '2026-08-31T15:30:11'
+  status_verified: true
+sessions:
+- session_id: M8_20260812_Canon50mm_ZWOASI585MCPro_AstronomikL2_P1-1
+  target: M 8
+  obs_date: '2026-08-12'
+  ota: Canon50mm
+  camera: ZWOASI585MCPro
+  filter: AstronomikL2
+  panel: 1-1
+  gain: 200
+  temperature_c: -9.5
+  exposure_sec: 30.0
+  focal_length: 51.0
+  frame_count: 10
+  ra_deg: 265.95417
+  dec_deg: -26.158333
+  site_lat: 42.4635
+  site_lon: -5.01459
+  start_utc: '2026-08-12T21:59:48'
+  end_utc: '2026-08-12T22:04:54'
+  needs_review: false
+  status: new
+  lights_rel_path: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P1-1
+  files:
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_1-1/Light_M
+      8_1-1_30.0s_Bin1_585MC_gain200_20260813-000019_176deg_-9.5C_AstronimikL2_0001.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P1-1/Light_M
+      8_1-1_30.0s_Bin1_585MC_gain200_20260813-000019_176deg_-9.5C_AstronimikL2_0001.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_1-1/Light_M
+      8_1-1_30.0s_Bin1_585MC_gain200_20260813-000049_176deg_-9.0C_AstronimikL2_0002.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P1-1/Light_M
+      8_1-1_30.0s_Bin1_585MC_gain200_20260813-000049_176deg_-9.0C_AstronimikL2_0002.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_1-1/Light_M
+      8_1-1_30.0s_Bin1_585MC_gain200_20260813-000120_176deg_-9.5C_AstronimikL2_0003.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P1-1/Light_M
+      8_1-1_30.0s_Bin1_585MC_gain200_20260813-000120_176deg_-9.5C_AstronimikL2_0003.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_1-1/Light_M
+      8_1-1_30.0s_Bin1_585MC_gain200_20260813-000151_176deg_-9.5C_AstronimikL2_0004.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P1-1/Light_M
+      8_1-1_30.0s_Bin1_585MC_gain200_20260813-000151_176deg_-9.5C_AstronimikL2_0004.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_1-1/Light_M
+      8_1-1_30.0s_Bin1_585MC_gain200_20260813-000221_176deg_-10.0C_AstronimikL2_0005.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P1-1/Light_M
+      8_1-1_30.0s_Bin1_585MC_gain200_20260813-000221_176deg_-10.0C_AstronimikL2_0005.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_1-1/Light_M
+      8_1-1_30.0s_Bin1_585MC_gain200_20260813-000252_176deg_-10.0C_AstronimikL2_0006.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P1-1/Light_M
+      8_1-1_30.0s_Bin1_585MC_gain200_20260813-000252_176deg_-10.0C_AstronimikL2_0006.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_1-1/Light_M
+      8_1-1_30.0s_Bin1_585MC_gain200_20260813-000323_176deg_-10.0C_AstronimikL2_0007.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P1-1/Light_M
+      8_1-1_30.0s_Bin1_585MC_gain200_20260813-000323_176deg_-10.0C_AstronimikL2_0007.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_1-1/Light_M
+      8_1-1_30.0s_Bin1_585MC_gain200_20260813-000353_176deg_-9.5C_AstronimikL2_0008.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P1-1/Light_M
+      8_1-1_30.0s_Bin1_585MC_gain200_20260813-000353_176deg_-9.5C_AstronimikL2_0008.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_1-1/Light_M
+      8_1-1_30.0s_Bin1_585MC_gain200_20260813-000424_176deg_-10.0C_AstronimikL2_0009.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P1-1/Light_M
+      8_1-1_30.0s_Bin1_585MC_gain200_20260813-000424_176deg_-10.0C_AstronimikL2_0009.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_1-1/Light_M
+      8_1-1_30.0s_Bin1_585MC_gain200_20260813-000455_176deg_-9.5C_AstronimikL2_0010.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P1-1/Light_M
+      8_1-1_30.0s_Bin1_585MC_gain200_20260813-000455_176deg_-9.5C_AstronimikL2_0010.fit
+    copy: true
+- session_id: M8_20260812_Canon50mm_ZWOASI585MCPro_AstronomikL2_P1-2
+  target: M 8
+  obs_date: '2026-08-12'
+  ota: Canon50mm
+  camera: ZWOASI585MCPro
+  filter: AstronomikL2
+  panel: 1-2
+  gain: 200
+  temperature_c: -10.0
+  exposure_sec: 30.0
+  focal_length: 51.0
+  frame_count: 10
+  ra_deg: 276.391665
+  dec_deg: -26.581667
+  site_lat: 42.4635
+  site_lon: -5.01459
+  start_utc: '2026-08-12T22:05:12'
+  end_utc: '2026-08-12T22:10:18'
+  needs_review: false
+  status: new
+  lights_rel_path: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P1-2
+  files:
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_1-2/Light_M
+      8_1-2_30.0s_Bin1_585MC_gain200_20260813-000543_175deg_-10.0C_AstronimikL2_0001.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P1-2/Light_M
+      8_1-2_30.0s_Bin1_585MC_gain200_20260813-000543_175deg_-10.0C_AstronimikL2_0001.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_1-2/Light_M
+      8_1-2_30.0s_Bin1_585MC_gain200_20260813-000614_175deg_-10.0C_AstronimikL2_0002.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P1-2/Light_M
+      8_1-2_30.0s_Bin1_585MC_gain200_20260813-000614_175deg_-10.0C_AstronimikL2_0002.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_1-2/Light_M
+      8_1-2_30.0s_Bin1_585MC_gain200_20260813-000644_175deg_-9.5C_AstronimikL2_0003.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P1-2/Light_M
+      8_1-2_30.0s_Bin1_585MC_gain200_20260813-000644_175deg_-9.5C_AstronimikL2_0003.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_1-2/Light_M
+      8_1-2_30.0s_Bin1_585MC_gain200_20260813-000715_175deg_-9.5C_AstronimikL2_0004.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P1-2/Light_M
+      8_1-2_30.0s_Bin1_585MC_gain200_20260813-000715_175deg_-9.5C_AstronimikL2_0004.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_1-2/Light_M
+      8_1-2_30.0s_Bin1_585MC_gain200_20260813-000746_175deg_-10.0C_AstronimikL2_0005.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P1-2/Light_M
+      8_1-2_30.0s_Bin1_585MC_gain200_20260813-000746_175deg_-10.0C_AstronimikL2_0005.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_1-2/Light_M
+      8_1-2_30.0s_Bin1_585MC_gain200_20260813-000816_175deg_-10.0C_AstronimikL2_0006.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P1-2/Light_M
+      8_1-2_30.0s_Bin1_585MC_gain200_20260813-000816_175deg_-10.0C_AstronimikL2_0006.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_1-2/Light_M
+      8_1-2_30.0s_Bin1_585MC_gain200_20260813-000847_175deg_-9.5C_AstronimikL2_0007.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P1-2/Light_M
+      8_1-2_30.0s_Bin1_585MC_gain200_20260813-000847_175deg_-9.5C_AstronimikL2_0007.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_1-2/Light_M
+      8_1-2_30.0s_Bin1_585MC_gain200_20260813-000918_175deg_-10.0C_AstronimikL2_0008.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P1-2/Light_M
+      8_1-2_30.0s_Bin1_585MC_gain200_20260813-000918_175deg_-10.0C_AstronimikL2_0008.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_1-2/Light_M
+      8_1-2_30.0s_Bin1_585MC_gain200_20260813-000948_175deg_-10.0C_AstronimikL2_0009.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P1-2/Light_M
+      8_1-2_30.0s_Bin1_585MC_gain200_20260813-000948_175deg_-10.0C_AstronimikL2_0009.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_1-2/Light_M
+      8_1-2_30.0s_Bin1_585MC_gain200_20260813-001019_175deg_-10.0C_AstronimikL2_0010.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P1-2/Light_M
+      8_1-2_30.0s_Bin1_585MC_gain200_20260813-001019_175deg_-10.0C_AstronimikL2_0010.fit
+    copy: true
+- session_id: M8_20260812_Canon50mm_ZWOASI585MCPro_AstronomikL2_P2-1
+  target: M 8
+  obs_date: '2026-08-12'
+  ota: Canon50mm
+  camera: ZWOASI585MCPro
+  filter: AstronomikL2
+  panel: 2-1
+  gain: 200
+  temperature_c: -10.0
+  exposure_sec: 30.0
+  focal_length: 51.0
+  frame_count: 10
+  ra_deg: 266.34999
+  dec_deg: -20.880278
+  site_lat: 42.4635
+  site_lon: -5.01459
+  start_utc: '2026-08-12T22:10:33'
+  end_utc: '2026-08-12T22:15:40'
+  needs_review: false
+  status: new
+  lights_rel_path: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P2-1
+  files:
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_2-1/Light_M
+      8_2-1_30.0s_Bin1_585MC_gain200_20260813-001104_178deg_-10.0C_AstronimikL2_0001.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P2-1/Light_M
+      8_2-1_30.0s_Bin1_585MC_gain200_20260813-001104_178deg_-10.0C_AstronimikL2_0001.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_2-1/Light_M
+      8_2-1_30.0s_Bin1_585MC_gain200_20260813-001135_178deg_-10.0C_AstronimikL2_0002.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P2-1/Light_M
+      8_2-1_30.0s_Bin1_585MC_gain200_20260813-001135_178deg_-10.0C_AstronimikL2_0002.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_2-1/Light_M
+      8_2-1_30.0s_Bin1_585MC_gain200_20260813-001205_178deg_-9.5C_AstronimikL2_0003.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P2-1/Light_M
+      8_2-1_30.0s_Bin1_585MC_gain200_20260813-001205_178deg_-9.5C_AstronimikL2_0003.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_2-1/Light_M
+      8_2-1_30.0s_Bin1_585MC_gain200_20260813-001236_178deg_-10.0C_AstronimikL2_0004.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P2-1/Light_M
+      8_2-1_30.0s_Bin1_585MC_gain200_20260813-001236_178deg_-10.0C_AstronimikL2_0004.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_2-1/Light_M
+      8_2-1_30.0s_Bin1_585MC_gain200_20260813-001307_178deg_-10.0C_AstronimikL2_0005.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P2-1/Light_M
+      8_2-1_30.0s_Bin1_585MC_gain200_20260813-001307_178deg_-10.0C_AstronimikL2_0005.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_2-1/Light_M
+      8_2-1_30.0s_Bin1_585MC_gain200_20260813-001337_178deg_-10.0C_AstronimikL2_0006.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P2-1/Light_M
+      8_2-1_30.0s_Bin1_585MC_gain200_20260813-001337_178deg_-10.0C_AstronimikL2_0006.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_2-1/Light_M
+      8_2-1_30.0s_Bin1_585MC_gain200_20260813-001408_178deg_-10.0C_AstronimikL2_0007.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P2-1/Light_M
+      8_2-1_30.0s_Bin1_585MC_gain200_20260813-001408_178deg_-10.0C_AstronimikL2_0007.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_2-1/Light_M
+      8_2-1_30.0s_Bin1_585MC_gain200_20260813-001439_178deg_-10.0C_AstronimikL2_0008.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P2-1/Light_M
+      8_2-1_30.0s_Bin1_585MC_gain200_20260813-001439_178deg_-10.0C_AstronimikL2_0008.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_2-1/Light_M
+      8_2-1_30.0s_Bin1_585MC_gain200_20260813-001509_178deg_-10.0C_AstronimikL2_0009.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P2-1/Light_M
+      8_2-1_30.0s_Bin1_585MC_gain200_20260813-001509_178deg_-10.0C_AstronimikL2_0009.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_2-1/Light_M
+      8_2-1_30.0s_Bin1_585MC_gain200_20260813-001540_178deg_-10.0C_AstronimikL2_0010.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P2-1/Light_M
+      8_2-1_30.0s_Bin1_585MC_gain200_20260813-001540_178deg_-10.0C_AstronimikL2_0010.fit
+    copy: true
+- session_id: M8_20260812_Canon50mm_ZWOASI585MCPro_AstronomikL2_P2-2
+  target: M 8
+  obs_date: '2026-08-12'
+  ota: Canon50mm
+  camera: ZWOASI585MCPro
+  filter: AstronomikL2
+  panel: 2-2
+  gain: 200
+  temperature_c: -10.0
+  exposure_sec: 30.0
+  focal_length: 51.0
+  frame_count: 10
+  ra_deg: 276.437505
+  dec_deg: -21.261389
+  site_lat: 42.4635
+  site_lon: -5.01459
+  start_utc: '2026-08-12T22:15:58'
+  end_utc: '2026-08-12T22:21:04'
+  needs_review: false
+  status: new
+  lights_rel_path: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P2-2
+  files:
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_2-2/Light_M
+      8_2-2_30.0s_Bin1_585MC_gain200_20260813-001628_175deg_-10.0C_AstronimikL2_0001.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P2-2/Light_M
+      8_2-2_30.0s_Bin1_585MC_gain200_20260813-001628_175deg_-10.0C_AstronimikL2_0001.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_2-2/Light_M
+      8_2-2_30.0s_Bin1_585MC_gain200_20260813-001659_175deg_-10.0C_AstronimikL2_0002.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P2-2/Light_M
+      8_2-2_30.0s_Bin1_585MC_gain200_20260813-001659_175deg_-10.0C_AstronimikL2_0002.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_2-2/Light_M
+      8_2-2_30.0s_Bin1_585MC_gain200_20260813-001730_175deg_-10.0C_AstronimikL2_0003.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P2-2/Light_M
+      8_2-2_30.0s_Bin1_585MC_gain200_20260813-001730_175deg_-10.0C_AstronimikL2_0003.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_2-2/Light_M
+      8_2-2_30.0s_Bin1_585MC_gain200_20260813-001801_175deg_-9.5C_AstronimikL2_0004.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P2-2/Light_M
+      8_2-2_30.0s_Bin1_585MC_gain200_20260813-001801_175deg_-9.5C_AstronimikL2_0004.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_2-2/Light_M
+      8_2-2_30.0s_Bin1_585MC_gain200_20260813-001831_175deg_-9.5C_AstronimikL2_0005.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P2-2/Light_M
+      8_2-2_30.0s_Bin1_585MC_gain200_20260813-001831_175deg_-9.5C_AstronimikL2_0005.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_2-2/Light_M
+      8_2-2_30.0s_Bin1_585MC_gain200_20260813-001902_175deg_-9.5C_AstronimikL2_0006.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P2-2/Light_M
+      8_2-2_30.0s_Bin1_585MC_gain200_20260813-001902_175deg_-9.5C_AstronimikL2_0006.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_2-2/Light_M
+      8_2-2_30.0s_Bin1_585MC_gain200_20260813-001933_175deg_-9.5C_AstronimikL2_0007.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P2-2/Light_M
+      8_2-2_30.0s_Bin1_585MC_gain200_20260813-001933_175deg_-9.5C_AstronimikL2_0007.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_2-2/Light_M
+      8_2-2_30.0s_Bin1_585MC_gain200_20260813-002003_175deg_-9.5C_AstronimikL2_0008.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P2-2/Light_M
+      8_2-2_30.0s_Bin1_585MC_gain200_20260813-002003_175deg_-9.5C_AstronimikL2_0008.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_2-2/Light_M
+      8_2-2_30.0s_Bin1_585MC_gain200_20260813-002034_175deg_-9.5C_AstronimikL2_0009.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P2-2/Light_M
+      8_2-2_30.0s_Bin1_585MC_gain200_20260813-002034_175deg_-9.5C_AstronimikL2_0009.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_2-2/Light_M
+      8_2-2_30.0s_Bin1_585MC_gain200_20260813-002105_175deg_-9.5C_AstronimikL2_0010.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P2-2/Light_M
+      8_2-2_30.0s_Bin1_585MC_gain200_20260813-002105_175deg_-9.5C_AstronimikL2_0010.fit
+    copy: true
+- session_id: M8_20260812_Canon50mm_ZWOASI585MCPro_AstronomikL2_P3-1
+  target: M 8
+  obs_date: '2026-08-12'
+  ota: Canon50mm
+  camera: ZWOASI585MCPro
+  filter: AstronomikL2
+  panel: 3-1
+  gain: 200
+  temperature_c: -9.5
+  exposure_sec: 30.0
+  focal_length: 51.0
+  frame_count: 10
+  ra_deg: 266.737485
+  dec_deg: -15.577778
+  site_lat: 42.4635
+  site_lon: -5.01459
+  start_utc: '2026-08-12T22:21:21'
+  end_utc: '2026-08-12T22:26:27'
+  needs_review: false
+  status: new
+  lights_rel_path: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P3-1
+  files:
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_3-1/Light_M
+      8_3-1_30.0s_Bin1_585MC_gain200_20260813-002151_177deg_-9.5C_AstronimikL2_0001.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P3-1/Light_M
+      8_3-1_30.0s_Bin1_585MC_gain200_20260813-002151_177deg_-9.5C_AstronimikL2_0001.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_3-1/Light_M
+      8_3-1_30.0s_Bin1_585MC_gain200_20260813-002222_176deg_-9.5C_AstronimikL2_0002.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P3-1/Light_M
+      8_3-1_30.0s_Bin1_585MC_gain200_20260813-002222_176deg_-9.5C_AstronimikL2_0002.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_3-1/Light_M
+      8_3-1_30.0s_Bin1_585MC_gain200_20260813-002253_176deg_-9.5C_AstronimikL2_0003.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P3-1/Light_M
+      8_3-1_30.0s_Bin1_585MC_gain200_20260813-002253_176deg_-9.5C_AstronimikL2_0003.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_3-1/Light_M
+      8_3-1_30.0s_Bin1_585MC_gain200_20260813-002323_176deg_-9.5C_AstronimikL2_0004.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P3-1/Light_M
+      8_3-1_30.0s_Bin1_585MC_gain200_20260813-002323_176deg_-9.5C_AstronimikL2_0004.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_3-1/Light_M
+      8_3-1_30.0s_Bin1_585MC_gain200_20260813-002354_176deg_-9.5C_AstronimikL2_0005.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P3-1/Light_M
+      8_3-1_30.0s_Bin1_585MC_gain200_20260813-002354_176deg_-9.5C_AstronimikL2_0005.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_3-1/Light_M
+      8_3-1_30.0s_Bin1_585MC_gain200_20260813-002425_176deg_-9.0C_AstronimikL2_0006.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P3-1/Light_M
+      8_3-1_30.0s_Bin1_585MC_gain200_20260813-002425_176deg_-9.0C_AstronimikL2_0006.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_3-1/Light_M
+      8_3-1_30.0s_Bin1_585MC_gain200_20260813-002455_176deg_-9.0C_AstronimikL2_0007.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P3-1/Light_M
+      8_3-1_30.0s_Bin1_585MC_gain200_20260813-002455_176deg_-9.0C_AstronimikL2_0007.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_3-1/Light_M
+      8_3-1_30.0s_Bin1_585MC_gain200_20260813-002526_176deg_-9.0C_AstronimikL2_0008.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P3-1/Light_M
+      8_3-1_30.0s_Bin1_585MC_gain200_20260813-002526_176deg_-9.0C_AstronimikL2_0008.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_3-1/Light_M
+      8_3-1_30.0s_Bin1_585MC_gain200_20260813-002557_176deg_-9.0C_AstronimikL2_0009.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P3-1/Light_M
+      8_3-1_30.0s_Bin1_585MC_gain200_20260813-002557_176deg_-9.0C_AstronimikL2_0009.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_3-1/Light_M
+      8_3-1_30.0s_Bin1_585MC_gain200_20260813-002627_176deg_-9.0C_AstronimikL2_0010.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P3-1/Light_M
+      8_3-1_30.0s_Bin1_585MC_gain200_20260813-002627_176deg_-9.0C_AstronimikL2_0010.fit
+    copy: true
+- session_id: M8_20260812_Canon50mm_ZWOASI585MCPro_AstronomikL2_P3-2
+  target: M 8
+  obs_date: '2026-08-12'
+  ota: Canon50mm
+  camera: ZWOASI585MCPro
+  filter: AstronomikL2
+  panel: 3-2
+  gain: 200
+  temperature_c: -9.5
+  exposure_sec: 30.0
+  focal_length: 51.0
+  frame_count: 10
+  ra_deg: 276.51249
+  dec_deg: -15.951667
+  site_lat: 42.4635
+  site_lon: -5.01459
+  start_utc: '2026-08-12T22:26:49'
+  end_utc: '2026-08-12T22:31:55'
+  needs_review: false
+  status: new
+  lights_rel_path: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P3-2
+  files:
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_3-2/Light_M
+      8_3-2_30.0s_Bin1_585MC_gain200_20260813-002720_178deg_-9.5C_AstronimikL2_0001.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P3-2/Light_M
+      8_3-2_30.0s_Bin1_585MC_gain200_20260813-002720_178deg_-9.5C_AstronimikL2_0001.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_3-2/Light_M
+      8_3-2_30.0s_Bin1_585MC_gain200_20260813-002751_178deg_-9.5C_AstronimikL2_0002.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P3-2/Light_M
+      8_3-2_30.0s_Bin1_585MC_gain200_20260813-002751_178deg_-9.5C_AstronimikL2_0002.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_3-2/Light_M
+      8_3-2_30.0s_Bin1_585MC_gain200_20260813-002821_178deg_-9.0C_AstronimikL2_0003.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P3-2/Light_M
+      8_3-2_30.0s_Bin1_585MC_gain200_20260813-002821_178deg_-9.0C_AstronimikL2_0003.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_3-2/Light_M
+      8_3-2_30.0s_Bin1_585MC_gain200_20260813-002852_178deg_-9.0C_AstronimikL2_0004.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P3-2/Light_M
+      8_3-2_30.0s_Bin1_585MC_gain200_20260813-002852_178deg_-9.0C_AstronimikL2_0004.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_3-2/Light_M
+      8_3-2_30.0s_Bin1_585MC_gain200_20260813-002923_178deg_-9.0C_AstronimikL2_0005.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P3-2/Light_M
+      8_3-2_30.0s_Bin1_585MC_gain200_20260813-002923_178deg_-9.0C_AstronimikL2_0005.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_3-2/Light_M
+      8_3-2_30.0s_Bin1_585MC_gain200_20260813-002953_178deg_-9.0C_AstronimikL2_0006.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P3-2/Light_M
+      8_3-2_30.0s_Bin1_585MC_gain200_20260813-002953_178deg_-9.0C_AstronimikL2_0006.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_3-2/Light_M
+      8_3-2_30.0s_Bin1_585MC_gain200_20260813-003024_178deg_-9.0C_AstronimikL2_0007.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P3-2/Light_M
+      8_3-2_30.0s_Bin1_585MC_gain200_20260813-003024_178deg_-9.0C_AstronimikL2_0007.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_3-2/Light_M
+      8_3-2_30.0s_Bin1_585MC_gain200_20260813-003055_178deg_-9.0C_AstronimikL2_0008.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P3-2/Light_M
+      8_3-2_30.0s_Bin1_585MC_gain200_20260813-003055_178deg_-9.0C_AstronimikL2_0008.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_3-2/Light_M
+      8_3-2_30.0s_Bin1_585MC_gain200_20260813-003125_178deg_-9.0C_AstronimikL2_0009.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P3-2/Light_M
+      8_3-2_30.0s_Bin1_585MC_gain200_20260813-003125_178deg_-9.0C_AstronimikL2_0009.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_3-2/Light_M
+      8_3-2_30.0s_Bin1_585MC_gain200_20260813-003156_178deg_-9.0C_AstronimikL2_0010.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P3-2/Light_M
+      8_3-2_30.0s_Bin1_585MC_gain200_20260813-003156_178deg_-9.0C_AstronimikL2_0010.fit
+    copy: true
+- session_id: M8_20260812_Canon50mm_ZWOASI585MCPro_AstronomikL2_P4-1
+  target: M 8
+  obs_date: '2026-08-12'
+  ota: Canon50mm
+  camera: ZWOASI585MCPro
+  filter: AstronomikL2
+  panel: 4-1
+  gain: 200
+  temperature_c: -9.0
+  exposure_sec: 30.0
+  focal_length: 51.0
+  frame_count: 10
+  ra_deg: 267.075
+  dec_deg: -10.291945
+  site_lat: 42.4635
+  site_lon: -5.01459
+  start_utc: '2026-08-12T22:32:06'
+  end_utc: '2026-08-12T22:37:13'
+  needs_review: false
+  status: new
+  lights_rel_path: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P4-1
+  files:
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_4-1/Light_M
+      8_4-1_30.0s_Bin1_585MC_gain200_20260813-003237_177deg_-9.0C_AstronimikL2_0001.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P4-1/Light_M
+      8_4-1_30.0s_Bin1_585MC_gain200_20260813-003237_177deg_-9.0C_AstronimikL2_0001.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_4-1/Light_M
+      8_4-1_30.0s_Bin1_585MC_gain200_20260813-003308_177deg_-9.0C_AstronimikL2_0002.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P4-1/Light_M
+      8_4-1_30.0s_Bin1_585MC_gain200_20260813-003308_177deg_-9.0C_AstronimikL2_0002.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_4-1/Light_M
+      8_4-1_30.0s_Bin1_585MC_gain200_20260813-003338_177deg_-9.0C_AstronimikL2_0003.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P4-1/Light_M
+      8_4-1_30.0s_Bin1_585MC_gain200_20260813-003338_177deg_-9.0C_AstronimikL2_0003.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_4-1/Light_M
+      8_4-1_30.0s_Bin1_585MC_gain200_20260813-003409_177deg_-9.0C_AstronimikL2_0004.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P4-1/Light_M
+      8_4-1_30.0s_Bin1_585MC_gain200_20260813-003409_177deg_-9.0C_AstronimikL2_0004.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_4-1/Light_M
+      8_4-1_30.0s_Bin1_585MC_gain200_20260813-003440_177deg_-9.0C_AstronimikL2_0005.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P4-1/Light_M
+      8_4-1_30.0s_Bin1_585MC_gain200_20260813-003440_177deg_-9.0C_AstronimikL2_0005.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_4-1/Light_M
+      8_4-1_30.0s_Bin1_585MC_gain200_20260813-003511_177deg_-9.0C_AstronimikL2_0006.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P4-1/Light_M
+      8_4-1_30.0s_Bin1_585MC_gain200_20260813-003511_177deg_-9.0C_AstronimikL2_0006.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_4-1/Light_M
+      8_4-1_30.0s_Bin1_585MC_gain200_20260813-003542_177deg_-9.0C_AstronimikL2_0007.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P4-1/Light_M
+      8_4-1_30.0s_Bin1_585MC_gain200_20260813-003542_177deg_-9.0C_AstronimikL2_0007.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_4-1/Light_M
+      8_4-1_30.0s_Bin1_585MC_gain200_20260813-003613_177deg_-9.0C_AstronimikL2_0008.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P4-1/Light_M
+      8_4-1_30.0s_Bin1_585MC_gain200_20260813-003613_177deg_-9.0C_AstronimikL2_0008.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_4-1/Light_M
+      8_4-1_30.0s_Bin1_585MC_gain200_20260813-003643_177deg_-9.0C_AstronimikL2_0009.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P4-1/Light_M
+      8_4-1_30.0s_Bin1_585MC_gain200_20260813-003643_177deg_-9.0C_AstronimikL2_0009.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_4-1/Light_M
+      8_4-1_30.0s_Bin1_585MC_gain200_20260813-003714_177deg_-9.0C_AstronimikL2_0010.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P4-1/Light_M
+      8_4-1_30.0s_Bin1_585MC_gain200_20260813-003714_177deg_-9.0C_AstronimikL2_0010.fit
+    copy: true
+- session_id: M8_20260812_Canon50mm_ZWOASI585MCPro_AstronomikL2_P4-2
+  target: M 8
+  obs_date: '2026-08-12'
+  ota: Canon50mm
+  camera: ZWOASI585MCPro
+  filter: AstronomikL2
+  panel: 4-2
+  gain: 200
+  temperature_c: -9.5
+  exposure_sec: 30.0
+  focal_length: 51.0
+  frame_count: 10
+  ra_deg: 276.61251
+  dec_deg: -10.653889
+  site_lat: 42.4635
+  site_lon: -5.01459
+  start_utc: '2026-08-12T22:37:32'
+  end_utc: '2026-08-12T22:42:39'
+  needs_review: false
+  status: new
+  lights_rel_path: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P4-2
+  files:
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_4-2/Light_M
+      8_4-2_30.0s_Bin1_585MC_gain200_20260813-003803_177deg_-9.5C_AstronimikL2_0001.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P4-2/Light_M
+      8_4-2_30.0s_Bin1_585MC_gain200_20260813-003803_177deg_-9.5C_AstronimikL2_0001.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_4-2/Light_M
+      8_4-2_30.0s_Bin1_585MC_gain200_20260813-003834_177deg_-9.0C_AstronimikL2_0002.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P4-2/Light_M
+      8_4-2_30.0s_Bin1_585MC_gain200_20260813-003834_177deg_-9.0C_AstronimikL2_0002.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_4-2/Light_M
+      8_4-2_30.0s_Bin1_585MC_gain200_20260813-003904_177deg_-9.0C_AstronimikL2_0003.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P4-2/Light_M
+      8_4-2_30.0s_Bin1_585MC_gain200_20260813-003904_177deg_-9.0C_AstronimikL2_0003.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_4-2/Light_M
+      8_4-2_30.0s_Bin1_585MC_gain200_20260813-003935_177deg_-9.0C_AstronimikL2_0004.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P4-2/Light_M
+      8_4-2_30.0s_Bin1_585MC_gain200_20260813-003935_177deg_-9.0C_AstronimikL2_0004.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_4-2/Light_M
+      8_4-2_30.0s_Bin1_585MC_gain200_20260813-004006_177deg_-9.0C_AstronimikL2_0005.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P4-2/Light_M
+      8_4-2_30.0s_Bin1_585MC_gain200_20260813-004006_177deg_-9.0C_AstronimikL2_0005.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_4-2/Light_M
+      8_4-2_30.0s_Bin1_585MC_gain200_20260813-004037_177deg_-9.0C_AstronimikL2_0006.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P4-2/Light_M
+      8_4-2_30.0s_Bin1_585MC_gain200_20260813-004037_177deg_-9.0C_AstronimikL2_0006.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_4-2/Light_M
+      8_4-2_30.0s_Bin1_585MC_gain200_20260813-004107_177deg_-9.0C_AstronimikL2_0007.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P4-2/Light_M
+      8_4-2_30.0s_Bin1_585MC_gain200_20260813-004107_177deg_-9.0C_AstronimikL2_0007.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_4-2/Light_M
+      8_4-2_30.0s_Bin1_585MC_gain200_20260813-004138_177deg_-9.0C_AstronimikL2_0008.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P4-2/Light_M
+      8_4-2_30.0s_Bin1_585MC_gain200_20260813-004138_177deg_-9.0C_AstronimikL2_0008.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_4-2/Light_M
+      8_4-2_30.0s_Bin1_585MC_gain200_20260813-004209_177deg_-9.0C_AstronimikL2_0009.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P4-2/Light_M
+      8_4-2_30.0s_Bin1_585MC_gain200_20260813-004209_177deg_-9.0C_AstronimikL2_0009.fit
+    copy: true
+  - src: /Users/jpoh/02_Astrophotography/01_ASIAir/ASIAIR/Plan/Light/M 8_4-2/Light_M
+      8_4-2_30.0s_Bin1_585MC_gain200_20260813-004239_177deg_-9.0C_AstronimikL2_0010.fit
+    dst: 01_Deep Sky Objects/M 8/2026-08-12_Canon50mm_ZWOASI585MCPro/Lights/AstronomikL2/P4-2/Light_M
+      8_4-2_30.0s_Bin1_585MC_gain200_20260813-004239_177deg_-9.0C_AstronimikL2_0010.fit
+    copy: true
+calibration: []

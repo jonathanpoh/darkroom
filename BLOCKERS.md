@@ -15,7 +15,7 @@ something here is unblocked, the corresponding backlog item can move.
 
 ## 🔴 Blocking other work
 
-### 1. Ingest the M8 mosaic
+### 1. Ingest the M8 mosaic ✅ done
 
 **Status: unblocked as of 2026-08-30 — this is the next thing to do.**
 
@@ -41,7 +41,7 @@ Expect `scan-guiding` to list those 8 sessions as **unmatched** afterwards —
 no guidescope was used at 50mm, so there is no PHD2 log for that night. That is
 correct, not a failure to debug.
 
-### 2. Work the `/rescan` queue — 21 pending proposals
+### 2. Work the `/rescan` queue — 21 pending proposals ✅ done except 'Stars' create and all deletes
 
 Verified live 2026-08-30: **15 `update`, 5 `delete`, 1 `create`** pending
 (12 `rename` proposals from the earlier pass are already applied).
@@ -60,7 +60,7 @@ Review them at `/rescan` in the web UI, then apply.
   fills NULLs and will not revisit a row, so the guiding stats derived from the
   old span stay stale silently.
 
-### 3. Supply the real filter for the IC 4604 mosaic nights
+### 3. Supply the real filter for the IC 4604 mosaic nights ✅ Done
 
 **Nobody has this information but you, and it is not recoverable from disk.**
 
@@ -131,7 +131,7 @@ darkroom logs import --source <asiair-log-dir> --apply
 Read-only on the source; skips `*_CHN.txt` and anything already archived at the
 same size.
 
-### 6. Drain the rename ledger — 13 pending
+### 6. Drain the rename ledger — 13 pending ✅ Done but there are a few conflicts that need resolving
 
 Verified live 2026-08-30: **13 pending renames**.
 

@@ -13,15 +13,18 @@ what it would do — no filesystem writes, no acks. ``apply=True`` performs the
 classified action and acks the ledger row (via the passed-in
 ``darkroom.catalog_client.CatalogBackend``) for everything it resolved.
 
-Import-light and astropy-free at module load, like its siblings — only
-stdlib (``shutil``, ``dataclasses``, ``pathlib``); the catalog backend comes
-in as a caller-supplied object, never imported here.
+Import-light and astropy-free at module load, like its siblings — stdlib
+(``shutil``, ``dataclasses``, ``pathlib``) plus ``darkroom.parse.fits_files``,
+which is itself stdlib-only; the catalog backend comes in as a caller-supplied
+object, never imported here.
 """
 from __future__ import annotations
 
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+
+from darkroom.parse import fits_files
 
 # Outcomes a single pending rename can resolve to.
 APPLIED = "applied"
@@ -54,6 +57,19 @@ def _is_safe_rel(path_str: str) -> bool:
     if p.is_absolute():
         return False
     return ".." not in p.parts
+
+
+def _is_nested(new_path: str, old_path: str) -> bool:
+    """True if new_path names a directory *inside* old_path.
+
+    Compared on the ledger's own relative path components, never against the
+    filesystem: the archive lives on a case-insensitive SMB mount, so a
+    filesystem-level check would conflate an unrelated case-only rename
+    (`SH2-101` -> `Sh2-101`, the same inode) with real nesting.
+    """
+    old_parts = Path(old_path).parts
+    new_parts = Path(new_path).parts
+    return len(new_parts) > len(old_parts) and new_parts[:len(old_parts)] == old_parts
 
 
 def _prune_empty_ancestors(old_abs: Path, archive_root: Path) -> None:
@@ -90,6 +106,12 @@ def apply_renames(archive_root: Path, backend, *, apply: bool = False) -> list[R
       - old missing, new exists -> ALREADY_DONE (the move already happened
         on disk, or was done by hand) -> acked under apply=True.
       - old missing, new missing -> MISSING, left pending.
+      - old exists, new exists, and new is *inside* old -> a "deepening"
+        edit (`<night>/` -> `<night>/Lights/<Filter>/`), where old existing
+        is structural rather than ambiguous. ALREADY_DONE (acked under
+        apply=True) if the frames already sit at new; otherwise CONFLICT
+        pointing at ``catalog migrate-archive``, since moving a directory
+        into itself is not a rename.
       - old exists, new exists -> CONFLICT, left pending (ambiguous: don't
         clobber either side).
       - old exists, new missing -> the normal case: create new's parent
@@ -135,6 +157,37 @@ def apply_renames(archive_root: Path, backend, *, apply: bool = False) -> list[R
                 rename_id, session_id, old_path, new_path, MISSING,
                 "neither old nor new path exists on disk — left pending",
             ))
+            continue
+
+        if old_exists and new_exists and _is_nested(new_path, old_path):
+            # "Deepening" edit: the new path adds a level *under* the old one
+            # (`<night>/` -> `<night>/Lights/<Filter>/`). old_exists is then
+            # structurally guaranteed — it is new's own ancestor — so the
+            # generic conflict below would be a false alarm that can never
+            # clear, and there is no way to ack a stuck conflict by hand.
+            #
+            # It is also not a directory rename: shutil.move would be moving a
+            # directory into itself. Deciding it needs the frames, so look at
+            # where they actually are.
+            if fits_files(old_abs):
+                results.append(RenameResult(
+                    rename_id, session_id, old_path, new_path, CONFLICT,
+                    "new path is inside old, and frames are still loose in old — "
+                    "this is a layout migration, not a rename; "
+                    "run `darkroom catalog migrate-archive`",
+                ))
+            elif fits_files(new_abs):
+                results.append(RenameResult(
+                    rename_id, session_id, old_path, new_path, ALREADY_DONE,
+                    "new path is inside old and already holds the frames",
+                ))
+                if apply:
+                    backend.ack_pending_rename(rename_id)
+            else:
+                results.append(RenameResult(
+                    rename_id, session_id, old_path, new_path, CONFLICT,
+                    "new path is inside old, but neither holds frames — left pending",
+                ))
             continue
 
         if old_exists and new_exists:
