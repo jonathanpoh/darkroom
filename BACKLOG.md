@@ -2186,7 +2186,7 @@ per-panel frame counts, and 2025-04-27 has a 2-frame tail on `1-2` alone).
 | `parse.py` | new `parse_panel()`: split a trailing `_N-M` off the ASIAir object name. The panel already arrives there — real frames are `Light_IC4604_1-1_120.0s_Bin1_ISO1600_20250427-041855_14.0C_0001.fit` |
 | `ingest.py` | use it at scan time so base target and panel are separated before anything is copied |
 | `ingest_review.py` | show panel in the summary block, editable like filter |
-| `prep.py` / `wbpp.py` | **the one real behaviour change** — panels must not be stacked together, so a mosaic prep emits one tree per panel: `~/WBPP/IC4604_P1-1/SESSION_1..N/`. Folding the panel into the WBPP slug keeps the `wbpp → finish` handoff working unchanged. Picker grows a panel step (or "all panels" → N trees in one go) |
+| `prep.py` / `wbpp.py` | **the one real behaviour change** — panels must not be stacked together. ⚠️ **Superseded 2026-08-31, see M3:** the design here was one tree per panel (`~/WBPP/IC4604_P1-1/SESSION_1..N/`) plus a picker step. Jonathan tested WBPP's **nested grouping keywords** instead, so it is one tree per target with a `PANEL_<n>` level under `FILTER_<name>/` — no slug change, no picker change, no duplicated calibration |
 | `finish.py` | output to `_Processed/<date>/P1-1/` |
 | `webapi/ui.py` | the `_PANEL_SUFFIX_RE` suggestion must set target **and** panel in one edit (target-only hits the collision); target view shows "4 panels · 2.1h/panel" rather than implying that 8.4h of panel-time is 8.4h of depth |
 
@@ -2443,6 +2443,71 @@ so it's worth deciding first rather than by default.
 
 ---
 
+### M3. `wbpp` emits a mosaic night's panels as one flat symlink list
+
+Filed 2026-08-31, from Jonathan prepping the (now correctly catalogued)
+IC 4604 mosaic. M1 made the *catalog* panel-aware; `wbpp` is not, so the
+panels come back together at prep time.
+
+**What happens now.** `prep.py:_build_night` (~line 156) loops the night's
+sessions and symlinks each into `Lights/FILTER_<name>/`:
+
+```python
+for sess in sessions:
+    dest = session_dir / "Lights" / f"FILTER_{filter_name}"
+```
+
+Sessions are grouped into one `SESSION_N` per `obs_date` (`prep.py:370`), so a
+mosaic night's four panel rows — same target, night, optics and filter — all
+resolve to the *same* `FILTER_L-Pro/` directory and merge into one flat list.
+WBPP then stacks four non-overlapping pointings as a single frame set, and
+registration fails. Nothing warns; the frame count just looks unusually large.
+
+**The fix, tested in PixInsight by Jonathan 2026-08-31.** WBPP supports
+**nested grouping keywords** — he adds `PANEL` alongside the usual `SESSION`.
+So the panel becomes another directory level, not another tree:
+
+```
+~/WBPP/IC4604/
+  SESSION_1/                       <- one per night, unchanged
+    Lights/
+      FILTER_L-Pro/
+        PANEL_1-1/  PANEL_1-2/  PANEL_2-1/  PANEL_2-2/
+    Darks/  Flats/  FlatDarks/     <- per night, shared by every panel
+  Output/
+```
+
+WBPP lists these as `SESSION 1 : PANEL 1-1`. Confirmed working on real data.
+
+**This supersedes M1's sketch of one tree per panel** (`~/WBPP/IC4604_P1-1/
+SESSION_1..N/`, "folding the panel into the WBPP slug"). The nested form is
+strictly better:
+
+- The target slug stays the object, so the `wbpp -> finish` handoff needs no
+  change at all — `finish.py:59` already walks `(session_dir / "Lights")
+  .rglob("*")`, which is recursive and handles the extra level as-is
+  (**verified, not assumed**).
+- One tree per target instead of N, so `--target "IC 4604"` keeps meaning one
+  prep, and the picker needs no "all panels" step.
+- Calibration stays where it belongs. Flats/darks are matched per *night*, not
+  per panel (one flat set serves every panel — flat matching never keys on
+  panel), so they stay at the `SESSION_N` level and are shared. Emitting a tree
+  per panel would have duplicated every calibration set N times.
+
+**Scope.** Small: add the `PANEL_<panel>` level in `_build_night` when
+`sess["panel"]` is set, and leave the path unchanged when it is NULL so every
+non-mosaic prep is byte-identical. The `SESSION_N` summary line
+(`prep.py:377`, currently target · night · filters · lights) should name the
+panels too, otherwise a mosaic night prints one line implying a single
+pointing.
+
+**Test to write:** one night, four panel sessions plus — separately — a
+NULL-panel session, asserting the panelled ones land under distinct
+`PANEL_*` dirs and the NULL-panel one lands directly in `FILTER_<name>/`
+exactly as today.
+
+---
+
 ## Suggested order for a future session
 1. **B1 + B2** (finish + flat-darks) — silent data-pipeline failures, with tests. ✅ DONE
    — **B12** (flat-morning ranking) ✅ DONE 2026-07-29 is the third of the same
@@ -2507,7 +2572,12 @@ so it's worth deciding first rather than by default.
     sessions would ingest as `ota='Unknown'` and can't be fixed in `ingest
     review` either (its pick-list is `KNOWN_OTAS`). Also closes U2's known
     same-night panel-collision gap. See M1 for the confirmed facts.
-14. **U4** and **F8** — both ✅ DONE (U4 `46653ea`, F8 merged 2026-08-30).
+14. **M3** (panel-aware `wbpp` prep) — filed 2026-08-31, design settled and
+    tested in PixInsight. This is the last thing standing between the
+    catalogued mosaics and actually stacking them: `wbpp` currently merges a
+    mosaic night's four panels into one flat symlink list, which cannot
+    register. Small, well-specified change to `prep.py:_build_night`.
+15. **U4** and **F8** — both ✅ DONE (U4 `46653ea`, F8 merged 2026-08-30).
     Filed 2026-08-29 out of the SH2-101 2026-07-19 mis-slew fixup (5 of 92
     subs actually on target; the rest needed hand-built catalog corrections
     because no rescan path reached the live catalog) — that hand-correction
