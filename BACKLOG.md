@@ -2609,6 +2609,41 @@ sides call, rather than either side concatenating `_P{panel}` itself.
   split above (per-panel -> `in_progress`, merged mosaic -> `processed`).
 - `names.py`: `wbpp_slug(target, panel)`.
 
+#### ⚠️ Known limitation found in the M3 smoke test: a *mixed* target
+
+Found 2026-08-31 running the real IC 4604 through prep + finish. That target
+holds four panels **and** a NULL-panel 2023-07-15 single-pointing night, and
+prep does the right thing — `PANEL_1-1/`…`PANEL_2-2/` plus a target-level
+`SESSION_1` for the 2023 night. But `<target>/Output/` is then **overloaded**:
+
+- as a mosaic, it is where the hand-merged result goes (what `finish` reads);
+- as an ordinary target, it is the WBPP output dir for that target-level
+  `SESSION_1`.
+
+It cannot be both. And `finish` in mosaic mode iterates `PANEL_*` and
+**silently ignores the target-level `SESSION_*`**, so the single-pointing
+night is never copied or marked. Verified in a dry run: "Mosaic detected: 4
+panel(s)" and no mention of `SESSION_1`.
+
+Impact is low in practice — the natural workflow preps that night on its own
+(`wbpp --target "IC 4604" --date 2023-07-15`) — but it is *silent*, which is
+the objectionable part. Options, none decided:
+
+1. `finish` warns when a mosaic target also holds target-level `SESSION_*`
+   ("N non-panel session dirs ignored"). Cheapest, kills the silence.
+2. prep refuses to mix, telling the user to prep the single-pointing nights
+   separately.
+3. Give the non-panel sessions their own dir (`PANEL_none/`? `MAIN/`?) so the
+   target level is only ever the merge slot. Cleanest, most churn.
+
+Recommend (1) now, and (2) or (3) only if it actually bites.
+
+**Also open (flagged by the prep implementer):** `_run_interactive`'s
+"already has SESSION_N dirs" check calls `next_session_num(target_dir)`, which
+only looks at `target_dir`'s direct children. A mosaic's `SESSION_N` dirs live
+under `PANEL_*/`, so re-running the interactive picker on an already-prepped
+mosaic skips the Append/Regenerate/Abort prompt entirely.
+
 **Tests:** one night with four panel sessions plus a NULL-panel session on
 another night, asserting four `<slug>_P*` trees plus an unpanelled one, that
 each panel's tree carries its own complete calibration, and that a
