@@ -2638,11 +2638,14 @@ Verified against the live catalog: a bare `--target "IC 4604"` lists all nine
 rows by kind, builds nothing, and exits; the suggested
 `--date 2025-04-26 --date 2025-05-24` then produces a clean panels-only tree.
 
-**Also open (flagged by the prep implementer):** `_run_interactive`'s
-"already has SESSION_N dirs" check calls `next_session_num(target_dir)`, which
-only looks at `target_dir`'s direct children. A mosaic's `SESSION_N` dirs live
-under `PANEL_*/`, so re-running the interactive picker on an already-prepped
-mosaic skips the Append/Regenerate/Abort prompt entirely.
+**Also fixed (`09acdf7`, flagged by the prep implementer):**
+`_run_interactive`'s "already has SESSION_N dirs" check called
+`next_session_num(target_dir)`, which only looks at direct children — right
+for numbering (each panel numbers its own sessions) but wrong for "has this
+been prepped before?", since a mosaic's `SESSION_N` dirs live under `PANEL_*/`.
+The picker skipped its Append/Regenerate/Abort prompt on a fully-prepped
+mosaic and silently appended a second set of trees. Now
+`prep._has_existing_sessions`, which checks both levels.
 
 **Tests:** one night with four panel sessions plus a NULL-panel session on
 another night, asserting four `<slug>_P*` trees plus an unpanelled one, that
