@@ -12,6 +12,10 @@ from darkroom.wbpp import (
     find_real_files,
     clear_sessions,
 )
+from darkroom.cataloger import init_db, upsert_calibration_set
+from darkroom.catalog_client import LocalBackend
+from darkroom.names import make_session_id, parse_wbpp_panel_dir, session_dest_rel
+from darkroom.prep import build_wbpp_sessions
 
 
 def touch(p: Path, content: bytes = b"") -> Path:
@@ -214,3 +218,220 @@ def test_clear_sessions_removes_session_dirs(tmp_path):
 
 def test_clear_sessions_nonexistent_dir(tmp_path):
     clear_sessions(tmp_path / "nonexistent")  # should not raise
+
+
+# ── M3: build_wbpp_sessions splits mosaic panels into their own trees ─────────
+#
+# WBPP merges every panel at final integration regardless of grouping
+# keywords (tested on real data 2026-08-31, see BACKLOG.md M3) — the only
+# reliable separation is one WBPP run per panel, i.e. one directory per panel.
+
+def _panel_row(
+    archive: Path, *, obs_date: str, panel: str | None, target: str = "IC 4604",
+    ota: str = "FMA180", camera: str = "ZWOASI585MCPro", filter_: str = "L-Pro",
+    gain: int = 200, exposure_sec: float = 60.0, temperature_c: float = -10.0,
+    frame_count: int = 2,
+) -> dict:
+    """Build one archived-lights row as build_wbpp_sessions/_build_night expect
+    it (i.e. what backend.query_sessions would return), touching frame_count
+    real .fit files at its lights_path so discover_lights finds them.
+    """
+    lights_rel = session_dest_rel(target, obs_date, ota, camera, filter_, panel=panel)
+    tag = panel or "main"
+    for i in range(frame_count):
+        touch(archive / lights_rel / f"Light_{obs_date}_{tag}_{i}.fit")
+    return {
+        "session_id": make_session_id(target, obs_date, ota, camera, filter_, panel=panel),
+        "target": target, "obs_date": obs_date, "ota": ota, "camera": camera,
+        "filter": filter_, "panel": panel, "gain": gain, "exposure_sec": exposure_sec,
+        "temperature_c": temperature_c, "frame_count": frame_count,
+        "lights_path": str(lights_rel),
+    }
+
+
+def _empty_backend(tmp_path: Path) -> LocalBackend:
+    """A catalog with the schema but no calibration sets — build_wbpp_sessions
+    doesn't need real darks/flats/bias to exercise directory layout, and
+    _build_night degrades cleanly (prints '0 symlinks') when none match.
+    """
+    catalog = tmp_path / "cat.db"
+    init_db(catalog)
+    return LocalBackend(catalog)
+
+
+def test_build_wbpp_sessions_four_panels_one_night(tmp_path):
+    archive = tmp_path / "archive"
+    backend = _empty_backend(tmp_path)
+    wbpp_root = tmp_path / "WBPP"
+    panels = ("1-1", "1-2", "2-1", "2-2")
+    rows = [_panel_row(archive, obs_date="2026-04-26", panel=p) for p in panels]
+
+    build_wbpp_sessions(rows, backend=backend, output=archive, wbpp_root=wbpp_root,
+                         target_name="IC 4604")
+
+    target_dir = wbpp_root / "IC4604"
+    for p in panels:
+        panel_dir = target_dir / f"PANEL_{p}"
+        assert (panel_dir / "SESSION_1").is_dir()
+        assert (panel_dir / "Output" / "processed").is_dir()
+    # Target-level merged-mosaic output, alongside the four panel outputs.
+    assert (target_dir / "Output" / "processed").is_dir()
+    # No stray SESSION_N at target root — every row went into a panel.
+    assert not (target_dir / "SESSION_1").exists()
+
+
+def test_build_wbpp_sessions_two_nights_two_panels(tmp_path):
+    archive = tmp_path / "archive"
+    backend = _empty_backend(tmp_path)
+    wbpp_root = tmp_path / "WBPP"
+    rows = [
+        _panel_row(archive, obs_date=d, panel=p)
+        for d in ("2026-04-26", "2026-04-27")
+        for p in ("1-1", "1-2")
+    ]
+
+    build_wbpp_sessions(rows, backend=backend, output=archive, wbpp_root=wbpp_root,
+                         target_name="IC 4604")
+
+    target_dir = wbpp_root / "IC4604"
+    for p in ("1-1", "1-2"):
+        panel_dir = target_dir / f"PANEL_{p}"
+        assert (panel_dir / "SESSION_1").is_dir()
+        assert (panel_dir / "SESSION_2").is_dir()
+
+
+def test_build_wbpp_sessions_null_panel_unchanged_layout(tmp_path):
+    """A non-mosaic target's layout is byte-identical to before M3: no
+    PANEL_ level appears anywhere."""
+    archive = tmp_path / "archive"
+    backend = _empty_backend(tmp_path)
+    wbpp_root = tmp_path / "WBPP"
+    rows = [_panel_row(archive, obs_date="2026-04-26", panel=None)]
+
+    build_wbpp_sessions(rows, backend=backend, output=archive, wbpp_root=wbpp_root,
+                         target_name="IC 4604")
+
+    target_dir = wbpp_root / "IC4604"
+    assert (target_dir / "SESSION_1").is_dir()
+    assert (target_dir / "Output" / "processed").is_dir()
+    assert not any(
+        parse_wbpp_panel_dir(p.name) for p in target_dir.iterdir() if p.is_dir()
+    )
+
+
+def test_build_wbpp_sessions_mixed_null_and_panels(tmp_path):
+    """A target with both an ordinary night and panelled nights: the ordinary
+    one builds at target level, the panels get their own dirs."""
+    archive = tmp_path / "archive"
+    backend = _empty_backend(tmp_path)
+    wbpp_root = tmp_path / "WBPP"
+    rows = [
+        _panel_row(archive, obs_date="2026-04-20", panel=None),
+        _panel_row(archive, obs_date="2026-04-26", panel="1-1"),
+        _panel_row(archive, obs_date="2026-04-26", panel="1-2"),
+    ]
+
+    build_wbpp_sessions(rows, backend=backend, output=archive, wbpp_root=wbpp_root,
+                         target_name="IC 4604")
+
+    target_dir = wbpp_root / "IC4604"
+    assert (target_dir / "SESSION_1").is_dir()
+    assert (target_dir / "PANEL_1-1" / "SESSION_1").is_dir()
+    assert (target_dir / "PANEL_1-2" / "SESSION_1").is_dir()
+
+
+def test_build_wbpp_sessions_lights_isolated_per_panel(tmp_path):
+    archive = tmp_path / "archive"
+    backend = _empty_backend(tmp_path)
+    wbpp_root = tmp_path / "WBPP"
+    rows = [
+        _panel_row(archive, obs_date="2026-04-26", panel="1-1", frame_count=3),
+        _panel_row(archive, obs_date="2026-04-26", panel="1-2", frame_count=5),
+    ]
+
+    build_wbpp_sessions(rows, backend=backend, output=archive, wbpp_root=wbpp_root,
+                         target_name="IC 4604")
+
+    target_dir = wbpp_root / "IC4604"
+    lights_1_1 = list((target_dir / "PANEL_1-1" / "SESSION_1" / "Lights" / "FILTER_L-Pro").glob("*.fit"))
+    lights_1_2 = list((target_dir / "PANEL_1-2" / "SESSION_1" / "Lights" / "FILTER_L-Pro").glob("*.fit"))
+    assert len(lights_1_1) == 3
+    assert len(lights_1_2) == 5
+
+
+def test_build_wbpp_sessions_no_panel_level_under_calibration(tmp_path):
+    """Calibration must NOT be panel-split: each panel's tree gets its own
+    full calibration set by virtue of being its own tree, not a nested
+    PANEL_ subdir under Flats/Darks/FlatDarks."""
+    archive = tmp_path / "archive"
+    catalog = tmp_path / "cat.db"
+    init_db(catalog)
+    flats_rel = "00_Calibration/Flats/FMA180_ZWOASI585MCPro_L-Pro/2026-04-27"
+    touch(archive / flats_rel / "Flat_L-Pro_2.0s_20260427-080000_-10.0C_0001.fit")
+    upsert_calibration_set(catalog, {
+        "set_id": "flat1", "frame_type": "Flat", "camera": "ZWOASI585MCPro", "ota": "FMA180",
+        "filter": "L-Pro", "gain": 200, "exposure_sec": 2.0, "temperature_c": -10.0,
+        "frame_count": 1, "capture_date": "2026-04-27", "folder_path": flats_rel,
+        "is_master": 0,
+    })
+    backend = LocalBackend(catalog)
+    wbpp_root = tmp_path / "WBPP"
+    rows = [_panel_row(archive, obs_date="2026-04-26", panel="1-1")]
+
+    build_wbpp_sessions(rows, backend=backend, output=archive, wbpp_root=wbpp_root,
+                         target_name="IC 4604")
+
+    session_dir = wbpp_root / "IC4604" / "PANEL_1-1" / "SESSION_1"
+    checked_any = False
+    for sub in ("Darks", "Flats", "FlatDarks"):
+        base = session_dir / sub
+        if not base.exists():
+            continue
+        for p in base.rglob("*"):
+            checked_any = True
+            assert parse_wbpp_panel_dir(p.name) is None
+    assert checked_any, "expected at least the Flats/FILTER_L-Pro/ tree to exist"
+
+
+def test_build_wbpp_sessions_overwrite_clears_panel_dirs(tmp_path):
+    archive = tmp_path / "archive"
+    backend = _empty_backend(tmp_path)
+    wbpp_root = tmp_path / "WBPP"
+    rows = [_panel_row(archive, obs_date="2026-04-26", panel="1-1")]
+
+    build_wbpp_sessions(rows, backend=backend, output=archive, wbpp_root=wbpp_root,
+                         target_name="IC 4604")
+    target_dir = wbpp_root / "IC4604"
+    assert (target_dir / "PANEL_1-1" / "SESSION_1").is_dir()
+
+    # Simulate a stray leftover SESSION_2 in the panel dir from a previous
+    # run with more nights — --overwrite must remove the whole panel dir,
+    # not just SESSION dirs at the target root.
+    (target_dir / "PANEL_1-1" / "SESSION_2").mkdir()
+
+    build_wbpp_sessions(rows, backend=backend, output=archive, wbpp_root=wbpp_root,
+                         target_name="IC 4604", overwrite=True)
+
+    assert (target_dir / "PANEL_1-1" / "SESSION_1").is_dir()
+    assert not (target_dir / "PANEL_1-1" / "SESSION_2").exists()
+
+
+def test_build_wbpp_sessions_overwrite_refuses_real_files_without_tty(tmp_path, monkeypatch):
+    archive = tmp_path / "archive"
+    backend = _empty_backend(tmp_path)
+    wbpp_root = tmp_path / "WBPP"
+    rows = [_panel_row(archive, obs_date="2026-04-26", panel="1-1")]
+
+    build_wbpp_sessions(rows, backend=backend, output=archive, wbpp_root=wbpp_root,
+                         target_name="IC 4604")
+    # A real (non-symlink) file inside a panel dir simulates PixInsight output
+    # left behind — --overwrite must refuse to delete it, not just at the
+    # target root but inside PANEL_* trees too.
+    real = wbpp_root / "IC4604" / "PANEL_1-1" / "SESSION_1" / "notes.txt"
+    touch(real)
+
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    with pytest.raises(SystemExit):
+        build_wbpp_sessions(rows, backend=backend, output=archive, wbpp_root=wbpp_root,
+                             target_name="IC 4604", overwrite=True)
+    assert real.exists()
