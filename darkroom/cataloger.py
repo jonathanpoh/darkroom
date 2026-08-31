@@ -716,6 +716,15 @@ def upsert_calibration_set(db_path: Path, cal_set: dict) -> None:
             )
             ON CONFLICT(set_id) DO UPDATE SET
                 filter       = excluded.filter,
+                -- F9: `ota` has to be re-derivable. It is inferred from
+                -- FOCALLEN (plus, since F9, the capture date), and a wrong
+                -- inference used to be permanent — a rescan re-derived the
+                -- right optic and then silently discarded it here, because
+                -- set_id carries camera/exposure/gain/temp/date but not the
+                -- optic. That is how 6 Canon-zoom flat sets sat labelled
+                -- FRA400. `camera` needs no such line: it is part of set_id,
+                -- so a change there is a new row rather than a conflict.
+                ota          = excluded.ota,
                 frame_count  = excluded.frame_count,
                 capture_date = excluded.capture_date,
                 folder_path  = excluded.folder_path,

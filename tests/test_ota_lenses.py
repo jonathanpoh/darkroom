@@ -79,3 +79,33 @@ def test_every_producible_name_is_correctable_in_review():
 def test_acquisition_table_only_covers_scopes():
     # A lens has no acquisition guard — it is what the fallback resolves *to*.
     assert not any(name.startswith("Canon") for name in OTA_ACQUIRED)
+
+
+def test_rescan_can_correct_a_calibration_set_ota(tmp_path):
+    """F9: `ota` must be re-derivable by a rescan, not frozen at first sight.
+
+    `set_id` carries camera/exposure/gain/temperature/date but *not* the
+    optic, so a set whose OTA was inferred wrongly keeps that OTA forever
+    unless the upsert's conflict clause updates it. Six real flat sets sat
+    labelled FRA400 for a year because of this.
+    """
+    from darkroom.cataloger import init_db, upsert_calibration_set
+
+    db = tmp_path / "cat.db"
+    init_db(db)
+    base = {
+        "set_id": "Flat_Canon6D_0.07s_ISO1600_15C_2023-11-21",
+        "frame_type": "Flat", "camera": "Canon6D", "filter": None,
+        "gain": "ISO1600", "exposure_sec": 0.07, "temperature_c": 15.0,
+        "frame_count": 20, "capture_date": "2023-11-21",
+        "folder_path": "00_Calibration/Flats/400mm_Canon6D/2023-11-21",
+    }
+    upsert_calibration_set(db, {**base, "ota": "FRA400"})
+    upsert_calibration_set(db, {**base, "ota": "Canon400mm"})
+
+    import sqlite3
+    with sqlite3.connect(db) as conn:
+        rows = conn.execute(
+            "SELECT ota FROM calibration_sets WHERE set_id = ?", (base["set_id"],)
+        ).fetchall()
+    assert rows == [("Canon400mm",)], "a rescan must be able to correct the optic"
