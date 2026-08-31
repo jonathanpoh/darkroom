@@ -239,9 +239,24 @@ stage and then still merge all panels at **final integration**, which fails
 because non-overlapping panels can't register. No setting changes that — a
 panel is not a filter.
 
-> `wbpp` doesn't do this yet (backlog **M3**); it currently emits a mosaic
-> night's panels as one flat list. Until it lands, split the panels into
-> separate WBPP target dirs by hand and run each one separately.
+`wbpp` does this for you: a mosaic target builds one tree per panel.
+
+```
+~/WBPP/IC4604/
+  PANEL_1-1/SESSION_1/ …  PANEL_1-1/Output/     <- one WBPP run per panel
+  PANEL_1-2/  PANEL_2-1/  PANEL_2-2/
+  Output/processed/                             <- save the hand-merged mosaic HERE
+```
+
+Then `darkroom finish --target "IC 4604"` copies each panel's stack to
+`_Processed/<date>/<panel>/` and marks those sessions **`in_progress`**; once
+the merged mosaic is saved in the target-level `Output/processed/`, a re-run
+files it at `_Processed/<date>/` and flips every panel's sessions to
+`processed`. `--panel 1-1` finishes one panel on its own.
+
+> A target can hold both mosaic panels and ordinary single-pointing nights of
+> the same object. They can't share one WBPP tree, so `wbpp` refuses a prep
+> that mixes them and prints the two commands to run instead.
 
 ---
 

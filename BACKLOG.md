@@ -2609,7 +2609,7 @@ sides call, rather than either side concatenating `_P{panel}` itself.
   split above (per-panel -> `in_progress`, merged mosaic -> `processed`).
 - `names.py`: `wbpp_slug(target, panel)`.
 
-#### ⚠️ Known limitation found in the M3 smoke test: a *mixed* target
+#### ✅ Resolved: the *mixed* target, guarded on the prep side
 
 Found 2026-08-31 running the real IC 4604 through prep + finish. That target
 holds four panels **and** a NULL-panel 2023-07-15 single-pointing night, and
@@ -2625,18 +2625,18 @@ It cannot be both. And `finish` in mosaic mode iterates `PANEL_*` and
 night is never copied or marked. Verified in a dry run: "Mosaic detected: 4
 panel(s)" and no mention of `SESSION_1`.
 
-Impact is low in practice — the natural workflow preps that night on its own
-(`wbpp --target "IC 4604" --date 2023-07-15`) — but it is *silent*, which is
-the objectionable part. Options, none decided:
+**Decided by Jonathan 2026-08-31: option 2 — guard on the prep side, so
+`finish` only ever sees a clean tree, mosaic or ordinary, never both.**
+Working on a mosaic means targeting its dates specifically anyway, so the
+mixed prep is not a case worth supporting; it is a case worth refusing
+loudly. Implemented in `prep._confirm_mixed_panels` (`17d8cf8`): keyed on the
+*resolved rows* rather than on which flag was used, so `--date A --date B`
+spanning a mosaic night and an ordinary one is caught too. It lists which
+sessions are which and prints the two commands to run instead.
 
-1. `finish` warns when a mosaic target also holds target-level `SESSION_*`
-   ("N non-panel session dirs ignored"). Cheapest, kills the silence.
-2. prep refuses to mix, telling the user to prep the single-pointing nights
-   separately.
-3. Give the non-panel sessions their own dir (`PANEL_none/`? `MAIN/`?) so the
-   target level is only ever the merge slot. Cleanest, most churn.
-
-Recommend (1) now, and (2) or (3) only if it actually bites.
+Verified against the live catalog: a bare `--target "IC 4604"` lists all nine
+rows by kind, builds nothing, and exits; the suggested
+`--date 2025-04-26 --date 2025-05-24` then produces a clean panels-only tree.
 
 **Also open (flagged by the prep implementer):** `_run_interactive`'s
 "already has SESSION_N dirs" check calls `next_session_num(target_dir)`, which
