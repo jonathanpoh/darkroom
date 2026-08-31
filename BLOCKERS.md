@@ -131,7 +131,36 @@ darkroom logs import --source <asiair-log-dir> --apply
 Read-only on the source; skips `*_CHN.txt` and anything already archived at the
 same size.
 
-### 6. Drain the rename ledger — 13 pending ✅ Done but there are a few conflicts that need resolving
+### 6. Drain the rename ledger — 12 pending, 8 of them the IC 4604 panel moves
+
+Verified live **2026-08-31**: **12 pending**, dry run reports
+`8 applied, 1 already_done, 2 conflict, 1 missing`.
+
+**The 8 IC 4604 panel folder moves are queued and ready** — they collapse the
+four fake top-level targets (`IC 4604_1-1` …) back under `IC 4604` with proper
+`P1-1` … `P2-2` panel dirs. Nothing is wrong with them; they just have not been
+applied yet. Note the rename ledger is a **separate queue from `/rescan`** —
+`/rescan` holds proposals, folder moves only ever show up here.
+
+```bash
+darkroom catalog apply-renames --archive "$DARKROOM_ARCHIVE"           # dry run
+darkroom catalog apply-renames --archive "$DARKROOM_ARCHIVE" --apply
+```
+
+The leftovers, all diagnosed 2026-08-31:
+
+- **2 × `Sh2-101` conflicts — deferred by you, a known one-off.** `SH2-101` and
+  `Sh2-101` are the *same inode* on the case-insensitive SMB mount, so the
+  "both old and new exist" guard is trivially true for any case-only rename.
+  The move is already done in substance. Left as-is deliberately; revisit only
+  if case normalisation comes up again.
+- **1 `missing` — `IC4604_20250427_..._P1-2`, the 2-frame tail. Your call.**
+  Its frames were swept into the 2025-04-26 folder during the consolidation
+  (disk holds 35 frames there against the catalog's 30, and 30 vs 23 on
+  05-24). That row is orphaned: delete it, then re-run `rescan-archive` to
+  true up the two frame counts.
+- ~~1 `conflict` on `NGC 7380/2025-09-13`~~ ✅ **fixed in code** (`acc9bc7`) —
+  it was a false alarm, not a data problem. See below.
 
 Verified live 2026-08-30: **13 pending renames**.
 
@@ -146,15 +175,15 @@ darkroom catalog apply-renames --archive "$DARKROOM_ARCHIVE" --apply
 
 Until this runs, the catalog and the archive disagree about those 13 folders.
 
-### 7. Push and deploy M1
+### 7. Push and deploy M1 ✅ done 2026-08-31
 
-M1's ingest half is committed to local `main` and **not pushed, not deployed**.
-The LXC is running `a3475a1` (pre-M1). The web UI won't show or accept `panel`
-until it is deployed.
+Deployed to the LXC (prod on `718f3cd`); the `panel` migration applied cleanly,
+240 sessions and 151 guiding rows intact. Rollback backup on the server at
+`/var/lib/darkroom/backups/astro_catalog-pre-M1-20260831-090848.db`.
 
-Not urgent for ingesting locally — but if you edit sessions in the web UI
-before deploying, the server's `SessionIn` has no `panel` field and will
-silently drop it.
+**A later fix is not yet deployed:** `acc9bc7` (nested rename classification).
+It only affects `apply-renames`, which runs on the Mac, so the server does not
+need it urgently — but it should go out with the next deploy.
 
 ### 8. One session still has a NULL `start_utc`
 
