@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
 from datetime import date as Date
 from itertools import groupby
@@ -21,7 +22,7 @@ from darkroom.catalog import (
 )
 from darkroom.catalog_client import CatalogBackend, resolve_backend
 from darkroom.config import resolve_path
-from darkroom.names import target_slug
+from darkroom.names import parse_wbpp_panel_dir, target_slug, wbpp_panel_dir
 from darkroom.parse import fits_files
 from darkroom.picker import group_nights, pick_sessions, picker_style
 from darkroom.wbpp import (
@@ -64,7 +65,13 @@ def _overwrite_target_dir(target_dir: Path) -> None:
     """Safely clear SESSION_N dirs in target_dir before regeneration.
 
     If real (non-symlink) files are found, warns and requires 'yes' confirmation.
-    Deletes only SESSION_N subdirs — target_dir itself is preserved.
+    `find_real_files` already recurses (rglob), so this one guard covers a
+    mosaic's PANEL_*/SESSION_N dirs too — no separate check needed.
+
+    Deletes SESSION_N subdirs at target_dir's own level, plus, for a mosaic,
+    every PANEL_* dir entirely (its SESSION_N dirs and its own Output/) — a
+    stale panel directory left behind would silently keep contributing frames
+    to the next WBPP run. target_dir itself, and its own Output/, survive.
     """
     real_files = find_real_files(target_dir)
     if real_files:
@@ -79,6 +86,10 @@ def _overwrite_target_dir(target_dir: Path) -> None:
         if answer != "yes":
             sys.exit("Aborted.")
     clear_sessions(target_dir)
+    if target_dir.exists():
+        for p in target_dir.iterdir():
+            if p.is_dir() and parse_wbpp_panel_dir(p.name) is not None:
+                shutil.rmtree(p)
 
 
 def _resolve_flat(
@@ -354,7 +365,19 @@ def build_wbpp_sessions(
     flat_window: int = 3,
     dark_temp_tolerance: float = DEFAULT_DARK_TEMP_TOLERANCE,
 ) -> None:
-    """Build SESSION_N dirs under wbpp_root/<slug>/ for the given (resolved) rows."""
+    """Build SESSION_N dirs under wbpp_root/<slug>/ for the given (resolved) rows.
+
+    A mosaic panel (`row["panel"]` not None) gets its own tree —
+    `wbpp_root/<slug>/PANEL_<n>/SESSION_N/`, its own `SESSION_N` numbering and
+    its own `Output/processed/` — because WBPP merges every panel at final
+    integration regardless of grouping keywords; only a separate WBPP run per
+    panel keeps non-overlapping panels from being forced to register against
+    each other (see BACKLOG.md M3). Rows with `panel is None` build straight
+    into `target_dir`, exactly as before — a non-mosaic target's layout is
+    unaffected. The target-level `Output/processed/` is always created too:
+    for a non-mosaic target it's the only one; for a mosaic it's where the
+    hand-merged panels are expected to land (`darkroom finish` reads it).
+    """
     slug = target_slug(target_name)
     target_dir = wbpp_root / slug
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -366,24 +389,57 @@ def build_wbpp_sessions(
     output_dir = target_dir / "Output"
     (output_dir / "processed").mkdir(parents=True, exist_ok=True)
 
-    rows_sorted = sorted(rows, key=lambda r: r["obs_date"])
-    for night_date, night_rows in groupby(rows_sorted, key=lambda r: r["obs_date"]):
-        night_sessions = list(night_rows)
-        n = next_session_num(target_dir)
-        session_dir = target_dir / f"SESSION_{n}"
-        session_dir.mkdir(parents=True, exist_ok=True)  # create before next iteration reads num
-        filters = ", ".join(s["filter"] or "NoFilter" for s in night_sessions)
-        total_lights = sum(s["frame_count"] for s in night_sessions)
-        print(f"\nSESSION_{n}  ({target_name} · {night_date} · {filters} · {total_lights} lights)")
-        _build_night(
-            night_sessions,
-            output=output,
-            backend=backend,
-            session_dir=session_dir,
-            flat_window=flat_window,
-            dark_temp_tolerance=dark_temp_tolerance,
+    panels = sorted({r["panel"] for r in rows if r.get("panel")})
+    # NULL-panel rows build at target_dir root (group key None) first, then
+    # each distinct panel gets its own group/root.
+    groups: list[tuple[str | None, list[dict]]] = [
+        (None, [r for r in rows if not r.get("panel")]),
+        *((panel, [r for r in rows if r.get("panel") == panel]) for panel in panels),
+    ]
+
+    for panel, panel_rows in groups:
+        if not panel_rows:
+            continue
+        if panel:
+            panel_root = target_dir / wbpp_panel_dir(panel)
+            panel_output_dir = panel_root / "Output"
+            (panel_output_dir / "processed").mkdir(parents=True, exist_ok=True)
+        else:
+            panel_root = target_dir
+            panel_output_dir = None
+
+        rows_sorted = sorted(panel_rows, key=lambda r: r["obs_date"])
+        for night_date, night_rows in groupby(rows_sorted, key=lambda r: r["obs_date"]):
+            night_sessions = list(night_rows)
+            n = next_session_num(panel_root)
+            session_dir = panel_root / f"SESSION_{n}"
+            session_dir.mkdir(parents=True, exist_ok=True)  # create before next iteration reads num
+            filters = ", ".join(s["filter"] or "NoFilter" for s in night_sessions)
+            total_lights = sum(s["frame_count"] for s in night_sessions)
+            label = f"{target_name} panel {panel}" if panel else target_name
+            print(f"\nSESSION_{n}  ({label} · {night_date} · {filters} · {total_lights} lights)")
+            _build_night(
+                night_sessions,
+                output=output,
+                backend=backend,
+                session_dir=session_dir,
+                flat_window=flat_window,
+                dark_temp_tolerance=dark_temp_tolerance,
+            )
+            print(f"\nIn PixInsight: WBPP → Add Directory → select {session_dir}/")
+
+        if panel_output_dir is not None:
+            print(f"Set WBPP output directory for PANEL_{panel} to: {panel_output_dir}/")
+
+    if panels:
+        print(
+            "\nMosaic: each PANEL_*/SESSION_N above is its own WBPP run with its "
+            "own output dir. A custom grouping keyword only separates "
+            "calibration — integration still merges every panel into one stack "
+            "and fails, since non-overlapping panels cannot register (tested "
+            "2026-08-31, see BACKLOG.md M3). Stack each panel separately, then "
+            "hand-merge the results into the target-level Output/processed/ below."
         )
-        print(f"\nIn PixInsight: WBPP → Add Directory → select {session_dir}/")
 
     print(f"\nSet WBPP output directory to: {output_dir}/")
 
