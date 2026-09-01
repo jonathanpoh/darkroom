@@ -69,7 +69,12 @@ def open_db(db_path: Path) -> sqlite3.Connection:
         from darkroom.cataloger import init_db
 
         init_db(db_path)
-    conn = sqlite3.connect(db_path)
+    # check_same_thread=False: a webapi request's connection is opened by a
+    # `Depends` generator and used by the handler, and FastAPI runs those on
+    # whichever threads it likes (an async handler on the event loop, a sync
+    # one in the threadpool). Use is always sequential within one request,
+    # never concurrent, which is what the guard exists to catch.
+    conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     return conn
@@ -753,3 +758,26 @@ def apply_rescan_proposal(conn: sqlite3.Connection, db_path: Path, proposal: dic
             raise ValueError(f"cannot create session: {e}") from e
     else:
         raise ValueError(f"unknown rescan proposal kind: {kind!r}")
+
+
+def apply_pending_rescan_proposal(
+    conn: sqlite3.Connection, db_path: Path, proposal_id: int
+) -> dict | None:
+    """Apply the pending proposal with this id and mark it applied.
+
+    Returns the proposal, or None when no *pending* proposal has that id (an
+    applied/dismissed one counts as not found, so a stale form can't re-apply
+    it). A ValueError from `apply_rescan_proposal` propagates, prefixed with
+    the session id, before the row is resolved. The JSON API, the review UI
+    and LocalBackend all go through here rather than spelling the sequence
+    out separately.
+    """
+    proposal = get_rescan_proposal(conn, proposal_id)
+    if proposal is None or proposal["status"] != "pending":
+        return None
+    try:
+        apply_rescan_proposal(conn, db_path, proposal)
+    except ValueError as e:
+        raise ValueError(f"{proposal['session_id']}: {e}") from e
+    resolve_rescan_proposal(conn, proposal_id, "applied")
+    return proposal

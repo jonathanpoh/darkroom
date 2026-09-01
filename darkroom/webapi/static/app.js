@@ -2,8 +2,9 @@
  *
  * Transplanted from docs/design/safelight-mock.html (approved design mock).
  * Renders the two catalog views (targets overview, target detail) client-side
- * from a server-embedded `DATA` array (see catalog/index.html and
- * catalog/target.html).
+ * from a server-embedded `DATA` array and `STATES` (the ordered processed
+ * states, names.PROCESSED_STATES) — see catalog/index.html and
+ * catalog/target.html.
  *
  * Differences from the mock (real app vs. interactive mock):
  *   - COMMON_NAMES lookup is gone; the server embeds `cname` on each target
@@ -49,7 +50,6 @@ const CATALOGS = [
 ];
 const catalogOf = t => (CATALOGS.find(([, , fn]) => fn(t)) || ["other"])[0];
 
-const STATES = ["unprocessed", "in_progress", "processed", "skipped"];
 const STATE_LABEL = { unprocessed: "open", in_progress: "in progress", processed: "processed", skipped: "skipped" };
 
 /* grease-pencil marks: the one hand element. deterministic tilt per session id. */
@@ -146,7 +146,6 @@ const nameCell = (t) =>
    so the chips and the prep run agree; `detail` carries the why, via the shared
    data-tip tooltip. */
 const CAL_CLASSES = [["darks", "D", "Darks"], ["flats", "F", "Flats"], ["flat_darks", "FD", "Flat darks"]];
-const CAL_WORD = { ok: "matched", missing: "missing", na: "not used", unknown: "can't tell" };
 /* data-tip is assigned with innerHTML and deliberately allows <b>, so anything
    interpolated from the catalog (set ids, folder paths, camera names) is escaped. */
 const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
@@ -154,8 +153,8 @@ const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
 function calCell(cal) {
   if (!cal) return `<span class="caldots"></span>`;
   const chips = CAL_CLASSES.map(([key, abbr, title]) => {
-    const c = cal[key] || { status: "unknown", detail: "not computed" };
-    const head = esc(`${title}: ${c.label || CAL_WORD[c.status] || c.status}`);
+    const c = cal[key] || { status: "unknown", label: "can't tell", detail: "not computed" };
+    const head = esc(`${title}: ${c.label}`);
     return `<i class="caldot ${c.status}" data-tip="<b>${head}</b> · ${esc(c.detail)}">${abbr}</i>`;
   }).join("");
   return `<span class="caldots">${chips}</span>`;
@@ -167,18 +166,14 @@ function calCell(cal) {
    the logs only cover part of the archive's history — and an em-dash is the
    honest answer there: no row means "not measured", never "guided badly".
 
-   Bands are absolute, not relative to the imaging scale: 1" means something
-   different at FRA400 than at FMA180, but the repo has no camera pixel-size
-   table yet, and absolute bands are good enough to rank nights. */
-const GUIDE_WORD = { good: "good", fair: "fair", poor: "poor" };
-const guideBand = rms => rms < 1.0 ? "good" : rms <= 2.0 ? "fair" : "poor";
+   The verdicts — `band` (good/fair/poor), `partial` coverage, `spike` — are
+   computed server-side (darkroom.webapi.ui) so this chip and the session
+   page never disagree; this only renders them. */
 function guidingCell(g) {
   if (!g || g.rms == null) return `<span class="guide none">—</span>`;
-  const band = guideBand(g.rms);
   const as = v => v == null ? "?" : v.toFixed(2) + "″";
-  const partial = g.cov != null && g.cov < 0.8;
   const bits = [
-    `<b>${as(g.rms)} RMS</b> — ${GUIDE_WORD[band]}`,
+    `<b>${as(g.rms)} RMS</b> — ${g.band}`,
     `RA ${as(g.ra)} · Dec ${as(g.dec)}`,
     `peak ${as(g.peak)} · p95 ${as(g.p95)}`,
   ];
@@ -186,22 +181,22 @@ function guidingCell(g) {
     const pct = (g.cov * 100).toFixed(0);
     /* A log covering a fraction of the night must not read as the verdict on
        all of it — say so rather than quietly showing the number. */
-    bits.push(partial ? `coverage ${pct}% — partial log, not the whole night`
+    bits.push(g.partial ? `coverage ${pct}% — partial log, not the whole night`
                       : `coverage ${pct}%`);
   }
   bits.push(`${g.frames ?? "?"} frames · ${g.lost ?? 0} star-loss · ${g.dropped ?? 0} dropped`);
-  /* rms >= 2 * p95 (computed server-side): the number is real, but it is a few
-     wrecked subs rather than a bad night. Keep the value and its band, mark it. */
+  /* rms >= 2 * p95: the number is real, but it is a few wrecked subs rather
+     than a bad night. Keep the value and its band, mark it. */
   if (g.spike) bits.push(`spike-dominated: most frames near ${as(g.p95)}, worst ${as(g.peak)} — a few bad subs rather than a bad night`);
   if (g.logs && g.logs.length) bits.push(esc(g.logs.join(", ")));
   const mark = g.spike ? `<span class="spike" aria-label="spike-dominated">▲</span>` : "";
-  return `<span class="guide ${band}${partial ? " partial" : ""}" data-tip="${bits.join(" · ")}">${as(g.rms)}${mark}</span>`;
+  return `<span class="guide ${g.band}${g.partial ? " partial" : ""}" data-tip="${bits.join(" · ")}">${as(g.rms)}${mark}</span>`;
 }
 
-const backlogH = t => t.nights.filter(n => n.state === "unprocessed" || n.state === "in_progress")
-                              .reduce((a, n) => a + n.h, 0);
-const backlogWH = t => t.nights.filter(n => n.state === "unprocessed" || n.state === "in_progress")
-                               .reduce((a, n) => a + (n.wh ?? n.h), 0);
+const backlogNights = t => t.nights.filter(n => n.state === "unprocessed" || n.state === "in_progress");
+const backlogH = t => backlogNights(t).reduce((a, n) => a + n.h, 0);
+const backlogWH = t => backlogNights(t).reduce((a, n) => a + (n.wh ?? n.h), 0);
+const recountStates = t => { t.states = {}; t.nights.forEach(n => t.states[n.state] = (t.states[n.state] || 0) + 1); };
 
 /* ── overview ──────────────────────────────── */
 const OV_SORTS = {
@@ -213,10 +208,12 @@ const OV_SORTS = {
 };
 let ovSort = { key: "latest", desc: true }, query = "", catSel = "", filtSel = "", siteSel = "";
 
-function sortHead(key, label, current, extra="") {
+/* `attrs` carries any extra data-* the click handler needs (the rig, on the
+   detail page's per-rig headers). */
+function sortHead(key, label, current, extra="", attrs="") {
   const on = current.key === key;
   const arrow = on ? `<span class="dir">${current.desc ? "▼" : "▲"}</span>` : "";
-  return `<button class="colhead sortable ${on ? "sorted" : ""} ${extra}" data-key="${key}">${label} ${arrow}</button>`;
+  return `<button class="colhead sortable ${on ? "sorted" : ""} ${extra}" ${attrs} data-key="${key}">${label} ${arrow}</button>`;
 }
 
 function renderOverview() {
@@ -239,7 +236,7 @@ function renderOverview() {
       return `<a class="row cols" href="/targets/${encodeURIComponent(t.target)}">
         ${nameCell(t)}
         ${stripHTML(t.hours, maxH)}
-        ${gaugeHTML(backlogWH(t), false, backlogH(t))}
+        ${gaugeHTML(backlogWH(t), false, open)}
         <span class="hnum num"><b>${t.total_h.toFixed(1)}</b>h</span>
         <span class="opennum num ${open > 0 ? "some" : ""}">${open > 0 ? open.toFixed(1) + "h" : "—"}</span>
         <span class="marks">${counts}</span>
@@ -335,10 +332,7 @@ function renderDetail() {
         ${guidingCell(n.guiding)}
         ${hoursHTML(n.h, n.wh)}
       </div>`).join("");
-    const gs = (key, label, extra="") => {
-      const on = gsort.key === key;
-      return `<button class="colhead sortable ${on ? "sorted" : ""} ${extra}" data-rig="${rig}" data-key="${key}">${label} ${on ? `<span class="dir">${gsort.desc ? "▼" : "▲"}</span>` : ""}</button>`;
-    };
+    const gs = (key, label, extra="") => sortHead(key, label, gsort, extra, `data-rig="${rig}"`);
     return `<details class="rig" data-rig="${rig}" ${detail.closed.has(rig) ? "" : "open"}>
       <summary class="rigsum">
         <svg class="tri" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2.5 1 L8 5 L2.5 9 Z" fill="currentColor"/></svg>
@@ -387,7 +381,7 @@ function renderDetail() {
     const prevState = n.state;
     const nextState = STATES[(STATES.indexOf(n.state) + 1) % STATES.length];
     n.state = nextState;
-    t.states = {}; t.nights.forEach(x => t.states[x.state] = (t.states[x.state] || 0) + 1);
+    recountStates(t);
     renderDetail();
     fetch(`/sessions/${encodeURIComponent(n.sid)}/state`, {
       method: "POST",
@@ -399,7 +393,7 @@ function renderDetail() {
       if (!ok) throw new Error(`unexpected status ${resp.status}`);
     }).catch(() => {
       n.state = prevState;
-      t.states = {}; t.nights.forEach(x => t.states[x.state] = (t.states[x.state] || 0) + 1);
+      recountStates(t);
       renderDetail();
       alert("Failed to update session state — reverted.");
     });

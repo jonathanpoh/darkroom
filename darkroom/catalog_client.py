@@ -353,19 +353,11 @@ class LocalBackend:
             return list_rescan_proposals(conn, status=status)
 
     def apply_rescan_proposal(self, proposal_id: int) -> bool:
-        from darkroom.catalog_db import (
-            apply_rescan_proposal,
-            get_rescan_proposal,
-            resolve_rescan_proposal,
-        )
+        from darkroom.catalog_db import apply_pending_rescan_proposal
 
         self._ensure_schema()
         with self._conn() as conn:
-            proposal = get_rescan_proposal(conn, proposal_id)
-            if proposal is None or proposal["status"] != "pending":
-                return False
-            apply_rescan_proposal(conn, self.db_path, proposal)
-            return resolve_rescan_proposal(conn, proposal_id, "applied")
+            return apply_pending_rescan_proposal(conn, self.db_path, proposal_id) is not None
 
     def dismiss_rescan_proposal(self, proposal_id: int) -> bool:
         from darkroom.catalog_db import resolve_rescan_proposal

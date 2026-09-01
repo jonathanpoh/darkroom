@@ -8,20 +8,24 @@
 </div>
 {% if error %}<div class="error">{{ error }}</div>{% endif %}
 
+{% macro text_field(label, name, value) %}
+  <div class="field-row"><label>{{ label }}</label><input type="text" name="{{ name }}" value="{{ value if value is not none else '' }}"></div>
+{%- endmacro %}
+
 <form class="editform" method="post" action="/sessions/{{ session.session_id }}">
-  <div class="field-row"><label>Target</label><input type="text" name="target" value="{{ session.target or '' }}"></div>
-  <div class="field-row"><label>Obs date</label><input type="text" name="obs_date" value="{{ session.obs_date or '' }}"></div>
-  <div class="field-row"><label>OTA</label><input type="text" name="ota" value="{{ session.ota or '' }}"></div>
-  <div class="field-row"><label>Camera</label><input type="text" name="camera" value="{{ session.camera or '' }}"></div>
-  <div class="field-row"><label>Filter</label><input type="text" name="filter" value="{{ session.filter or '' }}"></div>
-  <div class="field-row"><label>Gain</label><input type="text" name="gain" value="{{ session.gain if session.gain is not none else '' }}"></div>
-  <div class="field-row"><label>Temperature (C)</label><input type="text" name="temperature_c" value="{{ session.temperature_c if session.temperature_c is not none else '' }}"></div>
-  <div class="field-row"><label>Exposure (s)</label><input type="text" name="exposure_sec" value="{{ session.exposure_sec if session.exposure_sec is not none else '' }}"></div>
-  <div class="field-row"><label>Focal length</label><input type="text" name="focal_length" value="{{ session.focal_length if session.focal_length is not none else '' }}"></div>
-  <div class="field-row"><label>RA (deg)</label><input type="text" name="ra_deg" value="{{ session.ra_deg if session.ra_deg is not none else '' }}"></div>
-  <div class="field-row"><label>Dec (deg)</label><input type="text" name="dec_deg" value="{{ session.dec_deg if session.dec_deg is not none else '' }}"></div>
-  <div class="field-row"><label>Site lat</label><input type="text" name="site_lat" value="{{ session.site_lat if session.site_lat is not none else '' }}"></div>
-  <div class="field-row"><label>Site lon</label><input type="text" name="site_lon" value="{{ session.site_lon if session.site_lon is not none else '' }}"></div>
+  {{ text_field("Target", "target", session.target) }}
+  {{ text_field("Obs date", "obs_date", session.obs_date) }}
+  {{ text_field("OTA", "ota", session.ota) }}
+  {{ text_field("Camera", "camera", session.camera) }}
+  {{ text_field("Filter", "filter", session.filter) }}
+  {{ text_field("Gain", "gain", session.gain) }}
+  {{ text_field("Temperature (C)", "temperature_c", session.temperature_c) }}
+  {{ text_field("Exposure (s)", "exposure_sec", session.exposure_sec) }}
+  {{ text_field("Focal length", "focal_length", session.focal_length) }}
+  {{ text_field("RA (deg)", "ra_deg", session.ra_deg) }}
+  {{ text_field("Dec (deg)", "dec_deg", session.dec_deg) }}
+  {{ text_field("Site lat", "site_lat", session.site_lat) }}
+  {{ text_field("Site lon", "site_lon", session.site_lon) }}
   <div class="field-row"><label>Notes</label><textarea name="notes" rows="3">{{ session.notes or '' }}</textarea></div>
   <div class="field-row">
     <label>Processed state</label>
@@ -31,14 +35,13 @@
       {% endfor %}
     </select>
   </div>
-  <div class="field-row"><label>Processed path</label><input type="text" name="processed_path" value="{{ session.processed_path or '' }}"></div>
-  <div class="field-row"><label>Processed date</label><input type="text" name="processed_date" value="{{ session.processed_date or '' }}"></div>
+  {{ text_field("Processed path", "processed_path", session.processed_path) }}
+  {{ text_field("Processed date", "processed_date", session.processed_date) }}
 
   <button type="submit">Save</button>
 </form>
 
 {% if cal %}
-{% set status_word = {"ok": "matched", "missing": "missing", "na": "not used", "unknown": "can't tell"} %}
 <div class="readonly-block calblock">
   <h3>Calibration match</h3>
   {% for key, title in [("darks", "Darks"), ("flats", "Flats"), ("flat_darks", "Flat darks")] %}
@@ -46,7 +49,7 @@
   <div class="field-row calrow">
     <label>{{ title }}</label>
     <span>
-      <span class="calstatus {{ c.status }}">{{ c.label or status_word[c.status] }}</span>
+      <span class="calstatus {{ c.status }}">{{ c.label }}</span>
       <span class="caldetail">{{ c.detail }}</span>
       {% for s in c.sets %}
       <span class="calset">{{ s.set_id }}{% if s.folder_path %} — {{ s.folder_path }}{% endif %}</span>
@@ -61,11 +64,10 @@
 {% endif %}
 
 {% if guiding %}
-{% set band = "good" if guiding.rms_total_arcsec < 1.0 else ("fair" if guiding.rms_total_arcsec <= 2.0 else "poor") %}
 <div class="readonly-block guideblock">
   <h3>Guiding</h3>
   <div class="field-row"><label>Total RMS</label>
-    <span class="guide {{ band }}">{{ "%.2f"|format(guiding.rms_total_arcsec) }}&#8243;{% if guiding.spike %}<span
+    <span class="guide {{ guiding.band }}">{{ "%.2f"|format(guiding.rms_total_arcsec) }}&#8243;{% if guiding.spike %}<span
       class="spike" title="spike-dominated — a few bad subs rather than a bad night">&#9650;</span>{% endif %}</span></div>
   <div class="field-row"><label>RA / Dec RMS</label>
     <span>{{ "%.2f"|format(guiding.rms_ra_arcsec) }}&#8243; / {{ "%.2f"|format(guiding.rms_dec_arcsec) }}&#8243;</span></div>
@@ -78,7 +80,7 @@
   {% endif %}
   <div class="field-row"><label>Coverage</label>
     <span>{% if guiding.coverage is not none %}{{ "%.0f"|format(guiding.coverage * 100) }}% of the session
-      ({{ guiding.guided_sec }}s guided){% if guiding.coverage < 0.8 %}
+      ({{ guiding.guided_sec }}s guided){% if guiding.partial %}
       <span class="guidewarn">partial log — not the whole night</span>{% endif %}
       {% else %}—{% endif %}</span></div>
   <div class="field-row"><label>Frames</label>

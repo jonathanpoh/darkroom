@@ -242,6 +242,17 @@ CAL_MISSING = "missing"  # no match, but this camera does use this frame type
 CAL_NA = "na"            # this camera has no sets of this type at all
 CAL_UNKNOWN = "unknown"  # the session lacks the fields needed to match
 
+# The word shown for a status when the match has nothing more specific to
+# say (a matched set carries its own label: the master's temperature, the
+# flat's date). Filled into `label` by `_cal` so the night chips and the
+# session page render the same text without each keeping a copy of this.
+CAL_STATUS_WORDS = {
+    CAL_OK: "matched",
+    CAL_MISSING: "missing",
+    CAL_NA: "not used",
+    CAL_UNKNOWN: "can't tell",
+}
+
 
 def _temp(value: float | None) -> str:
     return "unknown temperature" if value is None else f"{value:g}C"
@@ -265,7 +276,7 @@ def _cal_set(row: dict) -> dict:
 def _cal(status: str, detail: str, *, label: str | None = None, sets=()) -> dict:
     return {
         "status": status,
-        "label": label,
+        "label": label if label is not None else CAL_STATUS_WORDS[status],
         "detail": detail,
         "sets": [_cal_set(r) for r in sets],
     }

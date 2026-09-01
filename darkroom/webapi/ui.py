@@ -18,19 +18,19 @@ import json
 import re
 import time
 import urllib.parse
-from collections import Counter, deque
+from collections import Counter
 from datetime import date as date_cls
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Cookie, Form, HTTPException, Request
+from fastapi import APIRouter, Cookie, Depends, Form, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from darkroom import catalog_db
 from darkroom.catalog import match_session_calibration
 from darkroom.catalog_client import MemoryCalibrationBackend
-from darkroom.names import KNOWN_FILTERS, _normalize_target
+from darkroom.names import KNOWN_FILTERS, PLACEHOLDERS, PROCESSED_STATES, _normalize_target
 from darkroom.sites import annotate_sessions
 from darkroom.webapi import auth
 from darkroom.webapi.common_names import common_name
@@ -43,12 +43,39 @@ COOKIE_NAME = "darkroom_token"
 # only bites a machine that's gone untouched for the full 90 days.
 SESSION_MAX_AGE_SECONDS = 90 * 24 * 3600
 
+
+def set_session_cookie(response: Response, ui_password_hash: str) -> None:
+    """Mint a fresh session cookie onto `response` — login and the sliding refresh."""
+    response.set_cookie(
+        COOKIE_NAME,
+        auth.mint_cookie(ui_password_hash, SESSION_MAX_AGE_SECONDS),
+        httponly=True, samesite="lax",
+        max_age=SESSION_MAX_AGE_SECONDS,
+    )
+
+
+class LoginRequired(Exception):
+    """Raised by the UI router's auth dependency for a missing/invalid cookie.
+
+    `app.py` registers `login_redirect` as its handler, so every protected
+    route bounces to /login with the original path as `next`.
+    """
+
+    def __init__(self, next_path: str):
+        super().__init__(next_path)
+        self.next_path = next_path
+
+
+def login_redirect(request: Request, exc: LoginRequired) -> RedirectResponse:
+    return RedirectResponse(f"/login?next={exc.next_path}", status_code=303)
+
+
 # Login rate limiting: module-level, in-memory, per-client-IP. Window and
 # limit are small and single-user-appropriate — this is a brake on brute
 # force from one source, not a distributed defence.
 _RATE_LIMIT_WINDOW_SECONDS = 60
 _RATE_LIMIT_MAX_FAILURES = 5
-_LOGIN_FAILURES: dict[str, deque[float]] = {}
+_LOGIN_FAILURES: dict[str, list[float]] = {}
 
 
 def _client_ip(request: Request) -> str:
@@ -56,22 +83,20 @@ def _client_ip(request: Request) -> str:
     return client.host if client is not None else "unknown"
 
 
+def _recent_failures(ip: str) -> list[float]:
+    """This IP's failure timestamps inside the window, pruned in place."""
+    cutoff = time.time() - _RATE_LIMIT_WINDOW_SECONDS
+    attempts = _LOGIN_FAILURES.setdefault(ip, [])
+    attempts[:] = [t for t in attempts if t > cutoff]
+    return attempts
+
+
 def _throttled(ip: str) -> bool:
-    now = time.time()
-    attempts = _LOGIN_FAILURES.get(ip)
-    if not attempts:
-        return False
-    while attempts and now - attempts[0] > _RATE_LIMIT_WINDOW_SECONDS:
-        attempts.popleft()
-    return len(attempts) >= _RATE_LIMIT_MAX_FAILURES
+    return len(_recent_failures(ip)) >= _RATE_LIMIT_MAX_FAILURES
 
 
 def _record_failure(ip: str) -> None:
-    now = time.time()
-    attempts = _LOGIN_FAILURES.setdefault(ip, deque())
-    attempts.append(now)
-    while attempts and now - attempts[0] > _RATE_LIMIT_WINDOW_SECONDS:
-        attempts.popleft()
+    _recent_failures(ip).append(time.time())
 
 
 def reset_login_rate_limit() -> None:
@@ -79,6 +104,10 @@ def reset_login_rate_limit() -> None:
     _LOGIN_FAILURES.clear()
 
 
+# The manual edit form's fields, in form order. A subset of
+# catalog_db._EDITABLE_FIELDS: panel, start/end_utc, frame_count and
+# total_integration_sec are catalog-derived and only reachable via the JSON
+# API and the rescan apply path.
 _EDIT_FIELDS = (
     "target", "obs_date", "ota", "camera", "filter",
     "gain", "temperature_c", "exposure_sec", "focal_length",
@@ -95,7 +124,6 @@ _NUMERIC_FIELDS = {
     "site_lat": float,
     "site_lon": float,
 }
-_PROCESSED_STATES = ("unprocessed", "in_progress", "processed", "skipped")
 
 
 def _safe_next(next_: str | None) -> str:
@@ -103,6 +131,28 @@ def _safe_next(next_: str | None) -> str:
     if next_ and next_.startswith("/") and not next_.startswith("//"):
         return next_
     return "/"
+
+
+# ── guiding presentation (F4) ─────────────────────────────────────────────
+# Every rule that turns a session_guiding row into a verdict lives here, once,
+# and is carried on the row as a field: the night chip (app.js) and the
+# session page (session.html) only render what they are handed.
+
+# Guided seconds ÷ session wall span below this is a partial log, and the UI
+# says so rather than letting the number read as the verdict on the night.
+PARTIAL_COVERAGE_BELOW = 0.8
+
+
+def _guide_band(rms: float) -> str:
+    """good / fair / poor by total RMS. Absolute arcsec bands, not relative to
+    the imaging scale: 1″ means something different at FRA400 than at FMA180,
+    but the repo has no camera pixel-size table yet, and absolute bands are
+    good enough to rank nights."""
+    return "good" if rms < 1.0 else "fair" if rms <= 2.0 else "poor"
+
+
+def _is_partial_coverage(coverage: float | None) -> bool:
+    return coverage is not None and coverage < PARTIAL_COVERAGE_BELOW
 
 
 def _is_spike_dominated(rms: float | None, p95: float | None) -> bool:
@@ -122,6 +172,15 @@ def _is_spike_dominated(rms: float | None, p95: float | None) -> bool:
     return rms >= 2 * p95
 
 
+def _decode_logs(row: dict) -> list:
+    """`source_logs` is stored as a JSON array of log basenames; tolerate junk."""
+    try:
+        logs = json.loads(row.get("source_logs") or "[]")
+    except (TypeError, ValueError):
+        return []
+    return logs if isinstance(logs, list) else []
+
+
 def _guiding_summary(row: dict | None) -> dict | None:
     """Compact a `session_guiding` row into the shape the safelight JS reads.
 
@@ -131,22 +190,21 @@ def _guiding_summary(row: dict | None) -> dict | None:
     """
     if row is None or row.get("rms_total_arcsec") is None:
         return None
-    try:
-        logs = json.loads(row.get("source_logs") or "[]")
-    except (TypeError, ValueError):
-        logs = []
+    rms = row["rms_total_arcsec"]
     return {
-        "rms": row["rms_total_arcsec"],
+        "rms": rms,
+        "band": _guide_band(rms),
         "ra": row.get("rms_ra_arcsec"),
         "dec": row.get("rms_dec_arcsec"),
         "peak": row.get("peak_arcsec"),
         "p95": row.get("p95_arcsec"),
         "cov": row.get("coverage"),
-        "spike": _is_spike_dominated(row["rms_total_arcsec"], row.get("p95_arcsec")),
+        "partial": _is_partial_coverage(row.get("coverage")),
+        "spike": _is_spike_dominated(rms, row.get("p95_arcsec")),
         "frames": row.get("guide_frames"),
         "lost": row.get("star_lost_events"),
         "dropped": row.get("dropped_frames"),
-        "logs": logs if isinstance(logs, list) else [],
+        "logs": _decode_logs(row),
     }
 
 
@@ -264,20 +322,20 @@ def _session_calibration(conn, session: dict) -> dict:
 def _session_guiding(conn, session: dict) -> dict | None:
     """One session's guiding row (F4) for the session detail page, or None.
 
-    The raw row, plus `logs` decoded from the stored JSON array — the panel
-    shows more of it than the night chip does (pixel scale, guide camera,
+    The raw row, plus `logs` decoded from the stored JSON array and the same
+    presentation verdicts (`band`, `partial`, `spike`) the night chip gets —
+    the panel shows more of it than the chip does (pixel scale, guide camera,
     guided seconds), so it isn't the compacted `_guiding_summary` shape.
     """
     rows = catalog_db.query_session_guiding(conn, session_id=session["session_id"])
     if not rows:
         return None
     row = dict(rows[0])
-    try:
-        logs = json.loads(row.get("source_logs") or "[]")
-    except (TypeError, ValueError):
-        logs = []
-    row["logs"] = logs if isinstance(logs, list) else []
-    row["spike"] = _is_spike_dominated(row.get("rms_total_arcsec"), row.get("p95_arcsec"))
+    rms = row.get("rms_total_arcsec")
+    row["logs"] = _decode_logs(row)
+    row["band"] = _guide_band(rms) if rms is not None else None
+    row["partial"] = _is_partial_coverage(row.get("coverage"))
+    row["spike"] = _is_spike_dominated(rms, row.get("p95_arcsec"))
     return row
 
 
@@ -292,7 +350,7 @@ def _date_diff(a: str | None, b: str | None) -> int | None:
 
 
 def _is_unknown_ota(ota: str | None) -> bool:
-    return ota is None or ota == "" or ota == "Unknown"
+    return ota in PLACEHOLDERS
 
 
 def _neighbour_filters(row: dict, all_rows: list[dict], limit: int = 3) -> list[dict]:
@@ -328,7 +386,12 @@ def _neighbour_filters(row: dict, all_rows: list[dict], limit: int = 3) -> list[
 
 
 def _flat_hints(row: dict, flat_sets: list[dict], window_days: int = 7, limit: int = 3) -> list[dict]:
-    """Calibration Flat sets near this session's date, same camera (+ OTA if known)."""
+    """Calibration Flat sets near this session's date, same camera (+ OTA if known).
+
+    Not `catalog.find_flats`: the row's filter is exactly what's unknown here,
+    so the hint deliberately spans every filter and is a memory jog, not the
+    set `wbpp` would pick.
+    """
     candidates = []
     for cal in flat_sets:
         if cal["camera"] != row["camera"]:
@@ -346,7 +409,13 @@ def _flat_hints(row: dict, flat_sets: list[dict], window_days: int = 7, limit: i
     ]
 
 
-def _build_queue(conn) -> tuple[list[dict], list[dict], list[dict]]:
+def _newest_first(rows: list[dict]) -> list[dict]:
+    return sorted(rows, key=lambda r: r["obs_date"] or "", reverse=True)
+
+
+def _build_queue(
+    all_rows: list[dict], flat_sets: list[dict]
+) -> tuple[list[dict], list[dict], list[dict]]:
     """Return (unknown_filter_rows, suspicious_value_rows, missing_site_rows), each obs_date-desc.
 
     'unknown filter' = filter IS NULL or 'UnknownFilter' (never parsed).
@@ -359,10 +428,10 @@ def _build_queue(conn) -> tuple[list[dict], list[dict], list[dict]]:
     pre-ASIAir (Canon) frames that never had GPS headers, but also catches
     ASIAir sessions the header parse missed — surfaced so coordinates can be
     added by hand via the session edit screen rather than assumed.
-    """
-    all_rows = catalog_db.query_sessions(conn)
-    flat_sets = catalog_db.query_calibration_sets(conn, frame_type="Flat")
 
+    Pure: `all_rows` is every session (`catalog_db.query_sessions`) and
+    `flat_sets` every Flat calibration set; the caller owns the queries.
+    """
     unknown_rows: list[dict] = []
     suspicious_rows: list[dict] = []
     for row in all_rows:
@@ -380,16 +449,15 @@ def _build_queue(conn) -> tuple[list[dict], list[dict], list[dict]]:
         entry["flat_hints"] = _flat_hints(row, flat_sets)
         section.append(entry)
 
-    unknown_rows.sort(key=lambda r: r["obs_date"] or "", reverse=True)
-    suspicious_rows.sort(key=lambda r: r["obs_date"] or "", reverse=True)
-
     missing_site_rows = [
         dict(row) for row in all_rows
         if row["site_lat"] is None or row["site_lon"] is None
     ]
-    missing_site_rows.sort(key=lambda r: r["obs_date"] or "", reverse=True)
-
-    return unknown_rows, suspicious_rows, missing_site_rows
+    return (
+        _newest_first(unknown_rows),
+        _newest_first(suspicious_rows),
+        _newest_first(missing_site_rows),
+    )
 
 
 def _known_otas(conn) -> list[str]:
@@ -397,19 +465,6 @@ def _known_otas(conn) -> list[str]:
     rows = conn.execute(
         "SELECT DISTINCT ota FROM sessions "
         "WHERE ota IS NOT NULL AND ota != '' AND ota != 'Unknown' ORDER BY ota"
-    ).fetchall()
-    return [r[0] for r in rows]
-
-
-def _all_targets(conn) -> list[str]:
-    """Every session's target value, one entry per session (repeats expected).
-
-    Feeds `_target_suggestions` (which needs per-target session counts) and
-    the manual merge form's target dropdown (session counts there come from
-    the same list via Counter).
-    """
-    rows = conn.execute(
-        "SELECT target FROM sessions WHERE target IS NOT NULL"
     ).fetchall()
     return [r[0] for r in rows]
 
@@ -524,308 +579,243 @@ def _rescan_context(conn) -> dict:
     }
 
 
+def _queue_context(conn) -> dict:
+    all_rows = catalog_db.query_sessions(conn)
+    flat_sets = catalog_db.query_calibration_sets(conn, frame_type="Flat")
+    unknown_rows, suspicious_rows, missing_site_rows = _build_queue(all_rows, flat_sets)
+    # One target entry per session (repeats expected): _target_suggestions
+    # and the manual merge form's dropdown both want per-target counts.
+    all_targets = [r["target"] for r in all_rows if r["target"] is not None]
+    return {
+        "unknown_rows": unknown_rows,
+        "suspicious_rows": suspicious_rows,
+        "missing_site_rows": missing_site_rows,
+        "total_count": len(unknown_rows) + len(suspicious_rows),
+        "known_filters": KNOWN_FILTERS,
+        "known_otas": _known_otas(conn),
+        "pending_renames_count": len(catalog_db.list_pending_renames(conn)),
+        "target_suggestions": _target_suggestions(all_targets),
+        "target_counts": sorted(Counter(all_targets).items()),
+    }
+
+
+def _form_str(form_data, key: str) -> str:
+    """A form field as a stripped string ('' when absent or not a text field)."""
+    raw = form_data.get(key)
+    return raw.strip() if isinstance(raw, str) else ""
+
+
 def build_ui_router(db_path: Path, ui_password_hash: str) -> APIRouter:
-    """Build the Jinja2 UI router, bound to the DB + UI password hash."""
+    """Build the Jinja2 UI router, bound to the DB + UI password hash.
+
+    Two routers: `public` carries /login and /logout; everything else sits on
+    `protected`, whose router-level dependency raises `LoginRequired` (see
+    `login_redirect`) so no handler has to check the cookie itself.
+    """
     db_path = Path(db_path)
     templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
-    router = APIRouter()
 
     def _get_conn():
-        return catalog_db.open_db(db_path)
+        conn = catalog_db.open_db(db_path)
+        try:
+            yield conn
+        finally:
+            conn.close()
 
-    def _authed(cookie_value: str | None) -> bool:
-        return auth.verify_cookie(ui_password_hash, cookie_value)
+    def _require_login(
+        request: Request, darkroom_token: str | None = Cookie(default=None)
+    ) -> None:
+        if not auth.verify_cookie(ui_password_hash, darkroom_token):
+            raise LoginRequired(request.url.path)
 
-    def _require_auth(request: Request, darkroom_token: str | None) -> RedirectResponse | None:
-        """Return a redirect-to-login response if the cookie is missing/wrong, else None."""
-        if not _authed(darkroom_token):
-            return RedirectResponse(
-                f"/login?next={request.url.path}", status_code=303
-            )
-        return None
+    public = APIRouter()
+    protected = APIRouter(dependencies=[Depends(_require_login)])
 
-    def _login_redirect(next_: str) -> RedirectResponse:
-        resp = RedirectResponse(_safe_next(next_), status_code=303)
-        resp.set_cookie(
-            COOKIE_NAME,
-            auth.mint_cookie(ui_password_hash, SESSION_MAX_AGE_SECONDS),
-            httponly=True, samesite="lax",
-            max_age=SESSION_MAX_AGE_SECONDS,
+    def _render(request: Request, name: str, ctx: dict, status_code: int = 200):
+        return templates.TemplateResponse(request, name, ctx, status_code=status_code)
+
+    def _render_login(request: Request, next_: str, error: str | None, status_code: int = 200):
+        return _render(
+            request, "login.html", {"error": error, "next": _safe_next(next_)}, status_code
         )
-        return resp
 
-    @router.get("/login", response_class=HTMLResponse)
+    def _render_queue(request: Request, conn, *, error=None, success=None, status_code=200):
+        ctx = _queue_context(conn)
+        ctx["error"] = error
+        ctx["success"] = success
+        return _render(request, "queue.html", ctx, status_code)
+
+    def _render_rescan(request: Request, conn, *, error=None, success=None, status_code=200):
+        ctx = _rescan_context(conn)
+        ctx["error"] = error
+        ctx["success"] = success
+        return _render(request, "rescan.html", ctx, status_code)
+
+    def _render_session(request: Request, conn, session: dict, *, error=None, status_code=200):
+        return _render(
+            request,
+            "session.html",
+            {
+                "session": session,
+                "processed_states": PROCESSED_STATES,
+                "cal": _session_calibration(conn, session),
+                "guiding": _session_guiding(conn, session),
+                "error": error,
+            },
+            status_code,
+        )
+
+    def _session_or_404(conn, session_id: str) -> dict:
+        rows = catalog_db.query_sessions(conn, session_id=session_id)
+        if not rows:
+            raise HTTPException(status_code=404, detail="session not found")
+        return rows[0]
+
+    @public.get("/login", response_class=HTMLResponse)
     def login_form(request: Request, next: str = "/"):
-        return templates.TemplateResponse(
-            request, "login.html", {"error": None, "next": _safe_next(next)}
-        )
+        return _render_login(request, next, None)
 
-    @router.post("/login")
+    @public.post("/login")
     def login_submit(request: Request, password: str = Form(...), next: str = Form("/")):
         ip = _client_ip(request)
         if _throttled(ip):
-            return templates.TemplateResponse(
-                request,
-                "login.html",
-                {
-                    "error": "Too many attempts — try again in a minute",
-                    "next": _safe_next(next),
-                },
-                status_code=429,
+            return _render_login(
+                request, next, "Too many attempts — try again in a minute", 429
             )
         if not auth.verify_password(password, ui_password_hash):
             _record_failure(ip)
-            return templates.TemplateResponse(
-                request,
-                "login.html",
-                {"error": "Invalid password", "next": _safe_next(next)},
-                status_code=400,
-            )
-        return _login_redirect(next)
+            return _render_login(request, next, "Invalid password", 400)
+        resp = RedirectResponse(_safe_next(next), status_code=303)
+        set_session_cookie(resp, ui_password_hash)
+        return resp
 
-    @router.get("/logout")
+    @public.get("/logout")
     def logout():
         resp = RedirectResponse("/login", status_code=303)
         resp.delete_cookie(COOKIE_NAME)
         return resp
 
-    @router.get("/", response_class=HTMLResponse)
-    def index(
-        request: Request,
-        darkroom_token: str | None = Cookie(default=None),
-    ):
-        redirect = _require_auth(request, darkroom_token)
-        if redirect:
-            return redirect
-
-        conn = _get_conn()
-        try:
-            rows = catalog_db.query_sessions(conn)
-            sites = catalog_db.list_sites(conn)
-        finally:
-            conn.close()
-
-        return templates.TemplateResponse(
+    @protected.get("/", response_class=HTMLResponse)
+    def index(request: Request, conn=Depends(_get_conn)):
+        rows = catalog_db.query_sessions(conn)
+        sites = catalog_db.list_sites(conn)
+        return _render(
             request,
             "index.html",
-            {"data": _build_aggregate(rows, sites)},
+            {"data": _build_aggregate(rows, sites), "processed_states": PROCESSED_STATES},
         )
 
-    @router.get("/targets/{target}", response_class=HTMLResponse)
-    def target_detail(
-        request: Request,
-        target: str,
-        darkroom_token: str | None = Cookie(default=None),
-    ):
-        redirect = _require_auth(request, darkroom_token)
-        if redirect:
-            return redirect
-
-        conn = _get_conn()
-        try:
-            rows = catalog_db.query_sessions(conn, target=target)
-            sites = catalog_db.list_sites(conn)
-            cal_rows = catalog_db.query_calibration_sets(conn)
-            guiding_rows = catalog_db.query_session_guiding(conn)
-        finally:
-            conn.close()
+    @protected.get("/targets/{target}", response_class=HTMLResponse)
+    def target_detail(request: Request, target: str, conn=Depends(_get_conn)):
+        rows = catalog_db.query_sessions(conn, target=target)
         if not rows:
             raise HTTPException(status_code=404, detail="target not found")
+        sites = catalog_db.list_sites(conn)
+        cal_rows = catalog_db.query_calibration_sets(conn)
+        guiding_rows = catalog_db.query_session_guiding(conn)
 
         aggregate = _build_aggregate(rows, sites, cal_rows, guiding_rows)
         # query_sessions normalises `target` case/spacing-insensitively, so
         # aggregate[0]["target"] is the canonical form even if the URL segment
         # wasn't (e.g. "m81" -> "M 81") — scope strictly to that one entry.
-        return templates.TemplateResponse(
+        return _render(
             request,
             "target.html",
-            {"data": aggregate, "target": aggregate[0]["target"]},
+            {
+                "data": aggregate,
+                "target": aggregate[0]["target"],
+                "processed_states": PROCESSED_STATES,
+            },
         )
 
-    def _queue_context() -> dict:
-        conn = _get_conn()
-        try:
-            unknown_rows, suspicious_rows, missing_site_rows = _build_queue(conn)
-            known_otas = _known_otas(conn)
-            pending_renames = catalog_db.list_pending_renames(conn)
-            all_targets = _all_targets(conn)
-        finally:
-            conn.close()
-        return {
-            "unknown_rows": unknown_rows,
-            "suspicious_rows": suspicious_rows,
-            "missing_site_rows": missing_site_rows,
-            "total_count": len(unknown_rows) + len(suspicious_rows),
-            "known_filters": KNOWN_FILTERS,
-            "known_otas": known_otas,
-            "pending_renames_count": len(pending_renames),
-            "target_suggestions": _target_suggestions(all_targets),
-            "target_counts": sorted(Counter(all_targets).items()),
-        }
+    @protected.get("/queue", response_class=HTMLResponse)
+    def queue(request: Request, conn=Depends(_get_conn)):
+        return _render_queue(request, conn)
 
-    @router.get("/queue", response_class=HTMLResponse)
-    def queue(
-        request: Request,
-        darkroom_token: str | None = Cookie(default=None),
-    ):
-        redirect = _require_auth(request, darkroom_token)
-        if redirect:
-            return redirect
-
-        ctx = _queue_context()
-        ctx["error"] = None
-        ctx["success"] = None
-        return templates.TemplateResponse(request, "queue.html", ctx)
-
-    @router.post("/queue/{session_id}/fix")
-    async def queue_fix(
-        request: Request,
-        session_id: str,
-        darkroom_token: str | None = Cookie(default=None),
-    ):
-        redirect = _require_auth(request, darkroom_token)
-        if redirect:
-            return redirect
-
+    @protected.post("/queue/{session_id}/fix")
+    async def queue_fix(request: Request, session_id: str, conn=Depends(_get_conn)):
         form_data = await request.form()
         filt = form_data.get("filter")
-        ota_raw = form_data.get("ota")
-        ota = ota_raw.strip() if isinstance(ota_raw, str) else ota_raw
+        ota = _form_str(form_data, "ota")
 
         if filt not in KNOWN_FILTERS:
-            ctx = _queue_context()
-            ctx["error"] = (
-                f"{session_id}: filter must be one of {', '.join(KNOWN_FILTERS)}"
-            )
-            return templates.TemplateResponse(
-                request, "queue.html", ctx, status_code=400
+            return _render_queue(
+                request, conn, status_code=400,
+                error=f"{session_id}: filter must be one of {', '.join(KNOWN_FILTERS)}",
             )
 
         changed: dict[str, Any] = {"filter": filt}
         if ota:
             changed["ota"] = ota
 
-        conn = _get_conn()
         try:
-            try:
-                updated = catalog_db.update_session_fields(conn, session_id, **changed)
-            except ValueError as e:
-                ctx = _queue_context()
-                ctx["error"] = f"{session_id}: {e}"
-                return templates.TemplateResponse(
-                    request, "queue.html", ctx, status_code=400
-                )
-            if not updated:
-                raise HTTPException(status_code=404, detail="session not found")
-        finally:
-            conn.close()
+            updated = catalog_db.update_session_fields(conn, session_id, **changed)
+        except ValueError as e:
+            return _render_queue(request, conn, error=f"{session_id}: {e}", status_code=400)
+        if not updated:
+            raise HTTPException(status_code=404, detail="session not found")
 
         return RedirectResponse("/queue", status_code=303)
 
-    @router.post("/queue/{session_id}/fix-site")
-    async def queue_fix_site(
-        request: Request,
-        session_id: str,
-        darkroom_token: str | None = Cookie(default=None),
-    ):
-        redirect = _require_auth(request, darkroom_token)
-        if redirect:
-            return redirect
-
+    @protected.post("/queue/{session_id}/fix-site")
+    async def queue_fix_site(request: Request, session_id: str, conn=Depends(_get_conn)):
         form_data = await request.form()
         try:
             lat = float(form_data.get("site_lat"))
             lon = float(form_data.get("site_lon"))
         except (TypeError, ValueError):
-            ctx = _queue_context()
-            ctx["error"] = f"{session_id}: latitude/longitude must be numeric"
-            return templates.TemplateResponse(
-                request, "queue.html", ctx, status_code=400
+            return _render_queue(
+                request, conn, status_code=400,
+                error=f"{session_id}: latitude/longitude must be numeric",
             )
 
-        conn = _get_conn()
-        try:
-            updated = catalog_db.update_session_fields(
-                conn, session_id, site_lat=lat, site_lon=lon
-            )
-            if not updated:
-                raise HTTPException(status_code=404, detail="session not found")
-        finally:
-            conn.close()
+        updated = catalog_db.update_session_fields(
+            conn, session_id, site_lat=lat, site_lon=lon
+        )
+        if not updated:
+            raise HTTPException(status_code=404, detail="session not found")
 
         return RedirectResponse("/queue", status_code=303)
 
-    @router.post("/queue/targets/rename")
-    async def queue_targets_rename(
-        request: Request,
-        darkroom_token: str | None = Cookie(default=None),
-    ):
-        redirect = _require_auth(request, darkroom_token)
-        if redirect:
-            return redirect
-
+    @protected.post("/queue/targets/rename")
+    async def queue_targets_rename(request: Request, conn=Depends(_get_conn)):
         form_data = await request.form()
-        old_target = form_data.get("old_target") or ""
-        new_target = form_data.get("new_target") or ""
-        old_target = old_target.strip() if isinstance(old_target, str) else old_target
-        new_target = new_target.strip() if isinstance(new_target, str) else new_target
+        old_target = _form_str(form_data, "old_target")
+        new_target = _form_str(form_data, "new_target")
 
-        conn = _get_conn()
         try:
-            try:
-                result = catalog_db.rename_target(conn, old_target, new_target)
-            except ValueError as e:
-                ctx = _queue_context()
-                ctx["error"] = str(e)
-                ctx["success"] = None
-                return templates.TemplateResponse(
-                    request, "queue.html", ctx, status_code=400
-                )
-        finally:
-            conn.close()
+            result = catalog_db.rename_target(conn, old_target, new_target)
+        except ValueError as e:
+            return _render_queue(request, conn, error=str(e), status_code=400)
 
         if result["total"] == 0:
-            ctx = _queue_context()
-            ctx["error"] = f"No sessions found for target {old_target!r}"
-            ctx["success"] = None
-            return templates.TemplateResponse(
-                request, "queue.html", ctx, status_code=404
+            return _render_queue(
+                request, conn, status_code=404,
+                error=f"No sessions found for target {old_target!r}",
             )
 
-        ctx = _queue_context()
-        ctx["success"] = (
+        success = (
             f"renamed {result['renamed']} session"
             f"{'' if result['renamed'] == 1 else 's'} of {old_target} → {new_target}"
             if result["renamed"] else None
         )
+        error = None
+        status_code = 200
         if result["errors"]:
             details = "; ".join(
                 f"{e['session_id']}: {e['error']}" for e in result["errors"]
             )
-            ctx["error"] = (
+            error = (
                 f"{len(result['errors'])} session"
                 f"{'' if len(result['errors']) == 1 else 's'} failed to merge: {details}"
             )
             status_code = 200 if result["renamed"] else 400
-        else:
-            ctx["error"] = None
-            status_code = 200
-        return templates.TemplateResponse(
-            request, "queue.html", ctx, status_code=status_code
+        return _render_queue(
+            request, conn, error=error, success=success, status_code=status_code
         )
 
-    @router.post("/sessions/{session_id}/state")
-    def set_state(
-        request: Request,
-        session_id: str,
-        darkroom_token: str | None = Cookie(default=None),
-        state: str = Form(...),
-        next: str = Form("/"),
-    ):
-        redirect = _require_auth(request, darkroom_token)
-        if redirect:
-            return redirect
-
+    @protected.post("/sessions/{session_id}/state")
+    def set_state(session_id: str, state: str = Form(...), next: str = Form("/")):
         from darkroom import cataloger
 
         try:
@@ -836,60 +826,19 @@ def build_ui_router(db_path: Path, ui_password_hash: str) -> APIRouter:
             raise HTTPException(status_code=404, detail="session not found")
         return RedirectResponse(_safe_next(next), status_code=303)
 
-    @router.get("/sessions/{session_id}", response_class=HTMLResponse)
+    @protected.get("/sessions/{session_id}", response_class=HTMLResponse)
     def edit_form(
         request: Request,
         session_id: str,
-        darkroom_token: str | None = Cookie(default=None),
         error: str | None = None,
+        conn=Depends(_get_conn),
     ):
-        redirect = _require_auth(request, darkroom_token)
-        if redirect:
-            return redirect
+        return _render_session(request, conn, _session_or_404(conn, session_id), error=error)
 
-        conn = _get_conn()
-        try:
-            rows = catalog_db.query_sessions(conn, session_id=session_id)
-            cal = _session_calibration(conn, rows[0]) if rows else None
-            guiding = _session_guiding(conn, rows[0]) if rows else None
-        finally:
-            conn.close()
-        if not rows:
-            raise HTTPException(status_code=404, detail="session not found")
-
-        return templates.TemplateResponse(
-            request,
-            "session.html",
-            {
-                "session": rows[0],
-                "processed_states": _PROCESSED_STATES,
-                "cal": cal,
-                "guiding": guiding,
-                "error": error,
-            },
-        )
-
-    @router.post("/sessions/{session_id}")
-    async def edit_submit(
-        request: Request,
-        session_id: str,
-        darkroom_token: str | None = Cookie(default=None),
-    ):
-        redirect = _require_auth(request, darkroom_token)
-        if redirect:
-            return redirect
-
+    @protected.post("/sessions/{session_id}")
+    async def edit_submit(request: Request, session_id: str, conn=Depends(_get_conn)):
         form_data = await request.form()
-
-        conn = _get_conn()
-        try:
-            current_rows = catalog_db.query_sessions(conn, session_id=session_id)
-            if not current_rows:
-                raise HTTPException(status_code=404, detail="session not found")
-            current = current_rows[0]
-            row_id = current["id"]
-        finally:
-            conn.close()
+        current = _session_or_404(conn, session_id)
 
         # Convert form strings ('' -> None, numeric strings -> int/float) and
         # only pass fields that actually changed vs the current row, so an
@@ -898,202 +847,87 @@ def build_ui_router(db_path: Path, ui_password_hash: str) -> APIRouter:
         for key in _EDIT_FIELDS:
             if key not in form_data:
                 continue
-            raw = form_data[key]
-            raw = raw.strip() if isinstance(raw, str) else raw
+            raw = _form_str(form_data, key)
             value: Any = raw if raw != "" else None
             if value is not None and key in _NUMERIC_FIELDS:
                 try:
                     value = _NUMERIC_FIELDS[key](value)
                 except ValueError:
-                    conn = _get_conn()
-                    try:
-                        rows = catalog_db.query_sessions(conn, session_id=session_id)
-                        cal = _session_calibration(conn, rows[0] if rows else current)
-                        guiding = _session_guiding(conn, rows[0] if rows else current)
-                    finally:
-                        conn.close()
-                    return templates.TemplateResponse(
-                        request,
-                        "session.html",
-                        {
-                            "session": rows[0] if rows else current,
-                            "processed_states": _PROCESSED_STATES,
-                            "cal": cal,
-                            "guiding": guiding,
-                            "error": f"Invalid numeric value for {key!r}: {raw!r}",
-                        },
-                        status_code=400,
+                    return _render_session(
+                        request, conn, current, status_code=400,
+                        error=f"Invalid numeric value for {key!r}: {raw!r}",
                     )
             if current.get(key) != value:
                 changed[key] = value
 
-        conn = _get_conn()
-        try:
-            if changed:
-                try:
-                    catalog_db.update_session_fields(conn, session_id, **changed)
-                except ValueError as e:
-                    rows = catalog_db.query_sessions(conn, session_id=session_id)
-                    return templates.TemplateResponse(
-                        request,
-                        "session.html",
-                        {
-                            "session": rows[0] if rows else current,
-                            "processed_states": _PROCESSED_STATES,
-                            "cal": _session_calibration(
-                                conn, rows[0] if rows else current
-                            ),
-                            "guiding": _session_guiding(
-                                conn, rows[0] if rows else current
-                            ),
-                            "error": str(e),
-                        },
-                        status_code=400,
-                    )
+        if changed:
+            try:
+                catalog_db.update_session_fields(conn, session_id, **changed)
+            except ValueError as e:
+                return _render_session(request, conn, current, error=str(e), status_code=400)
 
-            new_row = conn.execute(
-                "SELECT session_id FROM sessions WHERE id = ?", (row_id,)
-            ).fetchone()
-        finally:
-            conn.close()
-
+        # An identity edit renames session_id on the same row — follow it.
+        new_row = conn.execute(
+            "SELECT session_id FROM sessions WHERE id = ?", (current["id"],)
+        ).fetchone()
         new_session_id = new_row["session_id"] if new_row else session_id
         return RedirectResponse(f"/sessions/{new_session_id}", status_code=303)
 
-    @router.post("/sessions/{session_id}/delete")
-    def delete_submit(
-        request: Request,
-        session_id: str,
-        darkroom_token: str | None = Cookie(default=None),
-    ):
-        redirect = _require_auth(request, darkroom_token)
-        if redirect:
-            return redirect
-
-        conn = _get_conn()
-        try:
-            rows = catalog_db.query_sessions(conn, session_id=session_id)
-            if not rows:
-                raise HTTPException(status_code=404, detail="session not found")
-            target = rows[0]["target"]
-
-            catalog_db.delete_session(conn, session_id)
-
-            remaining = catalog_db.query_sessions(conn, target=target)
-        finally:
-            conn.close()
-
-        if remaining:
+    @protected.post("/sessions/{session_id}/delete")
+    def delete_submit(session_id: str, conn=Depends(_get_conn)):
+        target = _session_or_404(conn, session_id)["target"]
+        catalog_db.delete_session(conn, session_id)
+        if catalog_db.query_sessions(conn, target=target):
             return RedirectResponse(
                 f"/targets/{urllib.parse.quote(target)}", status_code=303
             )
         return RedirectResponse("/", status_code=303)
 
-    @router.get("/rescan", response_class=HTMLResponse)
-    def rescan_review(
-        request: Request,
-        darkroom_token: str | None = Cookie(default=None),
-    ):
-        redirect = _require_auth(request, darkroom_token)
-        if redirect:
-            return redirect
+    @protected.get("/rescan", response_class=HTMLResponse)
+    def rescan_review(request: Request, conn=Depends(_get_conn)):
+        return _render_rescan(request, conn)
 
-        conn = _get_conn()
+    @protected.post("/rescan/{proposal_id}/apply")
+    def rescan_apply(request: Request, proposal_id: int, conn=Depends(_get_conn)):
         try:
-            ctx = _rescan_context(conn)
-        finally:
-            conn.close()
-        ctx["error"] = None
-        ctx["success"] = None
-        return templates.TemplateResponse(request, "rescan.html", ctx)
-
-    @router.post("/rescan/{proposal_id}/apply")
-    def rescan_apply(
-        request: Request,
-        proposal_id: int,
-        darkroom_token: str | None = Cookie(default=None),
-    ):
-        redirect = _require_auth(request, darkroom_token)
-        if redirect:
-            return redirect
-
-        conn = _get_conn()
-        try:
-            proposal = catalog_db.get_rescan_proposal(conn, proposal_id)
-            if proposal is None or proposal["status"] != "pending":
-                raise HTTPException(
-                    status_code=404, detail="pending rescan proposal not found"
-                )
-            try:
-                catalog_db.apply_rescan_proposal(conn, db_path, proposal)
-            except ValueError as e:
-                ctx = _rescan_context(conn)
-                ctx["error"] = f"{proposal['session_id']}: {e}"
-                ctx["success"] = None
-                return templates.TemplateResponse(
-                    request, "rescan.html", ctx, status_code=400
-                )
-            catalog_db.resolve_rescan_proposal(conn, proposal_id, "applied")
-        finally:
-            conn.close()
-
+            applied = catalog_db.apply_pending_rescan_proposal(conn, db_path, proposal_id)
+        except ValueError as e:
+            return _render_rescan(request, conn, error=str(e), status_code=400)
+        if applied is None:
+            raise HTTPException(status_code=404, detail="pending rescan proposal not found")
         return RedirectResponse("/rescan", status_code=303)
 
-    @router.post("/rescan/{proposal_id}/dismiss")
-    def rescan_dismiss(
-        request: Request,
-        proposal_id: int,
-        darkroom_token: str | None = Cookie(default=None),
-    ):
-        redirect = _require_auth(request, darkroom_token)
-        if redirect:
-            return redirect
-
-        conn = _get_conn()
-        try:
-            dismissed = catalog_db.resolve_rescan_proposal(conn, proposal_id, "dismissed")
-        finally:
-            conn.close()
+    @protected.post("/rescan/{proposal_id}/dismiss")
+    def rescan_dismiss(proposal_id: int, conn=Depends(_get_conn)):
+        dismissed = catalog_db.resolve_rescan_proposal(conn, proposal_id, "dismissed")
         if not dismissed:
             raise HTTPException(status_code=404, detail="pending rescan proposal not found")
-
         return RedirectResponse("/rescan", status_code=303)
 
-    @router.post("/rescan/apply-all-safe")
-    def rescan_apply_all_safe(
-        request: Request,
-        darkroom_token: str | None = Cookie(default=None),
-    ):
-        redirect = _require_auth(request, darkroom_token)
-        if redirect:
-            return redirect
+    @protected.post("/rescan/apply-all-safe")
+    def rescan_apply_all_safe(request: Request, conn=Depends(_get_conn)):
+        pending = catalog_db.list_rescan_proposals(conn, status="pending")
+        applied = 0
+        errors: list[str] = []
+        for p in pending:
+            if p["tier"] != "safe":
+                continue
+            try:
+                catalog_db.apply_pending_rescan_proposal(conn, db_path, p["id"])
+            except ValueError as e:
+                errors.append(str(e))
+                continue
+            applied += 1
 
-        conn = _get_conn()
-        try:
-            pending = catalog_db.list_rescan_proposals(conn, status="pending")
-            safe = [p for p in pending if p["tier"] == "safe"]
-            applied = 0
-            errors: list[str] = []
-            for p in safe:
-                try:
-                    catalog_db.apply_rescan_proposal(conn, db_path, p)
-                except ValueError as e:
-                    errors.append(f"{p['session_id']}: {e}")
-                    continue
-                catalog_db.resolve_rescan_proposal(conn, p["id"], "applied")
-                applied += 1
-            ctx = _rescan_context(conn)
-        finally:
-            conn.close()
-
-        ctx["success"] = (
-            f"applied {applied} safe proposal{'' if applied == 1 else 's'}"
-            if applied else None
-        )
-        ctx["error"] = "; ".join(errors) if errors else None
-        status_code = 400 if errors and not applied else 200
-        return templates.TemplateResponse(
-            request, "rescan.html", ctx, status_code=status_code
+        return _render_rescan(
+            request, conn,
+            success=(
+                f"applied {applied} safe proposal{'' if applied == 1 else 's'}"
+                if applied else None
+            ),
+            error="; ".join(errors) if errors else None,
+            status_code=400 if errors and not applied else 200,
         )
 
-    return router
+    public.include_router(protected)
+    return public

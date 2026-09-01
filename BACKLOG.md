@@ -658,14 +658,26 @@ new side table; prefer the numeric `sessions.id` as the foreign key.
 ### R7. The session/calibration query-filter signature is retyped in every layer
 > Filed 2026-09-01 from the `/simplify` altitude pass. Jonathan: worth
 > addressing sooner rather than later, across all the modules.
+>
+> **Partly done 2026-09-01** by the webapi `/simplify` pass: `webapi/app.py`
+> now declares a `SessionFilters` dataclass (the nine session filters as
+> query params via `Depends()`), and `get_sessions` / `get_sessions_count`
+> unpack it with `dataclasses.asdict` — two of the eleven session copies
+> gone. That dataclass is the seed for step 2 below, but it lives at the
+> wrong layer: it should move down to `catalog_db` and be threaded through
+> the backends, with the route importing it. Still open: the nine
+> `catalog_db`/`catalog_client` session copies, all eight calibration-set
+> copies (`get_calibration_sets` still spells its six filters out), and the
+> step-1 signature-introspection test.
 
 - **Where (sessions, 9 filters: target/obs_date/session_id/camera/ota/filter/
   date_from/date_to/processed_state, plus limit/offset):** `catalog_db.py`
   `_build_where` :78, `query_sessions` :126, `count_sessions` :161;
   `catalog_client.py` `CatalogBackend.query_sessions`/`count_sessions` :48/:64,
   `LocalBackend` :212/:255, `HttpBackend` :526/:555; `webapi/app.py`
-  `get_sessions` :238, `get_sessions_count` :276. **Eleven** signatures, each
-  followed by the same keyword list forwarded by hand to the next layer.
+  `SessionFilters` + `get_sessions` :264, `get_sessions_count` :283 (now one
+  list, see above). Was **eleven** signatures, each followed by the same
+  keyword list forwarded by hand to the next layer; nine remain.
 - **Where (calibration sets, 6 filters):** `catalog_db.query_calibration_sets`
   :184; the Protocol, `LocalBackend`, `MemoryCalibrationBackend` and
   `HttpBackend` in `catalog_client.py` (:78/:282/:410/:582); `webapi/app.py`

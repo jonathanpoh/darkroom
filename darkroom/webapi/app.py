@@ -13,6 +13,7 @@ module's own import light (mirrors the convention documented in
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import secrets
 from pathlib import Path
@@ -25,7 +26,13 @@ from pydantic import BaseModel
 from darkroom import catalog_db, config
 from darkroom.sites import annotate_sessions
 from darkroom.webapi import auth
-from darkroom.webapi.ui import COOKIE_NAME, SESSION_MAX_AGE_SECONDS, build_ui_router
+from darkroom.webapi.ui import (
+    COOKIE_NAME,
+    LoginRequired,
+    build_ui_router,
+    login_redirect,
+    set_session_cookie,
+)
 
 _STATIC_DIR = Path(__file__).parent / "static"
 
@@ -124,6 +131,25 @@ class RescanProposalIn(BaseModel):
     lights_path: str | None = None
     changes: dict[str, Any]
     detected_at: str | None = None
+
+
+@dataclasses.dataclass
+class SessionFilters:
+    """Query-string filters shared by GET /api/sessions and /api/sessions/count.
+
+    Every field maps straight onto a `catalog_db.query_sessions` keyword; the
+    two routes unpack `dataclasses.asdict(...)` so the list lives once.
+    """
+
+    target: str | None = None
+    obs_date: str | None = None
+    session_id: str | None = None
+    camera: str | None = None
+    ota: str | None = None
+    filter: str | None = None
+    date_from: str | None = None
+    date_to: str | None = None
+    processed_state: str | None = None
 
 
 class SiteIn(BaseModel):
@@ -236,15 +262,7 @@ def create_app(db_path: Path, api_token: str, ui_password_hash: str) -> FastAPI:
 
     @app.get("/api/sessions", dependencies=[auth_dep])
     def get_sessions(
-        target: str | None = None,
-        obs_date: str | None = None,
-        session_id: str | None = None,
-        camera: str | None = None,
-        ota: str | None = None,
-        filter: str | None = None,
-        date_from: str | None = None,
-        date_to: str | None = None,
-        processed_state: str | None = None,
+        filters: SessionFilters = Depends(),
         limit: int | None = None,
         offset: int = 0,
         conn=Depends(_get_conn),
@@ -256,48 +274,14 @@ def create_app(db_path: Path, api_token: str, ui_password_hash: str) -> FastAPI:
         # reading only the raw `site_lat`/`site_lon`/`total_integration_sec`
         # fields are unaffected.
         rows = catalog_db.query_sessions(
-            conn,
-            target=target,
-            obs_date=obs_date,
-            session_id=session_id,
-            camera=camera,
-            ota=ota,
-            filter=filter,
-            date_from=date_from,
-            date_to=date_to,
-            processed_state=processed_state,
-            limit=limit,
-            offset=offset,
+            conn, **dataclasses.asdict(filters), limit=limit, offset=offset
         )
         sites = catalog_db.list_sites(conn)
         return annotate_sessions(rows, sites)
 
     @app.get("/api/sessions/count", dependencies=[auth_dep])
-    def get_sessions_count(
-        target: str | None = None,
-        obs_date: str | None = None,
-        session_id: str | None = None,
-        camera: str | None = None,
-        ota: str | None = None,
-        filter: str | None = None,
-        date_from: str | None = None,
-        date_to: str | None = None,
-        processed_state: str | None = None,
-        conn=Depends(_get_conn),
-    ):
-        count = catalog_db.count_sessions(
-            conn,
-            target=target,
-            obs_date=obs_date,
-            session_id=session_id,
-            camera=camera,
-            ota=ota,
-            filter=filter,
-            date_from=date_from,
-            date_to=date_to,
-            processed_state=processed_state,
-        )
-        return {"count": count}
+    def get_sessions_count(filters: SessionFilters = Depends(), conn=Depends(_get_conn)):
+        return {"count": catalog_db.count_sessions(conn, **dataclasses.asdict(filters))}
 
     @app.get("/api/pending-renames", dependencies=[auth_dep])
     def get_pending_renames(conn=Depends(_get_conn)):
@@ -374,14 +358,12 @@ def create_app(db_path: Path, api_token: str, ui_password_hash: str) -> FastAPI:
 
     @app.post("/api/rescan-proposals/{proposal_id}/apply", dependencies=[auth_dep])
     def post_rescan_apply(proposal_id: int, conn=Depends(_get_conn)):
-        proposal = catalog_db.get_rescan_proposal(conn, proposal_id)
-        if proposal is None or proposal["status"] != "pending":
-            raise HTTPException(status_code=404, detail="pending rescan proposal not found")
         try:
-            catalog_db.apply_rescan_proposal(conn, db_path, proposal)
+            applied = catalog_db.apply_pending_rescan_proposal(conn, db_path, proposal_id)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-        catalog_db.resolve_rescan_proposal(conn, proposal_id, "applied")
+        if applied is None:
+            raise HTTPException(status_code=404, detail="pending rescan proposal not found")
         return {"applied": True}
 
     @app.post("/api/rescan-proposals/{proposal_id}/dismiss", dependencies=[auth_dep])
@@ -392,6 +374,7 @@ def create_app(db_path: Path, api_token: str, ui_password_hash: str) -> FastAPI:
         return {"dismissed": True}
 
     app.include_router(build_ui_router(db_path, ui_password_hash))
+    app.add_exception_handler(LoginRequired, login_redirect)
     # No auth on static assets (CSS/JS/fonts) — nothing sensitive lives here,
     # and the login page itself needs the CSS before logging in.
     app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
@@ -400,15 +383,13 @@ def create_app(db_path: Path, api_token: str, ui_password_hash: str) -> FastAPI:
     async def _refresh_session_cookie(request, call_next):
         # Sliding session: any authenticated hit resets the 90-day clock, so a
         # machine used at least once per window never sees the login page.
+        # The page view does the refreshing; its CSS/JS/font requests needn't
+        # each re-verify and re-mint the same cookie.
         response = await call_next(request)
-        cookie_token = request.cookies.get(COOKIE_NAME)
-        if auth.verify_cookie(ui_password_hash, cookie_token):
-            response.set_cookie(
-                COOKIE_NAME,
-                auth.mint_cookie(ui_password_hash, SESSION_MAX_AGE_SECONDS),
-                httponly=True, samesite="lax",
-                max_age=SESSION_MAX_AGE_SECONDS,
-            )
+        if request.url.path.startswith("/static/"):
+            return response
+        if auth.verify_cookie(ui_password_hash, request.cookies.get(COOKIE_NAME)):
+            set_session_cookie(response, ui_password_hash)
         return response
 
     return app

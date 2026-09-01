@@ -33,6 +33,7 @@ from darkroom.parse import (
 )
 from darkroom.names import (
     KNOWN_FILTERS,
+    PROCESSED_STATES,  # re-exported: catalog_db and the CLI import it from here
     _format_gain,
     _normalize_camera,
     _normalize_target,
@@ -321,7 +322,6 @@ def find_lights_folders(root: Path) -> list[Path]:
 # replacing the overloaded free-text processed_status column). F1 adds
 # 'in_progress' — archive-derived evidence that stacking/editing has started
 # (xisf masters/intermediates) but no final export exists yet.
-PROCESSED_STATES = frozenset({"unprocessed", "in_progress", "processed", "skipped"})
 
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 

@@ -102,6 +102,12 @@ IDENTITY_FIELDS = ("target", "obs_date", "ota", "camera", "filter", "panel")
 # and the review prompts.
 PLACEHOLDERS = frozenset({None, "", "Unknown", "UnknownFilter"})
 
+# Ordered: the UI's edit-form select and the dashboard's click-to-cycle both
+# walk this in sequence, so it is a tuple here rather than a set. Membership
+# checks (cataloger.set_processed_state, catalog_db.update_session_fields)
+# read it just the same.
+PROCESSED_STATES = ("unprocessed", "in_progress", "processed", "skipped")
+
 
 def make_session_id(
     target: str, obs_date: str, ota: str, camera: str, filter_: str | None, *, panel: str | None = None
