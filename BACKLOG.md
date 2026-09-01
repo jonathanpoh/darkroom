@@ -328,6 +328,54 @@ per-session values) — different code, worth its own entry.
   computing "what it should be" — fix this first, or the rescan tool will
   confidently confirm a still-wrong value on the next mixed-exposure night.
 
+### B16. Archive-side scan takes `site_lat`/`site_lon` from one frame; ingest takes the modal value
+> Filed 2026-09-01 from the `/simplify` reuse pass. Decision (Jonathan,
+> 2026-09-01): a site does not change mid-session, so the two scans must
+> agree — the modal value is the right one, everywhere.
+
+- **Where:** `cataloger.py:994-995` (`SessionAnalyzer.analyze_sessions`,
+  `first.get("site_lat")`) vs `scanner.py:95-108` (`_session_site`, which
+  runs `sites.modal_site` over every frame and warns on disagreement).
+- **Problem:** `scan-all` and `rescan-archive` go through `analyze_sessions`,
+  `ingest` goes through `_session_site`. `modal_site` exists precisely because
+  the ASIAir's first frames can carry a confidently wrong WiFi-geolocated
+  position before the phone GPS settles (see `project_asiair_site_coordinates`
+  memory). Ingest resolves that; an archive rescan of the same folder reads
+  straight off the chronologically-first frame — the frame *most* likely to
+  hold the wrong fix — and F8 would then propose "correcting" the good value
+  back to the bad one (`site_lat`/`site_lon` are not in `_CHANGE_FIELDS`
+  today, so this is latent rather than live, but `scan-all` on a fresh
+  catalog gets the bad value outright).
+- **Do:** have `analyze_sessions` call `sites.modal_site` over the night's
+  frames (lift `_session_site` out of `scanner.py` into `sites.py` or
+  `cataloger.py` so both scans share it, warnings included). Behaviour
+  change on rescan only for sessions with disagreeing frames — that is the
+  point. Test: a night whose first frame has an outlier SITELAT yields the
+  modal value from both scan paths.
+
+### B17. `ingest commit` computes `total_integration_sec` as `frame_count × exposure_sec`; the archive scan sums per frame
+> Filed 2026-09-01 from the `/simplify` altitude pass. Decision (Jonathan,
+> 2026-09-01): match the archive scan — the per-frame sum is the truth.
+
+- **Where:** `ingest.py:677` (`int(entry["frame_count"] * entry["exposure_sec"])`)
+  vs `cataloger.py:991` (`int(sum(f["exposure"] for f in frames))`).
+- **Problem:** the product assumes a uniform exposure. A night with a
+  mid-run exposure change (B13's mixed-gain night is the same shape) is
+  under- or over-counted by ingest, then "corrected" by the next
+  `rescan-archive` as a `safe`-tier update — so the number in the catalog
+  depends on which command last touched the row. On the 2026-08-30 backup,
+  12 of 240 sessions already disagree with the product formula (10 by more
+  than 60 s) — those are the archive-scanned mixed-exposure nights.
+- **Do:** carry the per-frame sum through the manifest. `scanner.Session`
+  already holds every frame's metadata at scan time, so `build_session_entry`
+  can emit `total_integration_sec` alongside `frame_count`, and `cmd_commit`
+  reads it instead of multiplying. Put the sum in one helper
+  (`cataloger.total_integration_sec(exposures)`) that `analyze_sessions` also
+  uses. Manifests written before the field exists fall back to the product
+  (`entry.get("total_integration_sec")` or the old formula) so `commit` keeps
+  working on a pre-existing manifest. Test: a session with 10 × 120 s and
+  5 × 60 s frames commits as 1500, not 1800 or 900.
+
 ---
 
 ## P2 — Minor / docs
@@ -539,12 +587,28 @@ new side table; prefer the numeric `sessions.id` as the foreign key.
   Remove once nothing references it.
 
 ### R3. Unify the two `set_id` builders
-- `cataloger.py:796-800` (in `CalibrationCataloger.scan`) vs
-  `ingest.make_cal_set_id` (`ingest.py:191-202`). They format gain differently
-  (`_format_gain` → `ISO1600`/`200g` vs literal `{gain}g`). If a Bias written by
-  `ingest commit` and the same set re-scanned by `catalog scan-calibration` must
-  collide on `set_id`, these can diverge for DSLR ISO gains and create duplicate
-  rows. Pick one builder and share it.
+> Re-found 2026-09-01 by the `/simplify` reuse pass, still open. Line numbers
+> refreshed; the decision is now easy — see below.
+
+- `cataloger.py:1155-1158` (in `CalibrationCataloger.scan`) vs
+  `ingest.make_cal_set_id` (`ingest.py:274-285`). They format gain differently
+  (`names._format_gain` → `ISO1600` for a DSLR / `200g` for a ZWO, vs the
+  literal `{gain}g` regardless of camera). A Canon6D flat set committed by
+  `ingest commit` and the same folder read back by `catalog scan-calibration`
+  or `rescan-archive` therefore get **two different `set_id`s** for one
+  physical set, i.e. a duplicate row rather than an upsert.
+- **Which one wins is already decided by the data** (checked on the
+  2026-08-30 backup): all 826 Canon6D sets carry the `ISO` form, zero carry
+  `Ng`. `ingest` has never written a DSLR set (the 6D is shot via
+  BackyardEOS/NINA, not the ASIAir), so `make_cal_set_id` is the outlier and
+  the fix is to make it call `_format_gain` — **no backfill needed**. The 8
+  `ASCOMCameraDriver` rows with `_Ng_` ids predate the INSTRUME rewrite
+  (BLOCKERS #14) and will be re-scanned under `Canon6D`/`ISO` anyway.
+- **Do:** move one `make_cal_set_id(frame_type, camera, gain, exposure_sec,
+  temperature_c, capture_date)` into `names.py` (it is stdlib-only), call it
+  from both `ingest.build_cal_entry`/`ingest_review.recompute_cal_entry` and
+  `CalibrationCataloger.scan`. Test: the same group through both paths yields
+  one id, for a ZWO gain and for a DSLR ISO (including `ISOAuto` for gain 0).
 
 ### R4. Share `_target_slug` — ✅ FIXED
 > Shipped 2026-07-29 (`d539a94`, alias cleanup in `ca99ee6`). The two
@@ -590,6 +654,58 @@ new side table; prefer the numeric `sessions.id` as the foreign key.
   `_parse_coords`) drags in astropy. Move them to `parse.py` or a new
   `darkroom/names.py`. **Prerequisite for W5** (web read layer must not import
   astropy).
+
+### R7. The session/calibration query-filter signature is retyped in every layer
+> Filed 2026-09-01 from the `/simplify` altitude pass. Jonathan: worth
+> addressing sooner rather than later, across all the modules.
+
+- **Where (sessions, 9 filters: target/obs_date/session_id/camera/ota/filter/
+  date_from/date_to/processed_state, plus limit/offset):** `catalog_db.py`
+  `_build_where` :78, `query_sessions` :126, `count_sessions` :161;
+  `catalog_client.py` `CatalogBackend.query_sessions`/`count_sessions` :48/:64,
+  `LocalBackend` :212/:255, `HttpBackend` :526/:555; `webapi/app.py`
+  `get_sessions` :238, `get_sessions_count` :276. **Eleven** signatures, each
+  followed by the same keyword list forwarded by hand to the next layer.
+- **Where (calibration sets, 6 filters):** `catalog_db.query_calibration_sets`
+  :184; the Protocol, `LocalBackend`, `MemoryCalibrationBackend` and
+  `HttpBackend` in `catalog_client.py` (:78/:282/:410/:582); `webapi/app.py`
+  `get_calibration_sets` :335. Eight more.
+- **Why it matters — the failure is silent in the two places that count.**
+  Adding a filter means editing every copy in lockstep, and the layers fail
+  differently when one is missed:
+  - miss `LocalBackend`/`HttpBackend`: the caller's new keyword raises
+    `TypeError` — loud, caught on first use;
+  - miss the **FastAPI route**: `HttpBackend` sends the new query parameter,
+    FastAPI silently drops parameters it doesn't declare, and the server
+    returns the **unfiltered** set. A filter that works against the local
+    file and quietly returns everything over the network — which is exactly
+    the deployment split we run (Mac ingest → LXC webapi);
+  - miss `_build_where`: every layer accepts the keyword and the SQL ignores
+    it. Also silent.
+  Nothing is inconsistent today; the risk is that the next filter (F11's
+  `exposure_set`, a `panel` filter for the mosaic views, `site`) lands in
+  ten copies and not the eleventh. Python checks none of this: `Protocol`
+  conformance is structural and never enforced at the call, and the route
+  parameters are FastAPI's contract, not the backend's.
+- **Do (two steps; the first is cheap and closes the silent hole):**
+  1. One `SESSION_FILTERS` tuple (and `CALIBRATION_FILTERS`) in `catalog_db`,
+     and a test in `tests/test_client_server.py` that introspects the
+     signatures of `_build_where`, `query_sessions`, `count_sessions`, both
+     backends' methods and both FastAPI routes (`inspect.signature`) and
+     asserts each accepts exactly that set. That makes a missed copy a test
+     failure instead of an unfiltered response.
+  2. Collapse the copies: a `SessionFilters` dataclass built once at the
+     edge (route or CLI), threaded through `_build_where` → `query_sessions`/
+     `count_sessions` and the backends as one argument; `HttpBackend`
+     serialises it with `dataclasses.asdict`, the route rebuilds it from its
+     declared query params (the route must still declare them — FastAPI needs
+     the names — so the test from step 1 stays). Public call sites keep
+     keyword spelling via a thin `**kwargs` shim, so `prep.py`, `catalog_cli`,
+     `ui.py` and `procscan` don't change. Behaviour-preserving; verify with
+     the existing client/server round-trip tests.
+- **Not in scope:** the `ui.py` HTML views call `catalog_db.query_sessions`
+  directly with one or two filters — they benefit from step 2 but need no
+  edits.
 
 ---
 

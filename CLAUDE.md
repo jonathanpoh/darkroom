@@ -17,9 +17,9 @@ ASIAir SD card
 [CCC copies to Mac]  ← Carbon Copy Cloner, triggered on SD mount (no TTY)
       │
       ▼
-darkroom ingest ──→ NAS: 01_Deep Sky Objects/<Target>/<Session>/Lights/
-      │                  00_Calibration/Flats/<OTA_Camera_Filter>/<Date>/
-      │                  00_Calibration/Darks/<Camera>/
+darkroom ingest ──→ Archive (SSD): 01_Deep Sky Objects/<Target>/<Session>/Lights/
+      │                            00_Calibration/Flats/<OTA_Camera_Filter>/<Date>/
+      │                            00_Calibration/Darks/<Camera>/
       │
       └──→ astro_catalog.db — register new sessions + calibration sets
       │
@@ -35,7 +35,7 @@ darkroom wbpp ──→ ~/WBPP/<Target>/SESSION_N/  (symlinks, temporary)
   PixInsight WBPP → Output/master/*.xisf + Output/processed/*.xisf
       │
       ▼
-darkroom finish ──→ NAS: 01_Deep Sky Objects/<Target>/_Processed/<date>/
+darkroom finish ──→ Archive (SSD): 01_Deep Sky Objects/<Target>/_Processed/<date>/
                     └─→ marks every session_id under that WBPP target as processed
 ```
 
@@ -64,10 +64,23 @@ darkroom finish ──→ NAS: 01_Deep Sky Objects/<Target>/_Processed/<date>/
 - **Session date = start date**: local calendar date the session began (before midnight),
   not the date it ended (sessions routinely run past midnight).
 
-## NAS Archive Structure (canonical)
+## Archive Structure (canonical)
 
-Root: `/volume1/Astrophotography/` on Synology NAS.
-Mounted on Mac via SMB (confirm mount path — likely `/Volumes/Astrophotography/`).
+Root: `/Volumes/Photography 4TB/Astrophotography/` — a **Thunderbolt 4 attached
+SSD** on the Mac, configured as `archive_path` in `darkroom.toml` (or
+`--archive` / `DARKROOM_ARCHIVE`). Every darkroom command reads and writes
+the archive here, as fast local storage.
+
+**darkroom never touches the NAS.** A separate backup task replicates the
+SSD onto the Synology; that copy is a backup, not a second archive, and no
+command reads from or writes to it. Two consequences for code review:
+
+- Do not justify I/O refactors on network round-trip cost ("one stat per
+  frame over SMB"). Directory listings and per-file stats are cheap here;
+  a scan's cost is opening FITS headers, not walking folders.
+- The webapi host (an LXC) has **no** mount of the archive at all. Anything
+  that has to move files on disk (U2's `pending_renames` ledger, `darkroom
+  catalog apply-renames`) runs on the Mac, never on the server.
 
 ### Light frames
 
@@ -134,7 +147,7 @@ the flat-morning date rule inline.
 
 Generalised from `asiair-ingestion/scripts/create_wbpp_input.py`. Key differences:
 
-- Source is the **NAS archive**, not a local `Autorun/` folder.
+- Source is the **archive** (the SSD), not a local `Autorun/` folder.
 - Sessions identified by catalog ID or `--target` + `--date`.
 - Flat matching uses **date proximity** (±3 days default, `--flat-window DAYS`), not
   exact date — because archived flats may have been taken on a different occasion
