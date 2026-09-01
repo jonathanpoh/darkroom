@@ -816,3 +816,32 @@ def test_recompute_entry_leaves_the_session_span_untouched(tmp_path):
     assert sess["session_id"].startswith("M82_")
     assert sess["start_utc"] == "2026-06-21T22:00:00"
     assert sess["end_utc"] == "2026-06-22T02:30:00"
+
+
+def test_prompt_panel_validator_accepts_labels_and_blank(monkeypatch):
+    """The panel prompt's validator is exercised, not just constructed.
+
+    It referenced a `_PANEL_LABEL_RE` that did not exist, so typing any panel
+    raised NameError inside questionary. Capture the validate callable and run
+    it directly.
+    """
+    import questionary
+
+    captured = {}
+
+    class _Q:
+        def ask(self):
+            return "1-2"
+
+    def fake_text(message, **kwargs):
+        captured.update(kwargs)
+        return _Q()
+
+    monkeypatch.setattr(questionary, "text", fake_text)
+    assert ir._prompt_panel(None) == "1-2"
+    validate = captured["validate"]
+    assert validate("1-2") is True
+    assert validate("  ") is True          # blank clears the panel
+    assert validate("10-3") is True
+    assert isinstance(validate("abc"), str)  # an error message, not a bool
+    assert isinstance(validate("1-2-3"), str)

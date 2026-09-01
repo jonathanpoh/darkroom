@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
-from datetime import date as Date
 from pathlib import Path
 
 import yaml
@@ -26,12 +25,14 @@ from darkroom.config import resolve_catalog
 from darkroom.ingest import (
     cal_dest_rel,
     catalog_frame_counts,
+    flat_filter_candidates,
     make_cal_set_id,
     plan_session_files,
     report_catalog,
 )
 from darkroom.names import (
     KNOWN_FILTERS,
+    PLACEHOLDERS,
     _normalize_camera,
     _normalize_target,
     make_session_id,
@@ -68,7 +69,7 @@ class KnownValues:
 
 
 #: Values that mean "we don't know", never offered as something to pick.
-_PLACEHOLDERS = frozenset({None, "", "Unknown", "UnknownFilter"})
+_PLACEHOLDERS = PLACEHOLDERS
 
 
 def _extras(seen, preferred) -> list[str]:
@@ -208,33 +209,15 @@ def entry_lines(entry: dict, position: str = "") -> list[str]:
 def flat_filter_hints(cal_entry: dict, session_entries: list[dict]) -> list[str]:
     """Filters used by Light sessions this Flat group plausibly belongs to.
 
-    The manifest-dict twin of `ingest.infer_flat_filter`: flats are shot the
-    morning after imaging, so a flat matches a session on the same night or the
-    one before, with the same optics.
+    `ingest.flat_filter_candidates` over manifest dicts.
     """
-    capture_date = cal_entry.get("capture_date")
-    if not capture_date:
-        return []
-    try:
-        flat_date = Date.fromisoformat(capture_date)
-    except ValueError:
-        return []
-
-    candidates = set()
-    for sess in session_entries:
-        if sess.get("filter") in _PLACEHOLDERS:
-            continue
-        if sess.get("camera") != cal_entry.get("camera"):
-            continue
-        if sess.get("ota") != cal_entry.get("ota"):
-            continue
-        try:
-            delta = (flat_date - Date.fromisoformat(sess["obs_date"])).days
-        except (KeyError, TypeError, ValueError):
-            continue
-        if 0 <= delta <= 1:
-            candidates.add(sess["filter"])
-    return sorted(candidates)
+    return flat_filter_candidates(
+        cal_entry.get("capture_date"), cal_entry.get("camera"), cal_entry.get("ota"),
+        (
+            (s.get("filter"), s.get("camera"), s.get("ota"), s.get("obs_date"))
+            for s in session_entries
+        ),
+    )
 
 
 # ── recomputing derived fields ───────────────────────────────────────────────
@@ -434,7 +417,7 @@ def _prompt_panel(panel: str | None) -> str | None:
         default=panel or "",
         validate=lambda t: (
             not t.strip()
-            or bool(_PANEL_LABEL_RE.fullmatch(t.strip()))
+            or bool(PANEL_LABEL_RE.fullmatch(t.strip()))
             or "Panel must look like N-M (e.g. 1-1), or be blank."
         ),
         style=_style(),

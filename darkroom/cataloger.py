@@ -17,7 +17,6 @@ import sqlite3
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
 from zoneinfo import ZoneInfo
 
 from astropy.io import fits
@@ -83,6 +82,22 @@ def parse_date_obs(date_obs_utc: str) -> datetime | None:
         return t.datetime.replace(tzinfo=timezone.utc)
     except Exception:
         return None
+
+
+def capture_date_of(date_obs_utc: str) -> str:
+    """Calendar date (YYYY-MM-DD, UTC) of a FITS DATE-OBS, or "" if unparseable.
+
+    The calibration-set `capture_date`: both the ASIAir-side scan
+    (darkroom.scanner) and the archive-side one (CalibrationCataloger) used to
+    hand-roll this astropy parse; they now share parse_date_obs.
+    """
+    dt = parse_date_obs(date_obs_utc)
+    return dt.strftime("%Y-%m-%d") if dt else ""
+
+
+def _now() -> str:
+    """UTC timestamp in the created_at/updated_at column format."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _format_utc(dt: datetime) -> str:
@@ -605,6 +620,31 @@ def init_db(db_path: Path) -> None:
         )
 
 
+def session_id_for(session: dict) -> str:
+    """make_session_id from a session dict's identity fields (panel included).
+
+    The one place a scanned session dict becomes a session_id — scan_all and
+    rescan each spelled the call out by hand, and scan_all's copy had missed
+    `panel` when M1 added it.
+    """
+    return make_session_id(
+        session["target"], session["obs_date"], session["ota"],
+        session["camera"], session["filter"], panel=session.get("panel"),
+    )
+
+
+# Every column upsert_session writes, in INSERT order. Drives the column list,
+# the :named placeholders and the "missing key -> NULL" defaulting below, so a
+# new column is added in exactly one place (same pattern as _GUIDING_COLUMNS).
+_SESSION_COLUMNS = (
+    "session_id", "target", "obs_date", "ota", "camera", "filter", "panel",
+    "gain", "temperature_c", "exposure_sec", "focal_length",
+    "frame_count", "total_integration_sec", "ra_deg", "dec_deg",
+    "lights_path", "processed_status", "notes", "created_at", "updated_at",
+    "site_lat", "site_lon", "start_utc", "end_utc",
+)
+
+
 def upsert_session(db_path: Path, session: dict) -> None:
     """Insert or update a session in the database.
 
@@ -628,36 +668,22 @@ def upsert_session(db_path: Path, session: dict) -> None:
     # catalog and so must compare against what would be STORED, not the raw
     # header values (names.normalize_session_fields explains why).
     session = normalize_session_fields(session)
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    now = _now()
     session.setdefault("created_at", now)
     session["updated_at"] = now
-    # Legacy free-text column — new callers rely on processed_state (default
-    # 'unprocessed') instead, so this is only populated for backward compat.
-    session.setdefault("processed_status", None)
-    session.setdefault("site_lat", None)
-    session.setdefault("site_lon", None)
-    session.setdefault("start_utc", None)
-    session.setdefault("end_utc", None)
     session.setdefault("notes", "")
-    # M1: mosaic panel label, NULL for an ordinary single-pointing session —
-    # the overwhelming majority of callers don't set this.
-    session.setdefault("panel", None)
+    # Every other column a caller leaves out is NULL: the legacy free-text
+    # processed_status, the optional site/span fields, the M1 panel (NULL for
+    # the ordinary single-pointing session), and whatever a rescan 'create'
+    # could not read off disk. The NOT NULL columns (target, obs_date) still
+    # fail at the INSERT, as they should.
+    for col in _SESSION_COLUMNS:
+        session.setdefault(col, None)
     with sqlite3.connect(db_path) as conn:
         conn.execute(
-            """
-            INSERT INTO sessions (
-                session_id, target, obs_date, ota, camera, filter, panel,
-                gain, temperature_c, exposure_sec, focal_length,
-                frame_count, total_integration_sec, ra_deg, dec_deg,
-                lights_path, processed_status, notes, created_at, updated_at,
-                site_lat, site_lon, start_utc, end_utc
-            ) VALUES (
-                :session_id, :target, :obs_date, :ota, :camera, :filter, :panel,
-                :gain, :temperature_c, :exposure_sec, :focal_length,
-                :frame_count, :total_integration_sec, :ra_deg, :dec_deg,
-                :lights_path, :processed_status, :notes, :created_at, :updated_at,
-                :site_lat, :site_lon, :start_utc, :end_utc
-            )
+            f"""
+            INSERT INTO sessions ({", ".join(_SESSION_COLUMNS)})
+            VALUES ({", ".join(":" + c for c in _SESSION_COLUMNS)})
             ON CONFLICT(session_id) DO UPDATE SET
                 target                = excluded.target,
                 obs_date              = excluded.obs_date,
@@ -699,7 +725,7 @@ def upsert_calibration_set(db_path: Path, cal_set: dict) -> None:
     cal_set["camera"] = _normalize_camera(cal_set.get("camera"))
     cal_set["exposure_sec"] = _round_exposure(cal_set.get("exposure_sec"))
     cal_set.setdefault("is_master", 0)
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    now = _now()
     cal_set.setdefault("created_at", now)
     cal_set["updated_at"] = now
     with sqlite3.connect(db_path) as conn:
@@ -809,7 +835,7 @@ def set_processed_state(
         raise ValueError(
             f"Invalid processed state: {state!r} (must be one of {sorted(PROCESSED_STATES)})"
         )
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    now = _now()
     if notes is not None:
         sql = (
             "UPDATE sessions SET processed_state = ?, processed_date = ?, "
@@ -1091,13 +1117,7 @@ class CalibrationCataloger:
                 exposure = _round_exposure(meta["exposure"])
                 temp = round(meta["temperature"])
                 folder = str(fpath.parent)
-                obs_date = ""
-                if meta.get("date_obs"):
-                    try:
-                        t = Time(meta["date_obs"], format="isot")
-                        obs_date = t.datetime.strftime("%Y-%m-%d")
-                    except Exception:
-                        pass
+                obs_date = capture_date_of(meta.get("date_obs", ""))
 
                 # ASIAir mixes flat darks and science darks in the same Dark/ folder.
                 # Reclassify by exposure: anything under the threshold is a flat dark.
@@ -1177,6 +1197,24 @@ class CalibrationCataloger:
         return cal_sets
 
 
+def _resolve_writer(args, backend, upsert):
+    """(upsert callable, label) for a scan command's catalog writes.
+
+    `upsert` is this module's upsert_session or upsert_calibration_set. With
+    no backend (the legacy `python -m darkroom.cataloger` path) it is bound to
+    `args.db` directly; otherwise the backend's method of the same name is
+    used.
+    """
+    if backend is None:
+        db_path = Path(args.db)
+        init_db(db_path)
+        return (lambda row: upsert(db_path, row)), str(db_path)
+    from darkroom.catalog_client import LocalBackend
+
+    label = str(backend.db_path) if isinstance(backend, LocalBackend) else backend.base_url
+    return getattr(backend, upsert.__name__), label
+
+
 def scan_calibration_command(args, *, backend=None):
     calibration_root = Path(args.calibration_path).resolve()
     archive_root = calibration_root.parent
@@ -1185,16 +1223,7 @@ def scan_calibration_command(args, *, backend=None):
         print(f"Error: Calibration folder not found: {calibration_root}", file=sys.stderr)
         sys.exit(1)
 
-    if backend is None:
-        # Legacy path (python -m darkroom.cataloger): raw sqlite
-        db_path = Path(args.db)
-        init_db(db_path)
-        _upsert = lambda cs: upsert_calibration_set(db_path, cs)
-        db_label = str(db_path)
-    else:
-        _upsert = backend.upsert_calibration_set
-        from darkroom.catalog_client import LocalBackend
-        db_label = str(backend.db_path) if isinstance(backend, LocalBackend) else backend.base_url
+    _upsert, db_label = _resolve_writer(args, backend, upsert_calibration_set)
 
     cal_sets = CalibrationCataloger.scan(calibration_root)
 
@@ -1237,16 +1266,7 @@ def scan_all_command(args, *, backend=None):
         print(f"Error: Root folder not found: {root}", file=sys.stderr)
         sys.exit(1)
 
-    if backend is None:
-        # Legacy path (python -m darkroom.cataloger): raw sqlite
-        db_path = Path(args.db)
-        init_db(db_path)
-        _upsert = lambda s: upsert_session(db_path, s)
-        db_label = str(db_path)
-    else:
-        _upsert = backend.upsert_session
-        from darkroom.catalog_client import LocalBackend
-        db_label = str(backend.db_path) if isinstance(backend, LocalBackend) else backend.base_url
+    _upsert, db_label = _resolve_writer(args, backend, upsert_session)
 
     lights_folders = find_lights_folders(root)
 
@@ -1280,10 +1300,7 @@ def scan_all_command(args, *, backend=None):
             continue
 
         for session in sessions:
-            session_id = make_session_id(
-                session["target"], session["obs_date"],
-                session["ota"], session["camera"], session["filter"],
-            )
+            session_id = session_id_for(session)
             session["session_id"] = session_id
             session["lights_path"] = str(lights_path.relative_to(archive_root))
             _upsert(session)
@@ -1300,7 +1317,7 @@ def migrate_archive_command(args) -> None:
     Old: 01_Deep Sky Objects/<Target>/<Date>_<OTA>_<Camera>_<Filter>/Lights/*.fit
     New: 01_Deep Sky Objects/<Target>/<Date>_<OTA>_<Camera>/Lights/<Filter>/*.fit
     """
-    from darkroom.ingest import camera_slug, session_dest_rel
+    from darkroom.names import session_dest_rel
 
     archive = Path(args.archive)
     db_path = Path(args.db)

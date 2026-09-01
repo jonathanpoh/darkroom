@@ -5,9 +5,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from astropy.time import Time
 from darkroom.cataloger import (
     FITSHeaderExtractor,
+    capture_date_of,
     compute_imaging_night,
     compute_session_span,
     parse_date_obs,
@@ -201,14 +201,7 @@ def _scan_calibration(source: Path) -> list[CalibrationGroup]:
             # Frame type from source folder name; reclassify short darks as flat darks
             frame_type = reclassify_flat_dark(folder_name, meta["exposure"])
 
-            # DATE-OBS → YYYY-MM-DD
-            capture_date = ""
-            date_obs = meta.get("date_obs", "")
-            if date_obs:
-                try:
-                    capture_date = Time(date_obs, format="isot").datetime.strftime("%Y-%m-%d")
-                except Exception:
-                    pass
+            capture_date = capture_date_of(meta.get("date_obs", ""))
 
             # Filter only meaningful for Flat and FlatDark
             filter_: str | None = None

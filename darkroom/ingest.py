@@ -3,19 +3,19 @@
 from __future__ import annotations
 
 import argparse
-import re
 import shutil
 import sqlite3
 import sys
-from datetime import date as Date, datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
 
+from darkroom.catalog import flat_offset_days
 from darkroom.cataloger import make_session_id
 from darkroom.catalog_client import resolve_backend
 from darkroom.config import resolve_catalog, resolve_catalog_url, resolve_path
-from darkroom.names import KNOWN_FILTERS, _normalize_camera, session_dest_rel
+from darkroom.names import KNOWN_FILTERS, PLACEHOLDERS, _normalize_camera, session_dest_rel
 from darkroom.scanner import CalibrationGroup, Session, ScanResult, scan_source
 
 
@@ -107,31 +107,46 @@ def resolve_filter(
             return "NoFilter", False
 
 
+def flat_filter_candidates(
+    capture_date: str | None,
+    camera: str | None,
+    ota: str | None,
+    sessions,
+) -> list[str]:
+    """Filters used by Light sessions a flat set plausibly belongs to.
+
+    The flat-morning rule (catalog.flat_offset_days): a flat shot on a night's
+    own evening (offset 0) or the following morning (+1), with the same camera
+    and OTA, belongs to that night. `sessions` is an iterable of
+    (filter, camera, ota, obs_date) tuples — the adapters below feed it from
+    scanned `Session` objects and from manifest dicts, so the rule lives once.
+
+    Returns a sorted list of candidate filter names (empty = no match).
+    """
+    if not capture_date:
+        return []
+    candidates: set[str] = set()
+    for filter_, s_camera, s_ota, obs_date in sessions:
+        if filter_ in PLACEHOLDERS or s_camera != camera or s_ota != ota:
+            continue
+        try:
+            delta = flat_offset_days(capture_date, obs_date)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= delta <= 1:
+            candidates.add(filter_)
+    return sorted(candidates)
+
+
 def infer_flat_filter(
     group: CalibrationGroup,
     sessions: list[Session],
 ) -> list[str]:
-    """Infer flat filter from matching Light sessions by camera, OTA, and date.
-
-    Flats are typically taken the morning after imaging, so we match when the
-    flat capture_date equals the session obs_date or obs_date + 1.
-
-    Returns a sorted list of candidate filter names (empty = no match).
-    """
-    if not group.capture_date:
-        return []
-    flat_date = Date.fromisoformat(group.capture_date)
-    candidates: set[str] = set()
-    for sess in sessions:
-        if sess.filter is None:
-            continue
-        if sess.camera != group.camera or sess.ota != group.ota:
-            continue
-        sess_date = Date.fromisoformat(sess.obs_date)
-        delta = (flat_date - sess_date).days
-        if 0 <= delta <= 1:
-            candidates.add(sess.filter)
-    return sorted(candidates)
+    """`flat_filter_candidates` over scanned Session objects."""
+    return flat_filter_candidates(
+        group.capture_date, group.camera, group.ota,
+        ((s.filter, s.camera, s.ota, s.obs_date) for s in sessions),
+    )
 
 
 def _prompt_flat_filter_candidates(
@@ -274,6 +289,17 @@ def make_cal_set_id(
 # Manifest entry builders
 # ---------------------------------------------------------------------------
 
+def _names_on_disk(dest_abs: Path) -> set[str]:
+    """File names already present in a destination folder (empty if absent).
+
+    One directory listing, not one `exists()` per frame — a calibration group
+    can be hundreds of frames, and the session planner already works this way.
+    """
+    if not dest_abs.exists():
+        return set()
+    return {p.name for p in dest_abs.iterdir() if p.is_file()}
+
+
 def plan_session_files(
     srcs: list[Path],
     dest_rel: Path,
@@ -301,11 +327,7 @@ def plan_session_files(
         copy_flags = {f.name: False for f in srcs}
     else:
         status = "topup"
-        on_disk = (
-            {p.name for p in dest_abs.iterdir() if p.is_file()}
-            if dest_abs.exists()
-            else set()
-        )
+        on_disk = _names_on_disk(dest_abs)
         copy_flags = {f.name: f.name not in on_disk for f in srcs}
 
     file_entries = [
@@ -328,19 +350,16 @@ def build_session_entry(
         context=f"{session.target} on {session.obs_date}",
     )
 
-    # Pass None for filter when unknown so make_session_id uses "UnknownFilter"
+    # None when unknown, so make_session_id writes "UnknownFilter" and the
+    # manifest carries no filter for review to fill in.
+    resolved_filter = None if needs_review else filter_
     session_id = make_session_id(
-        session.target,
-        session.obs_date,
-        session.ota,
-        session.camera,
-        None if needs_review else filter_,
-        panel=session.panel,
+        session.target, session.obs_date, session.ota, session.camera,
+        resolved_filter, panel=session.panel,
     )
     dest_rel = session_dest_rel(
         session.target, session.obs_date, session.ota, session.camera,
-        None if needs_review else filter_,
-        panel=session.panel,
+        resolved_filter, panel=session.panel,
     )
     dest_abs = output / dest_rel
 
@@ -354,7 +373,7 @@ def build_session_entry(
         "obs_date": session.obs_date,
         "ota": session.ota,
         "camera": session.camera,
-        "filter": None if needs_review else filter_,
+        "filter": resolved_filter,
         "panel": session.panel,
         "gain": session.gain,
         "temperature_c": session.temperature_c,
@@ -412,16 +431,11 @@ def build_cal_entry(
     dest_rel = cal_dest_rel(
         group.frame_type, group.camera, group.ota, filter_, group.capture_date
     )
-    dest_abs = output / dest_rel
-
-    file_entries = []
-    for f in sorted(group.files):
-        dest_file = dest_abs / f.name
-        file_entries.append({
-            "src": str(f),
-            "dst": str(dest_rel / f.name),
-            "copy": not dest_file.exists(),
-        })
+    on_disk = _names_on_disk(output / dest_rel)
+    file_entries = [
+        {"src": str(f), "dst": str(dest_rel / f.name), "copy": f.name not in on_disk}
+        for f in sorted(group.files)
+    ]
 
     return {
         "set_id": set_id,

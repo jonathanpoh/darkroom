@@ -15,7 +15,12 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from darkroom.names import _normalize_target, make_session_id, session_dest_rel
+from darkroom.names import (
+    IDENTITY_FIELDS,
+    _normalize_target,
+    make_session_id,
+    session_dest_rel,
+)
 
 # Columns a UI is allowed to edit via update_session_fields. Deliberately
 # excludes id, session_id (derived, not directly settable), total_integration_hours
@@ -41,8 +46,14 @@ _EDITABLE_FIELDS = frozenset({
     "frame_count", "total_integration_sec",
 })
 
-# Identity components: changing any of these changes the derived session_id.
-_IDENTITY_FIELDS = ("target", "obs_date", "ota", "camera", "filter", "panel")
+# Identity components (names.IDENTITY_FIELDS): changing any of these
+# changes the derived session_id.
+_IDENTITY_FIELDS = IDENTITY_FIELDS
+
+
+def _now() -> str:
+    """UTC timestamp in the created_at/updated_at column format."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def open_db(db_path: Path) -> sqlite3.Connection:
@@ -242,7 +253,7 @@ def _record_pending_rename(
 
     Participates in the caller's transaction — no commit here.
     """
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    now = _now()
     existing = conn.execute(
         "SELECT id, old_path FROM pending_renames WHERE session_row_id = ?",
         (session_row_id,),
@@ -305,7 +316,7 @@ def add_site(
     If is_home is truthy, any existing home site is cleared first (same
     transaction) so at most one row ever has is_home = 1.
     """
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    now = _now()
     if is_home:
         conn.execute("UPDATE sites SET is_home = 0 WHERE is_home = 1")
     try:
@@ -353,7 +364,7 @@ def update_site_fields(conn: sqlite3.Connection, name: str, /, **fields) -> bool
         set_clauses.append(f"{key} = ?")
         params.append(value)
 
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    now = _now()
     set_clauses.append("updated_at = ?")
     params.append(now)
     params.append(row["id"])
@@ -475,7 +486,7 @@ def update_session_fields(conn: sqlite3.Connection, session_id: str, **fields) -
                     conn, row_id, new_session_id, row["lights_path"], new_lights_path,
                 )
 
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    now = _now()
     set_clauses.append("updated_at = ?")
     params.append(now)
 
@@ -668,7 +679,7 @@ def resolve_rescan_proposal(conn: sqlite3.Connection, proposal_id: int, status: 
     proposal_id doesn't match a pending row — already-resolved rows are
     immutable history and are never re-resolved.
     """
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    now = _now()
     cur = conn.execute(
         "UPDATE rescan_proposals SET status = ?, resolved_at = ? "
         "WHERE id = ? AND status = 'pending'",
@@ -730,16 +741,9 @@ def apply_rescan_proposal(conn: sqlite3.Connection, db_path: Path, proposal: dic
         for key in ("target", "obs_date", "lights_path"):
             if session.get(key) is None and proposal.get(key) is not None:
                 session[key] = proposal[key]
-        # upsert_session binds every one of these as a named sqlite param —
-        # a 'create' proposal that only reports the fields it could actually
-        # read off disk (say, no RA/Dec) would otherwise blow up with a
-        # sqlite3.ProgrammingError on the fields it left out entirely.
-        for key in (
-            "target", "obs_date", "ota", "camera", "filter", "gain",
-            "temperature_c", "exposure_sec", "focal_length", "frame_count",
-            "total_integration_sec", "ra_deg", "dec_deg", "lights_path",
-        ):
-            session.setdefault(key, None)
+        # Fields the create could not read off disk (say, no RA/Dec) are
+        # left out entirely; upsert_session defaults every missing column to
+        # NULL from its own column list.
         try:
             upsert_session(db_path, session)
         except sqlite3.IntegrityError as e:

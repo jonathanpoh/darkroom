@@ -65,9 +65,15 @@ from darkroom.cataloger import (
     FITSHeaderExtractor,
     SessionAnalyzer,
     find_lights_folders,
-    make_session_id,
+    session_id_for,
 )
-from darkroom.names import KNOWN_FILTERS, _normalize_target, normalize_session_fields
+from darkroom.names import (
+    IDENTITY_FIELDS,
+    KNOWN_FILTERS,
+    _normalize_target,
+    make_session_id,
+    normalize_session_fields,
+)
 from darkroom.parse import fits_files, normalize_filter, parse_panel
 
 DEFAULT_POINTING_TOLERANCE_DEG = 0.5
@@ -119,10 +125,9 @@ _CHANGE_FIELDS = (
 _FLOAT_FIELDS = frozenset({"exposure_sec", "temperature_c", "focal_length"})
 _INT_FIELDS = frozenset({"frame_count", "total_integration_sec", "gain"})
 
-# Identity components — changing any of these changes the derived session_id.
-# Mirrors catalog_db's own identity set; a 'rename' proposal is exactly a
-# divergence in one or more of these.
-_IDENTITY_FIELDS = ("target", "obs_date", "ota", "camera", "filter", "panel")
+# Identity components (names.IDENTITY_FIELDS, shared with catalog_db) — a
+# 'rename' proposal is exactly a divergence in one or more of these.
+_IDENTITY_FIELDS = IDENTITY_FIELDS
 
 
 def _canonical_session_id(row: dict) -> str:
@@ -256,11 +261,7 @@ def _scan_disk(dso_root: Path, archive_root: Path) -> dict[str, dict]:
             continue
 
         for session in SessionAnalyzer.analyze_sessions(metadata_list, lights_path):
-            session_id = make_session_id(
-                session["target"], session["obs_date"],
-                session["ota"], session["camera"], session["filter"],
-                panel=session.get("panel"),
-            )
+            session_id = session_id_for(session)
             session["session_id"] = session_id
             session["lights_path"] = str(lights_path.relative_to(archive_root))
             # Compare against what upsert_session would STORE, not the raw

@@ -17,8 +17,9 @@ from __future__ import annotations
 
 import sqlite3
 import urllib.parse
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from darkroom import config
 
@@ -134,6 +135,15 @@ class LocalBackend:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         return open_db(self.db_path)
 
+    @contextmanager
+    def _conn(self):
+        """One call's connection: `_open()`, closed on the way out."""
+        conn = self._open()
+        try:
+            yield conn
+        finally:
+            conn.close()
+
     # -- writes --------------------------------------------------------
 
     def upsert_session(self, session: dict) -> None:
@@ -187,11 +197,8 @@ class LocalBackend:
         # predates it (open_db's own lazy init_db only fires for a wholly
         # missing file, not an existing one with an older schema).
         self._ensure_schema()
-        conn = self._open()
-        try:
+        with self._conn() as conn:
             return update_session_fields(conn, session_id, **fields)
-        finally:
-            conn.close()
 
     def rename_target(self, old_target: str, new_target: str) -> dict:
         from darkroom.catalog_db import rename_target
@@ -200,11 +207,8 @@ class LocalBackend:
         # pending_renames via update_session_fields internally, so a legacy
         # pre-U2 DB file needs its schema brought current first.
         self._ensure_schema()
-        conn = self._open()
-        try:
+        with self._conn() as conn:
             return rename_target(conn, old_target, new_target)
-        finally:
-            conn.close()
 
     def query_sessions(
         self,
@@ -232,8 +236,7 @@ class LocalBackend:
         # dry-run contract (and any other pure-read caller) must not migrate
         # the schema, so a legacy pre-S1 file with no `sites` table degrades
         # to "no sites → weight 1.0" — exactly the pre-S2 behaviour.
-        conn = self._open()
-        try:
+        with self._conn() as conn:
             rows = query_sessions(
                 conn,
                 target=target, obs_date=obs_date, session_id=session_id,
@@ -248,8 +251,6 @@ class LocalBackend:
                 # Legacy DB predates the `sites` table — no sites means no
                 # weighting, which is the same as no sites configured.
                 sites = []
-        finally:
-            conn.close()
         return annotate_sessions(rows, sites)
 
     def count_sessions(
@@ -267,8 +268,7 @@ class LocalBackend:
     ) -> int:
         from darkroom.catalog_db import count_sessions
 
-        conn = self._open()
-        try:
+        with self._conn() as conn:
             return count_sessions(
                 conn,
                 target=target, obs_date=obs_date, session_id=session_id,
@@ -276,8 +276,6 @@ class LocalBackend:
                 date_from=date_from, date_to=date_to,
                 processed_state=processed_state,
             )
-        finally:
-            conn.close()
 
     def query_calibration_sets(
         self,
@@ -291,15 +289,12 @@ class LocalBackend:
     ) -> list[dict]:
         from darkroom.catalog_db import query_calibration_sets
 
-        conn = self._open()
-        try:
+        with self._conn() as conn:
             return query_calibration_sets(
                 conn,
                 frame_type=frame_type, camera=camera, ota=ota,
                 filter=filter, gain=gain, exposure_sec=exposure_sec,
             )
-        finally:
-            conn.close()
 
     def list_pending_renames(self) -> list[dict]:
         from darkroom.catalog_db import list_pending_renames
@@ -308,21 +303,15 @@ class LocalBackend:
         # rationale as update_session_fields: a legacy pre-U2 file would
         # otherwise raise OperationalError on a missing table.
         self._ensure_schema()
-        conn = self._open()
-        try:
+        with self._conn() as conn:
             return list_pending_renames(conn)
-        finally:
-            conn.close()
 
     def ack_pending_rename(self, rename_id: int) -> bool:
         from darkroom.catalog_db import ack_pending_rename
 
         self._ensure_schema()
-        conn = self._open()
-        try:
+        with self._conn() as conn:
             return ack_pending_rename(conn, rename_id)
-        finally:
-            conn.close()
 
     def list_sites(self) -> list[dict]:
         from darkroom.catalog_db import list_sites
@@ -330,31 +319,22 @@ class LocalBackend:
         # sites is a new (S1) table — ensure schema first, same rationale as
         # list_pending_renames: a legacy pre-S1 DB file predates it.
         self._ensure_schema()
-        conn = self._open()
-        try:
+        with self._conn() as conn:
             return list_sites(conn)
-        finally:
-            conn.close()
 
     def add_site(self, site: dict) -> int:
         from darkroom.catalog_db import add_site
 
         self._ensure_schema()
-        conn = self._open()
-        try:
+        with self._conn() as conn:
             return add_site(conn, **site)
-        finally:
-            conn.close()
 
     def update_site(self, name: str, fields: dict) -> bool:
         from darkroom.catalog_db import update_site_fields
 
         self._ensure_schema()
-        conn = self._open()
-        try:
+        with self._conn() as conn:
             return update_site_fields(conn, name, **fields)
-        finally:
-            conn.close()
 
     def replace_rescan_proposals(self, proposals: list[dict]) -> int:
         from darkroom.catalog_db import replace_rescan_proposals
@@ -362,21 +342,15 @@ class LocalBackend:
         # rescan_proposals is an F8 table — ensure schema first, same
         # rationale as list_pending_renames: a legacy pre-F8 DB predates it.
         self._ensure_schema()
-        conn = self._open()
-        try:
+        with self._conn() as conn:
             return replace_rescan_proposals(conn, proposals)
-        finally:
-            conn.close()
 
     def list_rescan_proposals(self, *, status: str | None = "pending") -> list[dict]:
         from darkroom.catalog_db import list_rescan_proposals
 
         self._ensure_schema()
-        conn = self._open()
-        try:
+        with self._conn() as conn:
             return list_rescan_proposals(conn, status=status)
-        finally:
-            conn.close()
 
     def apply_rescan_proposal(self, proposal_id: int) -> bool:
         from darkroom.catalog_db import (
@@ -386,25 +360,19 @@ class LocalBackend:
         )
 
         self._ensure_schema()
-        conn = self._open()
-        try:
+        with self._conn() as conn:
             proposal = get_rescan_proposal(conn, proposal_id)
             if proposal is None or proposal["status"] != "pending":
                 return False
             apply_rescan_proposal(conn, self.db_path, proposal)
             return resolve_rescan_proposal(conn, proposal_id, "applied")
-        finally:
-            conn.close()
 
     def dismiss_rescan_proposal(self, proposal_id: int) -> bool:
         from darkroom.catalog_db import resolve_rescan_proposal
 
         self._ensure_schema()
-        conn = self._open()
-        try:
+        with self._conn() as conn:
             return resolve_rescan_proposal(conn, proposal_id, "dismissed")
-        finally:
-            conn.close()
 
 
 class MemoryCalibrationBackend:

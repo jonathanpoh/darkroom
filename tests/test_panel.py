@@ -272,3 +272,49 @@ def test_session_in_model_carries_panel():
 
     assert SessionIn(session_id="x", panel="1-1").panel == "1-1"
     assert SessionIn(session_id="x").panel is None
+
+
+def test_session_id_for_carries_the_panel():
+    """scan-all and rescan derive a session_id from the same scanned dict.
+
+    They used to spell the make_session_id call out separately, and scan-all's
+    copy had no `panel=` — so an archive rescan and a scan-all disagreed on a
+    mosaic row's id. One helper, one answer.
+    """
+    from darkroom.cataloger import session_id_for
+
+    session = {
+        "target": "M 8", "obs_date": "2026-08-15", "ota": "Canon50mm",
+        "camera": "ZWOASI585MCPro", "filter": "AstronomikL2", "panel": "1-2",
+    }
+    assert session_id_for(session).endswith("_P1-2")
+    assert session_id_for({**session, "panel": None}) == (
+        "M8_20260815_Canon50mm_ZWOASI585MCPro_AstronomikL2"
+    )
+    # A dict with no panel key at all (pre-M1 producers) is the same as None.
+    del session["panel"]
+    assert not session_id_for(session).endswith("_P1-2")
+
+
+def test_upsert_session_defaults_every_missing_column_to_null(tmp_path):
+    """A partial session dict (as a rescan 'create' produces) upserts cleanly.
+
+    upsert_session binds every column as a named parameter; a caller that
+    left one out used to hit sqlite3.ProgrammingError, and apply_rescan_proposal
+    carried its own hand-maintained list of columns to pre-fill. The column
+    list is the single source now.
+    """
+    import sqlite3
+
+    db = tmp_path / "c.db"
+    init_db(db)
+    upsert_session(db, {
+        "session_id": "M8_20260815_Canon50mm_ZWOASI585MCPro_AstronomikL2_P1-2",
+        "target": "M 8", "obs_date": "2026-08-15", "panel": "1-2",
+    })
+    with sqlite3.connect(db) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT * FROM sessions").fetchone()
+    assert row["panel"] == "1-2"
+    assert row["ota"] is None and row["ra_deg"] is None and row["lights_path"] is None
+    assert row["notes"] == ""

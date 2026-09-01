@@ -90,6 +90,19 @@ def _normalize_camera(name: str | None) -> str | None:
     return _CAMERA_ALIASES.get(slug, slug)
 
 
+# Identity components: changing any of these changes the derived session_id
+# (make_session_id) and lights_path (session_dest_rel). One tuple, shared by
+# catalog_db (identity edits recompute both) and rescan (a 'rename' proposal
+# is exactly a divergence in one or more of these) — they used to keep
+# private copies that had to be edited in lockstep.
+IDENTITY_FIELDS = ("target", "obs_date", "ota", "camera", "filter", "panel")
+
+# Values that mean "we don't know", never offered as something to pick and
+# never treated as a real filter/OTA. Shared by the ingest manifest builders
+# and the review prompts.
+PLACEHOLDERS = frozenset({None, "", "Unknown", "UnknownFilter"})
+
+
 def make_session_id(
     target: str, obs_date: str, ota: str, camera: str, filter_: str | None, *, panel: str | None = None
 ) -> str:

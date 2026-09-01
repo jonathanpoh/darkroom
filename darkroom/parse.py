@@ -88,7 +88,7 @@ def parse_filter(stem: str) -> str | None:
     s = parts[-2]
     if TEMP_RE.match(s) or _NOT_FILTER_RE.search(s):
         return None
-    return _FILTER_ALIASES.get(s, s)
+    return normalize_filter(s)
 
 
 def parse_exposure(stem: str) -> str | None:
@@ -207,23 +207,14 @@ def ota_from_focallen(focal_length: int | float | None, *, obs_date=None) -> str
 
 # Every OTA name parse_ota can produce, excluding the "Unknown" fallback —
 # the pick-list offered when focal-length inference has to be corrected by hand
-# (darkroom.ingest_review). Keep in step with the windows above.
+# (darkroom.ingest_review). Derived from the windows above so a new optic
+# cannot be added to one without appearing in the other.
 #
 # The Canon<focal>mm names are the convention for Canon lenses (brand in the
 # name; scopes don't carry one). Canon400mm is never *inferred* for a session
 # after January 2025 — at ~400mm the scope window wins — so it is here mainly
 # so review can correct a night that really was shot on the zoom.
-KNOWN_OTAS = (
-    "FMA180",
-    "FRA400-07x",
-    "FRA400",
-    "Canon50mm",
-    "Canon100mm",
-    "Canon135mm",
-    "Canon200mm",
-    "Canon300mm",
-    "Canon400mm",
-)
+KNOWN_OTAS = tuple(name for _, _, name in (*_SCOPE_WINDOWS, *_LENS_WINDOWS))
 
 
 # A mosaic panel label on its own ("1-1"). Digit runs are bounded to 1-2 each
