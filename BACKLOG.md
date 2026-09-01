@@ -2111,6 +2111,102 @@ the files, keep the option open.
 
 ---
 
+### F11. `session_exposure_sets` — a night's parameters are not scalar
+
+Filed 2026-09-01, out of a design discussion with Jonathan about how to model
+multi-exposure acquisition. Decided, not yet built.
+
+**The problem.** A session row carries one `exposure_sec`, one `gain`, one
+`temperature_c`. A night that brackets exposures therefore stores whichever
+value the first frame happened to have, and the rest are silently wrong. This
+is not an edge case — it is the normal shape of solar, lunar and HDR work, and
+it is also **B13** (night-level dark params from `sessions[0]`) and **F5**
+(temperature is a range) seen from a third angle.
+
+**Two real datasets, measured 2026-09-01, both still un-ingested:**
+
+| | Sun (`Autorun/Light/Sun`) | Moon (`Autorun/Light/Moon`) |
+|---|---|---|
+| Frames / integration | 365 / **33.7s** | 259 / **14.8s** |
+| Nights | 3 (2026-08-05/07/12) | 1 (2026-08-28 frames → night **2026-08-27**) |
+| Exposures | 15, 100µs → 2s | 9, 5ms → 200ms |
+| Gains | 0 and 50 | 0 |
+| Under today's rule | **3 rows**, each with an invented exposure | **1 row**, ditto |
+| With exposure+gain in identity | 41 rows | 9 rows |
+| **Under F11** | 3 sessions + 41 sets | 1 session + 9 sets |
+
+The 2026-08-12 Sun run is the total solar eclipse and the 2026-08-28 Moon run
+is the lunar eclipse — irreplaceable data, which is part of why the model
+should be settled before ingesting them.
+
+**The decision.** One session row per (target, night, filter, OTA, camera) as
+today, plus a child table of acquisition sets:
+
+```
+session_exposure_sets(session_id, exposure_sec, gain, temperature_c,
+                      frame_count, total_integration_sec, ...)
+```
+
+Rejected alternatives, with reasons, so this is not relitigated:
+
+- **A `layer` column** (`main`/`stars`/`hdr`). Rejected: layer is
+  *post-processing intent*, not an acquisition fact. ASIAir filenames, Astrobin
+  acquisition tables and N.I.N.A. file patterns all key on
+  (filter, exposure, gain, binning) and none of them model intent.
+- **Exposure + gain as session identity.** Honest, and it is the field-standard
+  key — but it turns the Sun into 41 rows and the whole catalog into a 247-row
+  `session_id` migration, to express something that is really one night's work.
+
+**Consequence that is the actual scope: this moves the dark-match key.**
+
+| | lives at | matches |
+|---|---|---|
+| filter | **session** | flats (OTA + camera + filter) |
+| exposure, gain, temperature | **exposure set** | darks (camera + gain + exposure + temp) |
+
+`catalog.find_darks`, `prep.py` and the WBPP tree layout all read those off the
+session row today. The schema is the easy half; relocating dark matching one
+level down is the work. And per **M3**'s finding, assume each exposure set
+needs its **own WBPP tree** — a grouping keyword is not a stacking boundary —
+but *test* that rather than assuming it, the way the panel case was settled.
+
+**Prerequisite — microsecond exposures are not representable today.** Found
+while checking the Sun data:
+
+1. `parse.EXPOSURE_RE` matches `ms|s` only, so `500.0us` returns `None` — 236
+   of the 365 solar frames. Only `wbpp.discover_dark_files` consumes it, which
+   would then match no darks at all, silently.
+2. `names._round_exposure` rounds to 4 dp, so **100µs and 125µs both store as
+   `0.0001`** and 250µs stores as `0.0003`. If exposure is what separates
+   sub-runs, it cannot be a rounded float — carry the ASIAir label (`500us`,
+   `128ms`, `2.0s`) or store full precision.
+
+Neither blocks the Moon data (all ≥5ms, zero failures, zero collisions); both
+block the Sun.
+
+**Solar / lunar / planetary sit outside integration accounting** (Jonathan,
+2026-09-01). They can still be culled and stacked lucky-imaging style, but they
+have no darks or flats, thermal noise is negligible at these exposures, and
+"integration depth" is meaningless for them — 33.7s of eclipse must not appear
+in a target's weighted hours. That needs its own mechanism (a target kind, or a
+per-session flag) and it also disposes of **B8**'s `0.0h` rendering for these
+rows, since they should not be rendered as depth at all.
+
+**What F11 is NOT: the RGB star layer.** That layer differs by **filter**, and
+filter must stay at session level because flat matching keys on it — an
+unfiltered star layer folded into an L-Extreme session would be matched to
+L-Extreme flats. It is already handled correctly as its own session, a sibling
+under the same night (`Lights/L-Extreme/` and `Lights/NoFilter/`), and it needs
+its own calibration frames. It only becomes an F11 bracket if a star layer is
+ever shot through the *same* filter as the main run.
+
+**One expectation to set:** an after-midnight event is dated by the night it
+began. The 2026-08-28 lunar eclipse will be catalogued as **2026-08-27**.
+Correct by the session-date rule, surprising for a named event — a note field
+is probably the answer, not an exception to the rule.
+
+---
+
 ## S — Observation sites & conditions
 
 ### S1. Observation-site tracking + SQM-weighted depth — ✅ DONE

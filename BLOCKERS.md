@@ -18,9 +18,9 @@ something here is unblocked, the corresponding backlog item can move.
 1. **One `/rescan` pair is a trap — do not apply it as-is.** See **#2b**. Edit
    that session's OTA in the web UI instead of applying delete + create. (Its
    row now reads `Canon50mm` rather than `Unknown`, but the trap is unchanged.)
-2. **Decide the `Stars` sub-folder** (**#4**) — it is the only thing holding
-   the `create` proposal in `/rescan`, and it is a modelling call nobody else
-   can make.
+2. **Finish the `Stars` split** (**#4**) — decided; it is its own session. Needs
+   the deploy of `a218e07` (creates were broken), then the 3-step sequence in
+   #4. Pick `NoFilter` vs `L-Pro` before you start.
 3. **Rewrite `INSTRUME` on 154 April-2023 files** (**#14**) — the last of the
    `ASCOMCameraDriver` mess. Fixes the M 42 session that currently matches none
    of its own flats.
@@ -145,19 +145,47 @@ state and any guiding row** (the B15 failure mode).
 identity edit, so it renames the row in place and carries everything forward,
 then `apply-renames` moves the folder. Only this one session is affected.
 
-### 4. Decide how a `Stars` sub-folder should be modelled (M2's open half)
+### 4. The `Stars` sub-folder ✅ decided 2026-09-01 — it is its own session
 
 A session folder can contain a sub-folder that is **not** a filter and not a
-mosaic panel — `NGC 7000/2025-08-01_FRA400_Canon6D/Stars/`, a broadband star
-layer shot to be composited onto narrowband data.
+mosaic panel — `NGC 7000/2025-08-01_FRA400_Canon6D/20250802_FRA400_NoFilter_RGB_Stars/`,
+a broadband star layer shot to be composited onto narrowband data.
 
-The cheap half is done: the scanner no longer invents `filter='Stars'`. The
-open half is what it *should* be. M1 settled the analogous question for panels
-(a nullable identity column), and the backlog sketches a parallel
-`layer` column (`main` / `stars` / `hdr`, default `main`).
+**Decision: it is an ordinary session in its own right**, separated by filter,
+not a new dimension. Filter is already an identity component, so the two runs
+produce distinct `session_id`s with no schema change — and filter *must* stay
+at session level, because flat matching keys on OTA + camera + filter. Folding
+the star layer into the narrowband session would match unfiltered frames to
+L-Extreme flats. It needs its own calibration frames, which is exactly what
+being its own session gives it.
 
-**This blocks the one `create` proposal in #2.** Until it's decided, that
-proposal stays queued.
+End state, two sessions as siblings under one night:
+
+```
+NGC 7000/2025-08-01_FRA400_Canon6D/
+  Lights/L-Extreme/   ← 12 × 300s   (narrowband run)
+  Lights/NoFilter/    ← 40 × 10s+30s (star layer)
+```
+
+**To finish it — order matters:**
+
+1. Set the parent session's filter to `L-Extreme` in the web UI. That queues a
+   *deepening* rename (`.../2025-08-01_FRA400_Canon6D` →
+   `.../Lights/L-Extreme`), which `apply-renames` reports as **conflict** while
+   the 12 frames are still loose in the old folder. Move them into
+   `Lights/L-Extreme/` by hand, then `apply-renames` acks it.
+2. Apply the `create` proposal for the star layer (needs the fix in `a218e07`
+   deployed — creates were broken until then).
+3. Re-send its `filter` unchanged via the API to force a `lights_path`
+   recompute, then `apply-renames` moves
+   `20250802_FRA400_NoFilter_RGB_Stars/` → `Lights/NoFilter/`.
+
+**Decide `NoFilter` vs `L-Pro` first** — the folder name you wrote says
+`NoFilter`, nothing in the FITS can confirm it, and it gets baked into the
+`session_id` and the folder.
+
+Multi-exposure bracketing — the HDR and solar/lunar case this was originally
+tangled with — is now **F11**, and is deliberately a separate problem.
 
 ---
 
