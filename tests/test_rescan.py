@@ -814,3 +814,40 @@ def test_a_scanned_create_proposal_can_actually_be_applied(tmp_path):
     assert row["target"] == proposals[0]["target"]
     assert row["obs_date"] == proposals[0]["obs_date"]
     assert row["lights_path"] == proposals[0]["lights_path"]
+
+
+def test_null_filter_and_nofilter_pair_as_a_rename_not_delete_plus_create(tmp_path):
+    """The archive cannot express "filter unknown".
+
+    `session_dest_rel` writes `Lights/NoFilter/` for a NULL filter while
+    `make_session_id` writes `..._UnknownFilter`, so once a NULL-filter
+    session's folder is canonicalised the disk reads back `NoFilter` and the
+    row diverges from its own archive. That surfaced as a delete + create pair,
+    which on apply drops processed_state, processed_date, created_at and the
+    session_guiding row. Found live after it had already cost a `processed`
+    row (NGC 1499 2023-09-18).
+    """
+    from darkroom.rescan import _canonical_session_id
+
+    stored = {"session_id": "NGC1499_20230918_Canon200mm_Canon6D_UnknownFilter",
+              "target": "NGC 1499", "obs_date": "2023-09-18",
+              "ota": "Canon200mm", "camera": "Canon6D", "filter": None}
+    from_disk = dict(stored, filter="NoFilter",
+                     session_id="NGC1499_20230918_Canon200mm_Canon6D_NoFilter")
+
+    assert _canonical_session_id(stored) == _canonical_session_id(from_disk), (
+        "a NULL filter and the NoFilter its own folder round-trips to must be "
+        "the same session, or the pair reads as delete + create"
+    )
+
+
+def test_a_real_filter_still_distinguishes_sessions(tmp_path):
+    """The NoFilter/NULL equivalence must not blur genuine filters together."""
+    from darkroom.rescan import _canonical_session_id
+
+    base = {"target": "NGC 7000", "obs_date": "2025-08-01",
+            "ota": "FRA400", "camera": "Canon6D"}
+    assert (_canonical_session_id(dict(base, filter="L-Extreme"))
+            != _canonical_session_id(dict(base, filter=None)))
+    assert (_canonical_session_id(dict(base, filter="L-Extreme"))
+            != _canonical_session_id(dict(base, filter="NoFilter")))

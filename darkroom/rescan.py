@@ -139,6 +139,16 @@ def _canonical_session_id(row: dict) -> str:
       longer survives `_filter_from_path`'s KNOWN_FILTERS guard (M2), so the
       fresh scan reports `UnknownFilter`/`AstronomikL2` for a row the catalog
       still holds under the old value.
+    - **filter, again — `NoFilter` vs NULL**: the archive cannot tell them
+      apart. `session_dest_rel` writes `Lights/NoFilter/` for a NULL filter
+      while `make_session_id` writes `..._UnknownFilter`, so as soon as a
+      NULL-filter session's folder is canonicalised, the disk reads back
+      `NoFilter` and the row diverges from its own archive. Both therefore
+      canonicalize to None here. The cost is that a deliberate NULL ->
+      'NoFilter' correction is not *detected* by a rescan; the benefit is that
+      ~20 sessions stop surfacing as delete + create pairs that would drop
+      processed_state on apply. (Found live 2026-09-01, after it had already
+      cost one `processed` row.)
 
     Without canonicalizing both, each of those surfaces as an unrelated
     delete + create — which on apply would drop the row's id/created_at,
@@ -155,7 +165,7 @@ def _canonical_session_id(row: dict) -> str:
         row.get("obs_date") or "",
         row.get("ota") or "",
         row.get("camera") or "",
-        filter_ if filter_ in KNOWN_FILTERS else None,
+        filter_ if filter_ in KNOWN_FILTERS and filter_ != "NoFilter" else None,
         panel=row.get("panel") or panel,
     )
 
