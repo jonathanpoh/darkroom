@@ -24,7 +24,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from darkroom.config import resolve_path
+from darkroom.config import require_archive, resolve_path
 
 #: Log filename prefixes we archive. Autorun logs are archived but not parsed
 #: (see the F4 plan); PHD2 guide logs are what `scan-guiding` consumes.
@@ -105,9 +105,7 @@ def _import_run(args: argparse.Namespace) -> None:
     if not source.is_dir():
         sys.exit(f"Error: log source is not a directory: {source}")
 
-    archive = resolve_path(args.archive, "DARKROOM_ARCHIVE", "archive_path")
-    if archive is None:
-        sys.exit("Error: --archive / DARKROOM_ARCHIVE / darkroom.toml archive_path required")
+    archive = require_archive(args.archive)
 
     dest = archive / ARCHIVE_SUBDIR
     plan = plan_import(source, dest)

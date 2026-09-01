@@ -17,11 +17,12 @@ from darkroom.catalog import (
     find_flat_darks,
     find_flats,
     flat_offset_label,
+    format_session_lines,
+    list_sessions,
     nearest_dark,
-    query_all_sessions,
 )
 from darkroom.catalog_client import CatalogBackend, resolve_backend
-from darkroom.config import resolve_path
+from darkroom.config import require_archive, resolve_path
 from darkroom.names import (
     panel_sort_key,
     parse_wbpp_panel_dir,
@@ -45,23 +46,11 @@ from darkroom.wbpp import (
 # ── --list ────────────────────────────────────────────────────────────────────
 
 def cmd_list(backend: CatalogBackend, target: str | None) -> None:
-    if target:
-        rows = backend.query_sessions(target=target)
-    else:
-        rows = query_all_sessions(backend)
-
+    rows = list_sessions(backend, target)
     if not rows:
         print("No sessions found.")
         return
-
-    for tgt, group in groupby(rows, key=lambda r: r["target"]):
-        print(f"\n{tgt}")
-        for row in group:
-            total_h = (row["total_integration_sec"] or 0) / 3600
-            print(
-                f"  {row['obs_date']}  {row['session_id']}"
-                f"  {row['frame_count']} frames  {total_h:.1f}h"
-            )
+    print("\n".join(format_session_lines(rows)))
 
 
 # ── prep helpers ─────────────────────────────────────────────────────────────
@@ -213,20 +202,16 @@ def _build_night(
     # Ranked by find_darks (B11). Usually just one master, but a stale
     # folder_path on the nearest can leave its file missing on disk — walk
     # the ranking and take the first one that's actually there.
-    best = None
-    skipped = []
-    for row in master_dark_rows:
-        if (output / row["folder_path"]).exists():
-            best = row
-            break
-        skipped.append(row)
+    present = [(output / r["folder_path"]).exists() for r in master_dark_rows]
+    on_disk = [r for r, ok in zip(master_dark_rows, present) if ok]
+    best = on_disk[0] if on_disk else None
+    skipped = master_dark_rows[: present.index(True)] if best is not None else []
     if best is not None:
         if session_temp is None:
             print("  Note: session has no recorded temperature — taking the first dark master.")
         else:
             # Tie check runs against masters present on disk only — a missing
             # file can't be picked, so it isn't a real tie candidate.
-            on_disk = [r for r in master_dark_rows if (output / r["folder_path"]).exists()]
             tied = dark_temp_ties(on_disk, session_temp)
             if tied:
                 temps = ", ".join(f"{r['temperature_c']:g}C" for r in tied)
@@ -274,12 +259,13 @@ def _build_night(
     master_bias_rows = [r for r in bias_rows if r.get("is_master")]
     bias_count = 0
     for row in master_bias_rows or bias_rows:
-        if row.get("is_master"):
-            master_path = output / row["folder_path"]
-            files = [master_path] if master_path.exists() else []
+        p = output / row["folder_path"]
+        if not p.exists():
+            files = []
+        elif row.get("is_master"):
+            files = [p]  # a master row's folder_path is the .xisf itself
         else:
-            p = output / row["folder_path"]
-            files = fits_files(p) if p.exists() else []
+            files = fits_files(p)
         bias_count += make_symlinks(files, session_dir / "Bias")
     if bias_count == 0:
         print("  Bias/                     0 symlinks  [no bias found]")
@@ -620,9 +606,7 @@ def run(args: argparse.Namespace) -> None:
             "picker. Specify --target or --session (or --list to browse)."
         )
 
-    output = resolve_path(args.archive, "DARKROOM_ARCHIVE", "archive_path")
-    if output is None:
-        sys.exit("Error: --archive / DARKROOM_ARCHIVE / darkroom.toml archive_path required")
+    output = require_archive(args.archive)
 
     wbpp_root = resolve_path(args.wbpp, "DARKROOM_WBPP", "wbpp_path") or Path("./WBPP")
 

@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 from darkroom.catalog_client import CatalogBackend, resolve_backend
-from darkroom.config import resolve_path
+from darkroom.config import require_archive, resolve_path
 from darkroom.names import (
     panel_sort_key,
     parse_wbpp_panel_dir,
@@ -482,9 +482,7 @@ def cmd_finish(
 
 def run(args: argparse.Namespace) -> None:
     """Entry point invoked by darkroom.cli."""
-    output = resolve_path(args.archive, "DARKROOM_ARCHIVE", "archive_path")
-    if output is None:
-        sys.exit("Error: --archive / DARKROOM_ARCHIVE / darkroom.toml archive_path required")
+    output = require_archive(args.archive)
 
     wbpp_root = resolve_path(args.wbpp, "DARKROOM_WBPP", "wbpp_path") or Path("./WBPP")
 

@@ -13,6 +13,7 @@ time) at module load.
 from __future__ import annotations
 
 from datetime import date, timedelta
+from itertools import groupby
 
 from darkroom.catalog_client import CatalogBackend
 
@@ -20,6 +21,35 @@ from darkroom.catalog_client import CatalogBackend
 def query_all_sessions(backend: CatalogBackend) -> list[dict]:
     """Return all sessions ordered by target then obs_date."""
     return sorted(backend.query_sessions(), key=lambda r: (r["target"], r["obs_date"]))
+
+
+def list_sessions(backend: CatalogBackend, target: str | None = None) -> list[dict]:
+    """Sessions for one target, or every session grouped by target (for listings)."""
+    return backend.query_sessions(target=target) if target else query_all_sessions(backend)
+
+
+def format_session_lines(rows: list[dict], *, with_state: bool = False) -> list[str]:
+    """Render a session listing grouped by target: one header line per target,
+    then `  <obs_date>  <session_id>  <n> frames  <h>h` per session, with the
+    processed_state appended in brackets when *with_state* is set and the
+    session is not plain unprocessed. Rows must already be grouped by target.
+    """
+    lines: list[str] = []
+    for tgt, group in groupby(rows, key=lambda r: r["target"]):
+        lines.append(f"\n{tgt}")
+        for row in group:
+            hrs = (row["total_integration_sec"] or 0) / 3600
+            tag = ""
+            if with_state:
+                state = row.get("processed_state") or "unprocessed"
+                if state != "unprocessed":
+                    detail = row.get("processed_date") or row.get("processed_path") or ""
+                    tag = f"  [{state}{': ' + detail if detail else ''}]"
+            lines.append(
+                f"  {row['obs_date']}  {row['session_id']}"
+                f"  {row['frame_count']} frames  {hrs:.1f}h{tag}"
+            )
+    return lines
 
 
 DEFAULT_DARK_TEMP_TOLERANCE = 3.0

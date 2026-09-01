@@ -9,8 +9,8 @@ from itertools import groupby
 from pathlib import Path
 
 from darkroom import guidelog
-from darkroom.catalog import query_all_sessions
-from darkroom.catalog_client import resolve_backend
+from darkroom.catalog import format_session_lines, list_sessions
+from darkroom.catalog_client import CatalogBackend, resolve_backend
 from darkroom.cataloger import (
     _parse_site_deg,
     mark_processed_command,
@@ -18,7 +18,8 @@ from darkroom.cataloger import (
     scan_all_command,
     scan_calibration_command,
 )
-from darkroom.config import resolve_catalog, resolve_path
+from darkroom.config import require_archive, resolve_catalog, resolve_path
+from darkroom.parse import fits_files
 from darkroom.sites import describe_disagreement, modal_site, resolve_site
 
 
@@ -27,44 +28,43 @@ def _resolve_db(args: argparse.Namespace) -> None:
     args.db = str(resolve_catalog(args.catalog))
 
 
-def _list_run(args: argparse.Namespace) -> None:
-    backend = resolve_backend(args.catalog)
-    rows = (
-        backend.query_sessions(target=args.target)
-        if args.target
-        else query_all_sessions(backend)
+def _backend(args: argparse.Namespace) -> CatalogBackend:
+    """resolve_backend from the shared --catalog/--catalog-url/--api-token flags.
+
+    The URL/token flags are optional on the namespace so subcommands (and
+    tests) that only declare --catalog still resolve through env/toml.
+    """
+    return resolve_backend(
+        args.catalog,
+        url_flag=getattr(args, "catalog_url", None),
+        token_flag=getattr(args, "api_token", None),
     )
+
+
+def _exit_catalog_write_error(e: sqlite3.OperationalError) -> None:
+    """The one hint every --apply path gives when the local catalog schema is stale."""
+    sys.exit(
+        f"Error writing to catalog: {e}\n"
+        "Hint: run any `darkroom catalog` command against this catalog once "
+        "(e.g. `catalog list`) to ensure it's migrated to the current schema, "
+        "then retry --apply."
+    )
+
+
+def _list_run(args: argparse.Namespace) -> None:
+    rows = list_sessions(_backend(args), args.target)
     if not rows:
         print("No sessions found.")
         return
-    for tgt, group in groupby(rows, key=lambda r: r["target"]):
-        print(f"\n{tgt}")
-        for row in group:
-            hrs = (row["total_integration_sec"] or 0) / 3600
-            state = row.get("processed_state") or "unprocessed"
-            if state == "unprocessed":
-                tag = ""
-            else:
-                detail = row.get("processed_date") or row.get("processed_path") or ""
-                tag = f"  [{state}{': ' + detail if detail else ''}]"
-            print(
-                f"  {row['obs_date']}  {row['session_id']}"
-                f"  {row['frame_count']} frames  {hrs:.1f}h{tag}"
-            )
+    print("\n".join(format_session_lines(rows, with_state=True)))
 
 
 def _scan_lights_run(args: argparse.Namespace) -> None:
-    backend = resolve_backend(
-        args.catalog, url_flag=args.catalog_url, token_flag=args.api_token
-    )
-    scan_all_command(args, backend=backend)
+    scan_all_command(args, backend=_backend(args))
 
 
 def _scan_calibration_run(args: argparse.Namespace) -> None:
-    backend = resolve_backend(
-        args.catalog, url_flag=args.catalog_url, token_flag=args.api_token
-    )
-    scan_calibration_command(args, backend=backend)
+    scan_calibration_command(args, backend=_backend(args))
 
 
 def _mark_run(args: argparse.Namespace) -> None:
@@ -87,10 +87,8 @@ def _scan_processed_run(args: argparse.Namespace) -> None:
     """
     from darkroom import procscan
 
-    backend = resolve_backend(args.catalog)
-    archive = resolve_path(args.archive, "DARKROOM_ARCHIVE", "archive_path")
-    if archive is None:
-        sys.exit("Error: --archive / DARKROOM_ARCHIVE / darkroom.toml archive_path required")
+    backend = _backend(args)
+    archive = require_archive(args.archive)
 
     transitions = procscan.scan(archive, backend)
     changed = [t for t in transitions if t.change]
@@ -112,12 +110,7 @@ def _scan_processed_run(args: argparse.Namespace) -> None:
     try:
         applied = procscan.apply(backend, transitions)
     except sqlite3.OperationalError as e:
-        sys.exit(
-            f"Error writing to catalog: {e}\n"
-            "Hint: run any `darkroom catalog` command against this catalog once "
-            "(e.g. `catalog list`) to ensure it's migrated to the current schema, "
-            "then retry --apply."
-        )
+        _exit_catalog_write_error(e)
 
     for t in changed:
         tag = f"  [{t.evidence_date}]" if t.evidence_date else ""
@@ -197,12 +190,8 @@ def _rescan_archive_run(args: argparse.Namespace) -> None:
     """
     from darkroom import rescan
 
-    backend = resolve_backend(
-        args.catalog, url_flag=args.catalog_url, token_flag=args.api_token
-    )
-    archive = resolve_path(args.archive, "DARKROOM_ARCHIVE", "archive_path")
-    if archive is None:
-        sys.exit("Error: --archive / DARKROOM_ARCHIVE / darkroom.toml archive_path required")
+    backend = _backend(args)
+    archive = require_archive(args.archive)
 
     try:
         proposals = rescan.scan(
@@ -260,7 +249,7 @@ def _scan_guiding_run(args: argparse.Namespace) -> None:
     """
     from darkroom import guidescan, logs
 
-    backend = resolve_backend(args.catalog)
+    backend = _backend(args)
 
     if args.logs:
         logs_dir = Path(args.logs).expanduser()
@@ -304,12 +293,7 @@ def _scan_guiding_run(args: argparse.Namespace) -> None:
     try:
         applied = guidescan.apply(backend, result)
     except sqlite3.OperationalError as e:
-        sys.exit(
-            f"Error writing to catalog: {e}\n"
-            "Hint: run any `darkroom catalog` command against this catalog once "
-            "(e.g. `catalog list`) to ensure it's migrated to the current schema, "
-            "then retry --apply."
-        )
+        _exit_catalog_write_error(e)
 
     print(f"\nApplied guiding stats to {applied} session(s)")
 
@@ -353,12 +337,8 @@ def _apply_renames_run(args: argparse.Namespace) -> None:
     """
     from darkroom import renames
 
-    backend = resolve_backend(
-        args.catalog, url_flag=args.catalog_url, token_flag=args.api_token
-    )
-    archive = resolve_path(args.archive, "DARKROOM_ARCHIVE", "archive_path")
-    if archive is None:
-        sys.exit("Error: --archive / DARKROOM_ARCHIVE / darkroom.toml archive_path required")
+    backend = _backend(args)
+    archive = require_archive(args.archive)
     if not archive.is_dir():
         sys.exit(f"Error: archive path is not a directory: {archive}")
 
@@ -386,9 +366,7 @@ def _apply_renames_run(args: argparse.Namespace) -> None:
 
 
 def _sites_add_run(args: argparse.Namespace) -> None:
-    backend = resolve_backend(
-        args.catalog, url_flag=args.catalog_url, token_flag=args.api_token
-    )
+    backend = _backend(args)
     site = {
         "name": args.name,
         "lat": args.lat,
@@ -411,9 +389,7 @@ def _fmt_opt(val, spec: str = "") -> str:
 
 
 def _sites_list_run(args: argparse.Namespace) -> None:
-    backend = resolve_backend(
-        args.catalog, url_flag=args.catalog_url, token_flag=args.api_token
-    )
+    backend = _backend(args)
     sites = backend.list_sites()
     if not sites:
         print("No sites configured. Run `darkroom catalog sites add` to add one.")
@@ -454,23 +430,20 @@ def _sites_list_run(args: argparse.Namespace) -> None:
             print(f"  {row['session_id']}: {row['site_lat']:.4f}, {row['site_lon']:.4f}")
 
 
+# `sites set` flag attribute -> site column; --home is a store_true, handled apart.
+_SITE_SET_FIELDS = {
+    "new_name": "name", "lat": "lat", "lon": "lon",
+    "radius_m": "radius_m", "bortle": "bortle", "sqm": "sqm",
+}
+
+
 def _sites_set_run(args: argparse.Namespace) -> None:
-    backend = resolve_backend(
-        args.catalog, url_flag=args.catalog_url, token_flag=args.api_token
-    )
-    fields: dict = {}
-    if args.new_name is not None:
-        fields["name"] = args.new_name
-    if args.lat is not None:
-        fields["lat"] = args.lat
-    if args.lon is not None:
-        fields["lon"] = args.lon
-    if args.radius_m is not None:
-        fields["radius_m"] = args.radius_m
-    if args.bortle is not None:
-        fields["bortle"] = args.bortle
-    if args.sqm is not None:
-        fields["sqm"] = args.sqm
+    backend = _backend(args)
+    fields = {
+        col: getattr(args, attr)
+        for attr, col in _SITE_SET_FIELDS.items()
+        if getattr(args, attr) is not None
+    }
     if args.home:
         fields["is_home"] = True
 
@@ -493,275 +466,225 @@ def _sites_set_run(args: argparse.Namespace) -> None:
         print(f"updated site {args.name!r}")
 
 
-def _backfill_sites_run(args: argparse.Namespace) -> None:
-    """Backfill site_lat/site_lon on sessions from archive FITS SITELAT/SITELONG.
+# ── backfill-* : fill NULL session columns from archive FITS headers ─────────
+#
+# `backfill-sites` and `backfill-times` share everything but the per-session
+# extraction: candidate selection (lights_path present, target column NULL —
+# so re-running is a no-op once applied), the per-frame header read with its
+# error tally, the grouped dry-run listing, the --apply write loop through the
+# catalog backend (local file or webapi, per catalog_url — W9), and the
+# summary line. _backfill_run is that scaffold; each command supplies an
+# extractor returning either the values to write or a skip reason.
 
-    Each session's position is the modal value across all its frames, and any
-    frame disagreeing by more than a kilometre is reported on stderr — the
-    ASIAir's phone-derived GPS can go stale or resolve by WiFi, so a single
-    frame is not trustworthy (see sites.modal_site).
+# Skip reasons every backfill tallies. `no_headers` is the "nothing usable in
+# the frames" bucket; `missing` is the folder itself. A command may add its
+# own (backfill-times: `wrong_night`) via _Backfill.extra_skips.
+_NO_HEADERS = "no_headers"
+_MISSING = "missing"
+_UNREADABLE = "unreadable"  # every frame failed to open; counted under read_errors only
 
-    Dry run (default) is pure-read: it never writes to the catalog. --apply
-    writes via update_session_fields, through the catalog backend (local
-    file or webapi, per catalog_url — W9). Only sessions with a NULL
-    site_lat are ever candidates, so re-running is a no-op once applied
-    (idempotent by construction).
+
+class _Backfill:
+    """One backfill command's specifics, consumed by _backfill_run."""
+
+    def __init__(
+        self,
+        *,
+        null_column: str,
+        columns: tuple[str, ...],
+        headers_label: str,
+        extract,
+        describe,
+        extra_skips: tuple[tuple[str, str], ...] = (),
+    ) -> None:
+        self.null_column = null_column      # candidates are rows where this is NULL
+        self.columns = columns              # update_session_fields keys, in `values` order
+        self.headers_label = headers_label  # summary wording for the no_headers tally
+        self.extract = extract              # (row, headers) -> values tuple | skip reason
+        self.describe = describe            # (backend) -> ((row, values) -> dry-run text)
+        self.extra_skips = extra_skips      # (reason, summary label) in print order
+
+
+def _read_headers(frames: list[Path]) -> tuple[list, int]:
+    """Open every frame's header; return (headers, unreadable count).
+
+    Every frame, not just the first: the extractors need the whole set (a
+    modal position, a min/max span), and read errors are skipped per-frame so
+    one bad file doesn't cost the session its result.
     """
     from astropy.io import fits
 
-    backend = resolve_backend(
-        args.catalog, url_flag=args.catalog_url, token_flag=args.api_token
-    )
-    archive = resolve_path(args.archive, "DARKROOM_ARCHIVE", "archive_path")
-    if archive is None:
-        sys.exit("Error: --archive / DARKROOM_ARCHIVE / darkroom.toml archive_path required")
+    headers = []
+    unreadable = 0
+    for frame in frames:
+        try:
+            headers.append(fits.getheader(frame))
+        except Exception:
+            unreadable += 1
+    return headers, unreadable
+
+
+def _backfill_run(args: argparse.Namespace, spec: _Backfill) -> None:
+    backend = _backend(args)
+    archive = require_archive(args.archive)
 
     rows = backend.query_sessions()
-    candidates = [r for r in rows if r.get("lights_path") and r.get("site_lat") is None]
+    candidates = [r for r in rows if r.get("lights_path") and r.get(spec.null_column) is None]
 
-    found = []  # list[(row, lat, lon)]
-    no_headers = 0
-    missing = 0
-    read_errors = 0
-
+    found: list[tuple[dict, tuple]] = []
+    tally: Counter = Counter()
     for row in candidates:
         folder = archive / row["lights_path"]
         if not folder.is_dir():
-            missing += 1
+            tally[_MISSING] += 1
             continue
-
-        frames = [
-            p
-            for p in sorted(folder.rglob("*"))
-            if p.suffix.lower() in (".fit", ".fits") and "thumbnail" not in p.name.lower()
-        ]
+        frames = fits_files(folder, recursive=True)
         if not frames:
-            no_headers += 1
+            tally[_NO_HEADERS] += 1
             continue
-
-        # Every frame, not just the first: a stale or WiFi-geolocated fix on
-        # one frame would otherwise decide the whole session (see
-        # sites.modal_site). Read errors are skipped per-frame so one bad file
-        # doesn't cost the session its coordinates.
-        positions = []
-        unreadable = 0
-        for frame in frames:
-            try:
-                header = fits.getheader(frame)
-            except Exception:
-                unreadable += 1
-                continue
-            positions.append(
-                (
-                    _parse_site_deg(header.get("SITELAT")),
-                    _parse_site_deg(header.get("SITELONG")),
-                )
-            )
-
+        headers, unreadable = _read_headers(frames)
         if unreadable:
-            read_errors += 1
-        if not positions:
+            tally["read_errors"] += 1
+        result = spec.extract(row, headers)
+        if isinstance(result, str):
+            tally[result] += 1
             continue
+        found.append((row, result))
 
-        lat, lon, outliers = modal_site(positions)
-        if lat is None:
-            no_headers += 1
-            continue
-        if outliers:
-            usable = sum(1 for la, lo in positions if la is not None and lo is not None)
-            for line in describe_disagreement(
-                row["session_id"], lat, lon, outliers, usable
-            ):
-                print(line, file=sys.stderr)
-        found.append((row, lat, lon))
+    def summary(first: str) -> str:
+        parts = [
+            first,
+            f"{tally[_NO_HEADERS]} {spec.headers_label}",
+            f"{tally[_MISSING]} missing on disk",
+        ]
+        parts.extend(
+            f"{tally[reason]} {label}" for reason, label in spec.extra_skips if tally[reason]
+        )
+        if tally["read_errors"]:
+            parts.append(f"{tally['read_errors']} read errors")
+        return ", ".join(parts)
 
     if not args.apply:
-        sites = backend.list_sites()
+        describe = spec.describe(backend)
         for tgt, group in groupby(
             sorted(found, key=lambda f: (f[0]["target"], f[0]["session_id"])),
             key=lambda f: f[0]["target"],
         ):
             print(f"\n{tgt}")
-            for row, lat, lon in group:
-                site = resolve_site(lat, lon, sites)
-                site_name = site["name"] if site else "(no site in radius)"
-                print(f"  {row['session_id']}: {lat:.4f}, {lon:.4f} -> {site_name}")
-        parts = [
-            f"{len(found)} would be set",
-            f"{no_headers} no site headers",
-            f"{missing} missing on disk",
-        ]
-        if read_errors:
-            parts.append(f"{read_errors} read errors")
-        print(f"\n{', '.join(parts)}; run with --apply to write")
+            for row, values in group:
+                print(f"  {row['session_id']}: {describe(row, values)}")
+        print(f"\n{summary(f'{len(found)} would be set')}; run with --apply to write")
         return
 
     try:
         written = 0
-        for row, lat, lon in found:
-            if backend.update_session_fields(row["session_id"], site_lat=lat, site_lon=lon):
+        for row, values in found:
+            if backend.update_session_fields(row["session_id"], **dict(zip(spec.columns, values))):
                 written += 1
     except sqlite3.OperationalError as e:
-        sys.exit(
-            f"Error writing to catalog: {e}\n"
-            "Hint: run any `darkroom catalog` command against this catalog once "
-            "(e.g. `catalog list`) to ensure it's migrated to the current schema, "
-            "then retry --apply."
-        )
+        _exit_catalog_write_error(e)
 
-    parts = [
-        f"{written} set",
-        f"{no_headers} no site headers",
-        f"{missing} missing on disk",
+    print(summary(f"{written} set"))
+
+
+def _extract_site(row: dict, headers: list) -> tuple[float, float] | str:
+    """Modal SITELAT/SITELONG across the session's frames (see sites.modal_site).
+
+    A stale or WiFi-geolocated fix on one frame must not decide the whole
+    session, so every frame votes and any outlier more than a kilometre off
+    is reported on stderr.
+    """
+    if not headers:
+        return _UNREADABLE
+    positions = [
+        (_parse_site_deg(h.get("SITELAT")), _parse_site_deg(h.get("SITELONG")))
+        for h in headers
     ]
-    if read_errors:
-        parts.append(f"{read_errors} read errors")
-    print(", ".join(parts))
+    lat, lon, outliers = modal_site(positions)
+    if lat is None:
+        return _NO_HEADERS
+    if outliers:
+        usable = sum(1 for la, lo in positions if la is not None and lo is not None)
+        for line in describe_disagreement(row["session_id"], lat, lon, outliers, usable):
+            print(line, file=sys.stderr)
+    return lat, lon
+
+
+def _describe_site(backend: CatalogBackend):
+    sites = backend.list_sites()
+
+    def describe(row: dict, values: tuple) -> str:
+        lat, lon = values
+        site = resolve_site(lat, lon, sites)
+        site_name = site["name"] if site else "(no site in radius)"
+        return f"{lat:.4f}, {lon:.4f} -> {site_name}"
+
+    return describe
+
+
+def _backfill_sites_run(args: argparse.Namespace) -> None:
+    """Backfill site_lat/site_lon on sessions from archive FITS SITELAT/SITELONG.
+
+    Dry run (default) is pure-read. --apply writes via update_session_fields.
+    Only sessions with a NULL site_lat are ever candidates (idempotent).
+    """
+    _backfill_run(args, _Backfill(
+        null_column="site_lat",
+        columns=("site_lat", "site_lon"),
+        headers_label="no site headers",
+        extract=_extract_site,
+        describe=_describe_site,
+    ))
+
+
+_WRONG_NIGHT = "wrong_night"
+
+
+def _extract_span(row: dict, headers: list) -> tuple[str, str] | str:
+    """UTC wall-clock span of the frames on *this session's* imaging night.
+
+    A folder is not a session. Legacy archive layouts (pre-F4) can have two
+    session rows pointing at one lights_path, and taking the span over the
+    whole folder then hands both of them the same multi-day window — observed
+    as a 76-hour "session" that swallowed three nights' guide rows and
+    reported an identical bogus RMS for both. Keep only frames whose imaging
+    night (cataloger.compute_imaging_night, the noon-to-noon rule the scanner
+    groups by) equals the session's obs_date; never fall back to the
+    unfiltered folder span. start_utc is the earliest such DATE-OBS; end_utc
+    is the latest one's DATE-OBS plus *that* frame's exposure, so the span
+    covers the final sub-exposure (F4 intersects guide-log segments against it).
+    """
+    from darkroom.cataloger import compute_imaging_night, compute_session_span
+
+    stamps = [
+        (h.get("DATE-OBS", ""), h.get("EXPOSURE", h.get("EXPTIME", 0.0))) for h in headers
+    ]
+    nights = [compute_imaging_night(date_obs) for date_obs, _ in stamps]
+    on_night = [s for s, night in zip(stamps, nights) if night == row["obs_date"]]
+    if not on_night:
+        # Nothing dated at all is a header problem; dated frames that all
+        # belong to other nights is a layout problem. Both mean no span.
+        return _WRONG_NIGHT if any(n is not None for n in nights) else _NO_HEADERS
+    start_utc, end_utc = compute_session_span(on_night)
+    if start_utc is None:
+        return _NO_HEADERS
+    return start_utc, end_utc
 
 
 def _backfill_times_run(args: argparse.Namespace) -> None:
     """Backfill start_utc/end_utc on sessions from archive FITS DATE-OBS/EXPTIME.
 
-    Only frames whose imaging night (cataloger.compute_imaging_night, the
-    canonical noon-to-noon rule) equals the session's obs_date are considered:
-    a lights_path folder can hold more than one night, and more than one
-    session row can point at the same folder. start_utc is then the earliest
-    such frame's DATE-OBS; end_utc is the latest one's DATE-OBS plus *that*
-    frame's exposure, so the span covers the final sub-exposure (F4 intersects
-    guide-log segments against it).
-
-    Dry run (default) is pure-read: it never writes to the catalog. --apply
-    writes via update_session_fields, through the catalog backend (local file
-    or webapi, per catalog_url — W9). Only sessions with a NULL start_utc are
-    ever candidates, so re-running is a no-op once applied (idempotent by
-    construction).
+    Dry run (default) is pure-read. --apply writes via update_session_fields.
+    Only sessions with a NULL start_utc are ever candidates (idempotent).
     """
-    from astropy.io import fits
-
-    from darkroom.cataloger import compute_imaging_night, compute_session_span
-
-    backend = resolve_backend(
-        args.catalog, url_flag=args.catalog_url, token_flag=args.api_token
-    )
-    archive = resolve_path(args.archive, "DARKROOM_ARCHIVE", "archive_path")
-    if archive is None:
-        sys.exit("Error: --archive / DARKROOM_ARCHIVE / darkroom.toml archive_path required")
-
-    rows = backend.query_sessions()
-    candidates = [r for r in rows if r.get("lights_path") and r.get("start_utc") is None]
-
-    found = []  # list[(row, start_utc, end_utc)]
-    no_headers = 0
-    missing = 0
-    read_errors = 0
-    wrong_night = 0
-
-    for row in candidates:
-        folder = archive / row["lights_path"]
-        if not folder.is_dir():
-            missing += 1
-            continue
-
-        frames = [
-            p
-            for p in sorted(folder.rglob("*"))
-            if p.suffix.lower() in (".fit", ".fits") and "thumbnail" not in p.name.lower()
-        ]
-        if not frames:
-            no_headers += 1
-            continue
-
-        # Every frame: the span's endpoints are the min and the max, and
-        # sorted() above is filename order, which is not guaranteed
-        # chronological. Read errors are skipped per-frame so one bad file
-        # doesn't cost the session its span.
-        stamps = []
-        unreadable = 0
-        for frame in frames:
-            try:
-                header = fits.getheader(frame)
-            except Exception:
-                unreadable += 1
-                continue
-            stamps.append(
-                (
-                    header.get("DATE-OBS", ""),
-                    header.get("EXPOSURE", header.get("EXPTIME", 0.0)),
-                )
-            )
-
-        if unreadable:
-            read_errors += 1
-
-        # A folder is not a session. Legacy archive layouts (pre-F4) can have
-        # two session rows pointing at one lights_path, and taking the span
-        # over the whole folder then hands both of them the same multi-day
-        # window — observed as a 76-hour "session" that swallowed three
-        # nights' guide rows and reported an identical bogus RMS for both.
-        # Keep only frames whose imaging night is this session's, using the
-        # same noon-to-noon rule the scanner groups by.
-        on_night = [s for s in stamps if compute_imaging_night(s[0]) == row["obs_date"]]
-        if not on_night:
-            # Nothing dated at all is a header problem; dated frames that all
-            # belong to other nights is a layout problem. Both mean no span
-            # gets written — never fall back to the unfiltered folder span.
-            if any(compute_imaging_night(s[0]) is not None for s in stamps):
-                wrong_night += 1
-            else:
-                no_headers += 1
-            continue
-
-        start_utc, end_utc = compute_session_span(on_night)
-        if start_utc is None:
-            no_headers += 1
-            continue
-        found.append((row, start_utc, end_utc))
-
-    if not args.apply:
-        for tgt, group in groupby(
-            sorted(found, key=lambda f: (f[0]["target"], f[0]["session_id"])),
-            key=lambda f: f[0]["target"],
-        ):
-            print(f"\n{tgt}")
-            for row, start_utc, end_utc in group:
-                print(f"  {row['session_id']}: {start_utc} -> {end_utc}")
-        parts = [
-            f"{len(found)} would be set",
-            f"{no_headers} no date headers",
-            f"{missing} missing on disk",
-        ]
-        if wrong_night:
-            parts.append(f"{wrong_night} skipped (no frames on the session night)")
-        if read_errors:
-            parts.append(f"{read_errors} read errors")
-        print(f"\n{', '.join(parts)}; run with --apply to write")
-        return
-
-    try:
-        written = 0
-        for row, start_utc, end_utc in found:
-            if backend.update_session_fields(
-                row["session_id"], start_utc=start_utc, end_utc=end_utc
-            ):
-                written += 1
-    except sqlite3.OperationalError as e:
-        sys.exit(
-            f"Error writing to catalog: {e}\n"
-            "Hint: run any `darkroom catalog` command against this catalog once "
-            "(e.g. `catalog list`) to ensure it's migrated to the current schema, "
-            "then retry --apply."
-        )
-
-    parts = [
-        f"{written} set",
-        f"{no_headers} no date headers",
-        f"{missing} missing on disk",
-    ]
-    if wrong_night:
-        parts.append(f"{wrong_night} skipped (no frames on the session night)")
-    if read_errors:
-        parts.append(f"{read_errors} read errors")
-    print(", ".join(parts))
+    _backfill_run(args, _Backfill(
+        null_column="start_utc",
+        columns=("start_utc", "end_utc"),
+        headers_label="no date headers",
+        extract=_extract_span,
+        describe=lambda backend: (lambda row, values: f"{values[0]} -> {values[1]}"),
+        extra_skips=((_WRONG_NIGHT, "skipped (no frames on the session night)"),),
+    ))
 
 
 def add_subparser(subparsers) -> None:
@@ -780,8 +703,8 @@ def add_subparser(subparsers) -> None:
         help="astro_catalog.db (env: DARKROOM_CATALOG, default: ~/.config/darkroom/astro_catalog.db)",
     )
 
-    # Shared --catalog-url/--api-token flags (W9 backend abstraction).
-    # Used by any subcommand that writes through the catalog backend.
+    # Shared --catalog-url/--api-token flags (W9 backend abstraction), on
+    # every subcommand that reads or writes through the catalog backend.
     catalog_url_flag = argparse.ArgumentParser(add_help=False)
     catalog_url_flag.add_argument("--catalog-url", metavar="URL",
                                    help="Catalog API base URL (env: DARKROOM_CATALOG_URL)")
@@ -830,7 +753,7 @@ def add_subparser(subparsers) -> None:
     mig.set_defaults(func=_migrate_run)
 
     sp = sub.add_parser(
-        "scan-processed", parents=[catalog_flag],
+        "scan-processed", parents=[catalog_flag, catalog_url_flag],
         help="Scan the archive for processing output and reconcile processed_state",
         description="Scan <archive>/01_Deep Sky Objects/<target>/ for stacked/edited "
                     "output (.xisf masters/intermediates, PixInsight project files, "
@@ -878,7 +801,7 @@ def add_subparser(subparsers) -> None:
     rs.set_defaults(func=_rescan_archive_run)
 
     sg = sub.add_parser(
-        "scan-guiding", parents=[catalog_flag],
+        "scan-guiding", parents=[catalog_flag, catalog_url_flag],
         help="Match PHD2 guide logs to sessions by time and store guiding stats",
         description="Parse every PHD2_GuideLog_*.txt in the log directory and "
                     "intersect its guiding segments with each session's stored UTC "
@@ -907,7 +830,7 @@ def add_subparser(subparsers) -> None:
     sg.set_defaults(func=_scan_guiding_run)
 
     ar = sub.add_parser(
-        "apply-renames", parents=[catalog_flag],
+        "apply-renames", parents=[catalog_flag, catalog_url_flag],
         help="Execute pending archive folder renames owed by catalog identity edits",
         description="Read the pending_renames ledger (populated server-side when a "
                     "catalog identity edit changes a session's lights_path — the "
@@ -917,10 +840,6 @@ def add_subparser(subparsers) -> None:
                     "nothing); pass --apply to move folders and ack the ledger.",
     )
     ar.add_argument("--archive", metavar="PATH", help="Archive root (env: DARKROOM_ARCHIVE)")
-    ar.add_argument("--catalog-url", metavar="URL",
-                     help="Catalog API base URL (env: DARKROOM_CATALOG_URL)")
-    ar.add_argument("--api-token", metavar="TOKEN",
-                     help="Catalog API bearer token (env: DARKROOM_API_TOKEN)")
     ar.add_argument("--apply", action="store_true",
                      help="Move folders and ack the ledger (default: dry run, read-only)")
     ar.set_defaults(func=_apply_renames_run)

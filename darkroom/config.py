@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import tomllib
 from pathlib import Path
 
@@ -40,6 +41,14 @@ def resolve_path(
     if toml_key in cfg:
         return Path(cfg[toml_key]).expanduser()
     return None
+
+
+def require_archive(flag_val: str | None) -> Path:
+    """Resolve the archive root (flag → DARKROOM_ARCHIVE → toml) or exit with the standard error."""
+    archive = resolve_path(flag_val, "DARKROOM_ARCHIVE", "archive_path")
+    if archive is None:
+        sys.exit("Error: --archive / DARKROOM_ARCHIVE / darkroom.toml archive_path required")
+    return archive
 
 
 _DEFAULT_CATALOG = Path.home() / ".config" / "darkroom" / "astro_catalog.db"
