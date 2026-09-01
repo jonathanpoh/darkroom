@@ -851,3 +851,23 @@ def test_a_real_filter_still_distinguishes_sessions(tmp_path):
             != _canonical_session_id(dict(base, filter=None)))
     assert (_canonical_session_id(dict(base, filter="L-Extreme"))
             != _canonical_session_id(dict(base, filter="NoFilter")))
+
+
+def test_null_filter_is_not_reported_as_a_change_to_nofilter():
+    """`filter: None -> 'NoFilter'` is an artifact of the folder layout.
+
+    session_dest_rel writes `Lights/NoFilter/` for a NULL filter, so the disk
+    always reads back 'NoFilter' for such a session. Proposing that as a change
+    would convert *unrecorded* into *deliberately unfiltered* and silently
+    empty U2's filter queue.
+    """
+    from darkroom.rescan import _diff_fields
+
+    cat = {"filter": None, "frame_count": 40}
+    disk = {"filter": "NoFilter", "frame_count": 40}
+    assert _diff_fields(cat, disk, 0.1) == {}
+
+    # A real filter arriving on a NULL row is still a genuine change.
+    assert "filter" in _diff_fields(cat, {"filter": "L-Pro", "frame_count": 40}, 0.1)
+    # And losing a real filter is still reported.
+    assert "filter" in _diff_fields({"filter": "L-Pro"}, {"filter": "NoFilter"}, 0.1)

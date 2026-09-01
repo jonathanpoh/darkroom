@@ -207,11 +207,29 @@ def _diverges(field: str, current, proposed, tolerance: float) -> bool:
     return current != proposed
 
 
+def _phantom_filter_change(field: str, current, proposed) -> bool:
+    """True for `filter: NULL -> 'NoFilter'`, which is not a real divergence.
+
+    `session_dest_rel` has no directory name for "filter unknown", so it writes
+    `Lights/NoFilter/` and the disk always reads that back. Reporting it would
+    quietly convert *unrecorded* into *deliberately unfiltered* and drop the
+    session out of U2's filter queue as though the question had been answered —
+    and 95 sessions carry no filter, most of which did use one.
+
+    Shared by the update path (`_diff_fields`) and the rename path, which adds
+    identity fields directly; without it here the rename still carried the
+    phantom change and applying it would set the filter.
+    """
+    return field == "filter" and not current and proposed == "NoFilter"
+
+
 def _diff_fields(catalog_row: dict, disk_row: dict, tolerance: float) -> dict:
     changes = {}
     for field in _CHANGE_FIELDS:
         current = catalog_row.get(field)
         proposed = disk_row.get(field)
+        if _phantom_filter_change(field, current, proposed):
+            continue
         if _diverges(field, current, proposed, tolerance):
             changes[field] = {"current": current, "proposed": proposed}
     return changes
@@ -352,7 +370,14 @@ def scan(
                 f: {"current": cat.get(f), "proposed": disk.get(f)}
                 for f in _IDENTITY_FIELDS
                 if cat.get(f) != disk.get(f)
+                and not _phantom_filter_change(f, cat.get(f), disk.get(f))
             })
+            if not changes:
+                # Nothing actually differs. The two ids can still disagree when
+                # the only gap is the NULL/'NoFilter' round-trip above, and a
+                # rename with no changed field would be an empty write that
+                # keeps reappearing on every scan. Not a divergence.
+                continue
             proposals.append({
                 "session_id": old_id,
                 "kind": "rename",
