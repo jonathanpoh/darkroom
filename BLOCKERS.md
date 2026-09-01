@@ -263,50 +263,39 @@ folder before re-running the backfill.
 
 ---
 
-### 14. Rewrite `INSTRUME` on the 154 April-2023 files
+### 14. Rewrite `INSTRUME` on the April-2023 files ✅ DONE 2026-09-01
 
-Those frames record `INSTRUME = 'ASCOM Camera Driver'` — the acquisition
-software's generic driver string (BackyardEOS or N.I.N.A., not the ASIAir),
-not a camera. It is your **Canon 6D**, confirmed 2026-08-31.
-
-`camera` is read from that header, so the string propagates into `session_id`,
-folder names and `set_id`. The M 42 2023-04-15 session row has already been
-corrected by hand, but its own flats have not — which is why that session
-currently matches **none** of its flats.
-
-**Why not just alias it in code.** A `_CAMERA_ALIASES` entry mapping
-`ASCOMCameraDriver → Canon6D` was considered and rejected: the string is
-generic, so the alias becomes silently wrong the first time the ZWO is driven
-through N.I.N.A./ASCOM — and unlike F9's optics, there is no date that could
-disambiguate it. Fix the data, not the inference.
-
-**Scope, measured live 2026-08-31 — 154 files in 6 folders:**
+`ASCOM Camera Driver` was the acquisition software's generic driver string
+(BackyardEOS or N.I.N.A., not the ASIAir), not a camera. Rewritten to
+`Canon EOS 6D` — Jonathan did the 40 light frames, then the 106 calibration
+frames followed:
 
 | Files | Folder |
 |---|---|
-| 26 | `00_Calibration/Bias/Canon6D/Raw/2023-04-17` |
-| 40 | `00_Calibration/Darks/Canon6D/Raw/20s/2023-04-15` |
-| 40 | `00_Calibration/Flats/100mm_Canon6D/2023-04-17` |
 | 40 | `01_Deep Sky Objects/M 42/2023-04-15_Canon100mm_Canon6D/Lights/L-Pro` |
-| 8 | `01_Deep Sky Objects/M 42/_Processed/2023-04-{17,18}` |
+| 40 | `00_Calibration/Darks/Canon6D/Raw/20s/2023-04-15` |
+| 26 | `00_Calibration/Bias/Canon6D/Raw/2023-04-17` |
+| 40 | `00_Calibration/Flats/100mm_Canon6D/2023-04-17` |
 
-Three of those folders are themselves named `Canon6D`, which is the
-corroboration. The 8 `_Processed` files are derived products and can be left.
+`scan-calibration` then re-registered all 106 under `Canon6D` (8 new sets,
+frame counts matching the old ones 1:1), and the 8 superseded
+`ASCOMCameraDriver` rows were deleted. **The M 42 session now matches its
+darks — 3 sets, where it previously matched none.**
 
-```bash
-# per file, in place:  fits.setval(path, "INSTRUME", value="Canon EOS 6D")
-darkroom catalog scan-calibration "$DARKROOM_ARCHIVE/00_Calibration"
-```
+Byte-for-byte backups of the 106 originals, with checksums and a README, are at
+`_backups/2026-09-01_INSTRUME-rewrite/` — deliberately at archive root rather
+than beside the originals, because `_SKIP_DIR_NAMES_LOWER` only guards the
+*lights* walk (`find_lights_folders`); `scan-calibration` walks whatever root it
+is given, so a backup folder inside `00_Calibration` would have registered as
+duplicate calibration sets.
 
-**Two catches.**
-
-- `camera` is part of `set_id`, so the rescan creates **new** calibration rows
-  rather than updating the old ones — unlike `ota`, which now updates in place
-  (`c7a5ef7`). The 3 stale `ASCOMCameraDriver` flat rows must be retired by
-  hand afterwards; there is no calibration-delete endpoint, so it is an
-  `ssh` + `sqlite3` job on the LXC.
-- This writes to original archive files. Take a backup of the 154 first — it is
-  the only step in this queue that modifies frame data rather than moving it.
+**Residual — the flats still don't match.** They now carry the right
+`ota='Canon100mm'` and `camera='Canon6D'`, but `filter` is NULL while the
+session is `L-Pro`, and flat matching keys on OTA + camera + filter. The folder
+`Flats/100mm_Canon6D/` has no filter component and ASIAir writes no FILTER
+header, so that value is recorded nowhere. **Only you know whether those flats
+were shot through the L-Pro.** If they were, rename the folder to
+`Canon100mm_Canon6D_L-Pro` and re-run `scan-calibration`.
 
 ---
 
