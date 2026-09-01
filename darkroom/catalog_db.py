@@ -720,6 +720,16 @@ def apply_rescan_proposal(conn: sqlite3.Connection, db_path: Path, proposal: dic
 
         session = dict(proposed)
         session["session_id"] = proposal["session_id"]
+        # target/obs_date/lights_path are columns on the *proposal row*, not
+        # entries in `changes` — rescan._CHANGE_FIELDS deliberately excludes
+        # them, since they identify the session rather than describing a
+        # per-field diff. Reading them only out of `changes` left target NULL
+        # and every create failed on the NOT NULL constraint. (The unit test
+        # missed it by hand-building a proposal with target inside `changes`,
+        # a shape rescan.py never emits.)
+        for key in ("target", "obs_date", "lights_path"):
+            if session.get(key) is None and proposal.get(key) is not None:
+                session[key] = proposal[key]
         # upsert_session binds every one of these as a named sqlite param —
         # a 'create' proposal that only reports the fields it could actually
         # read off disk (say, no RA/Dec) would otherwise blow up with a

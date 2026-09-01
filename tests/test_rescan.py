@@ -774,3 +774,43 @@ def test_misspelled_filter_pairs_as_a_rename(tmp_path):
 
     assert [p["kind"] for p in proposals] == ["rename"]
     assert proposals[0]["session_id"] == old_id
+
+
+def test_a_scanned_create_proposal_can_actually_be_applied(tmp_path):
+    """End-to-end: rescan's own output must satisfy apply_rescan_proposal.
+
+    The two halves were tested in isolation and disagreed about where a
+    create's `target` lives — rescan puts it on the proposal row (it is not in
+    `_CHANGE_FIELDS`), while apply read only `changes`. Every real create
+    therefore died on `NOT NULL constraint failed: sessions.target`, with the
+    unit test passing because it hand-built a shape no producer emits.
+
+    So this test deliberately does NOT construct a proposal: it takes whatever
+    `scan` produces and feeds it straight to the applier.
+    """
+    import sqlite3
+
+    from darkroom import catalog_db
+
+    archive = tmp_path / "archive"
+    _write_session_frames(archive)
+    db = _db(tmp_path)                      # empty catalog
+    proposals = scan(archive, LocalBackend(db))
+    assert len(proposals) == 1 and proposals[0]["kind"] == "create"
+
+    conn = catalog_db.open_db(db)
+    try:
+        catalog_db.apply_rescan_proposal(conn, db, proposals[0])
+    finally:
+        conn.close()
+
+    with sqlite3.connect(db) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT * FROM sessions WHERE session_id = ?",
+            (proposals[0]["session_id"],),
+        ).fetchone()
+    assert row is not None, "a scanned create proposal must be appliable"
+    assert row["target"] == proposals[0]["target"]
+    assert row["obs_date"] == proposals[0]["obs_date"]
+    assert row["lights_path"] == proposals[0]["lights_path"]

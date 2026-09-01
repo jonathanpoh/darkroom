@@ -261,11 +261,17 @@ def test_apply_rescan_proposal_create_upserts_new_session(tmp_path):
     init_db(db)
     with sqlite3.connect(db) as conn:
         conn.row_factory = sqlite3.Row
+        # The shape rescan.py actually emits: target/obs_date/lights_path are
+        # columns on the proposal row, NOT entries in `changes`. The previous
+        # version of this test put target inside `changes`, which no producer
+        # ever does — so it passed while every real create failed on the
+        # sessions.target NOT NULL constraint.
         proposal = {
             "session_id": "S-new", "kind": "create", "tier": "review",
+            "target": "M 82",
+            "obs_date": "2026-08-01",
+            "lights_path": "01_Deep Sky Objects/M 82/2026-08-01_FRA400_Canon6D/Lights",
             "changes": {
-                "target": {"current": None, "proposed": "M 82"},
-                "obs_date": {"current": None, "proposed": "2026-08-01"},
                 "frame_count": {"current": None, "proposed": 50},
             },
         }
@@ -279,6 +285,9 @@ def test_apply_rescan_proposal_create_upserts_new_session(tmp_path):
     assert row["target"] == "M 82"
     assert row["obs_date"] == "2026-08-01"
     assert row["frame_count"] == 50
+    assert row["lights_path"] == (
+        "01_Deep Sky Objects/M 82/2026-08-01_FRA400_Canon6D/Lights"
+    )
 
 
 def test_apply_rescan_proposal_unknown_kind_raises(tmp_path):
