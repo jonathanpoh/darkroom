@@ -418,7 +418,14 @@ def scan(
                 "lights_path": disk.get("lights_path"),
                 "changes": {
                     field: {"current": None, "proposed": disk.get(field)}
-                    for field in _CHANGE_FIELDS
+                    # M1: `panel` is an identity component that appears in the
+                    # session_id but is not a _CHANGE_FIELD, so without it here
+                    # a create produced a row whose id says "_P1-2" while its
+                    # panel column was NULL — a row that no longer regenerates
+                    # its own session_id, and so diverges on every later scan.
+                    # target/obs_date/lights_path ride on the proposal row
+                    # itself; panel has nowhere to go but `changes`.
+                    for field in (*_CHANGE_FIELDS, "panel")
                 },
                 "detected_at": detected_at,
             })

@@ -871,3 +871,37 @@ def test_null_filter_is_not_reported_as_a_change_to_nofilter():
     assert "filter" in _diff_fields(cat, {"filter": "L-Pro", "frame_count": 40}, 0.1)
     # And losing a real filter is still reported.
     assert "filter" in _diff_fields({"filter": "L-Pro"}, {"filter": "NoFilter"}, 0.1)
+
+
+def test_a_created_session_keeps_its_mosaic_panel(tmp_path):
+    """A create must carry `panel`, or the row contradicts its own session_id.
+
+    `panel` is an identity component that lands in the session_id, but it is
+    not a _CHANGE_FIELD and it has no column on the proposal row the way
+    target/obs_date/lights_path do. Without it, applying a create produced a
+    row whose id ended `_P1-2` while its panel column was NULL — so
+    make_session_id on that row no longer reproduces its own id, and it
+    diverges on every subsequent scan. Seen live on IC 4604 2025-04-27.
+    """
+    import sqlite3
+
+    from darkroom import catalog_db
+
+    archive = tmp_path / "archive"
+    _write_session_frames(archive, target="IC 4604_1-2")
+    db = _db(tmp_path)
+    proposals = scan(archive, LocalBackend(db))
+    create = [p for p in proposals if p["kind"] == "create"]
+    assert len(create) == 1
+    assert "panel" in create[0]["changes"], "a create must carry the panel"
+
+    conn = catalog_db.open_db(db)
+    try:
+        catalog_db.apply_rescan_proposal(conn, db, create[0])
+    finally:
+        conn.close()
+    with sqlite3.connect(db) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT session_id, panel, target FROM sessions").fetchone()
+    assert row["panel"] == "1-2", "panel column must match the id's P1-2"
+    assert row["target"] == "IC 4604"
