@@ -1,5 +1,6 @@
 import pytest
 from darkroom.parse import (
+    calibration_filter,
     ota_from_focallen,
     parse_filter,
     parse_exposure,
@@ -61,6 +62,15 @@ def test_parse_filter_with_filter():
 def test_parse_filter_normalises_lextreme():
     stem = "Light_M 81_180.0s_Bin1_585MC_gain200_20260219-220000_-20.0C_LExtreme_0001"
     assert parse_filter(stem) == "L-Extreme"
+
+
+def test_calibration_filter_filename_then_header_then_none():
+    stem = "Flat_1.0s_Bin1_L-Pro_0001"
+    assert calibration_filter(stem, "Flat", "L-Extreme") == "L-Pro"
+    assert calibration_filter("Flat_1.0s_Bin1_585MC_gain100_20260220-071000_-20.0C_0001", "FlatDark", "L-Pro") == "L-Pro"
+    assert calibration_filter("Flat_1.0s_Bin1_585MC_gain100_20260220-071000_-20.0C_0001", "Flat", "") is None
+    # Darks and bias frames never carry a filter, whatever the header says.
+    assert calibration_filter(stem, "Dark", "L-Pro") is None
 
 
 def test_parse_filter_no_filter():

@@ -23,6 +23,7 @@ from astropy.io import fits
 from astropy.time import Time
 
 from darkroom.parse import (
+    calibration_filter,
     fits_files,
     normalize_filter,
     panel_from_dirname,
@@ -39,9 +40,11 @@ from darkroom.names import (
     _normalize_target,
     _parse_coords,
     _round_exposure,
+    make_cal_set_id,
     make_session_id,  # re-exported for back-compat (moved to names.py in W4)
     normalize_session_fields,
 )
+from darkroom.sites import session_site
 
 
 # Imaging sessions are identified by the local civil date the night started.
@@ -49,40 +52,41 @@ from darkroom.names import (
 LOCAL_TZ = ZoneInfo("Europe/Lisbon")
 
 
-def compute_imaging_night(date_obs_utc: str) -> str | None:
+def parse_date_obs(date_obs_utc: str | datetime | None) -> datetime | None:
+    """Parse a FITS DATE-OBS (always UTC on this rig) into an aware UTC datetime.
+
+    Returns None for anything unparseable — this runs per-frame, so failures
+    stay silent. An already-parsed datetime passes straight through (naive
+    ones are taken as UTC): the astropy `Time` parse is the expensive part of
+    a scan after opening the header, so the scan paths parse each frame once
+    and hand the datetime to compute_imaging_night / compute_session_span
+    instead of re-parsing the string in each.
+    """
+    if not date_obs_utc:
+        return None
+    if isinstance(date_obs_utc, datetime):
+        return date_obs_utc if date_obs_utc.tzinfo else date_obs_utc.replace(tzinfo=timezone.utc)
+    try:
+        t = Time(str(date_obs_utc).strip(), format="isot", scale="utc")
+        return t.datetime.replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+
+def compute_imaging_night(date_obs_utc: str | datetime | None) -> str | None:
     """Return YYYY-MM-DD for the local imaging night a UTC timestamp belongs to.
 
     Frames between local noon on day N and local noon on day N+1 all belong
     to the "night of day N". A session running 23:00 → 04:00 local is one
     night. Local-time hours < 12 → subtract one day.
     """
-    if not date_obs_utc:
+    dt = parse_date_obs(date_obs_utc)
+    if dt is None:
         return None
-    try:
-        t = Time(date_obs_utc, format="isot", scale="utc")
-        utc_dt = t.datetime.replace(tzinfo=ZoneInfo("UTC"))
-        local_dt = utc_dt.astimezone(LOCAL_TZ)
-        if local_dt.hour < 12:
-            return (local_dt - timedelta(days=1)).strftime("%Y-%m-%d")
-        return local_dt.strftime("%Y-%m-%d")
-    except Exception:
-        return None
-
-
-def parse_date_obs(date_obs_utc: str) -> datetime | None:
-    """Parse a FITS DATE-OBS (always UTC on this rig) into an aware UTC datetime.
-
-    Same astropy `isot`/`utc` handling as compute_imaging_night, so the two
-    agree on what a frame's timestamp means. Returns None for anything
-    unparseable — this runs per-frame, so failures stay silent.
-    """
-    if not date_obs_utc:
-        return None
-    try:
-        t = Time(str(date_obs_utc).strip(), format="isot", scale="utc")
-        return t.datetime.replace(tzinfo=timezone.utc)
-    except Exception:
-        return None
+    local_dt = dt.astimezone(LOCAL_TZ)
+    if local_dt.hour < 12:
+        return (local_dt - timedelta(days=1)).strftime("%Y-%m-%d")
+    return local_dt.strftime("%Y-%m-%d")
 
 
 def capture_date_of(date_obs_utc: str) -> str:
@@ -141,7 +145,7 @@ def compute_session_span(frames) -> tuple[str | None, str | None]:
 
 
 # ============================================================================
-# Session ID construction
+# Archive walking and per-frame parsing helpers
 # ============================================================================
 
 
@@ -204,7 +208,7 @@ def _parse_site_deg(val) -> float | None:
 
 
 def _target_from_path(lights_path: Path) -> str:
-    """Extract target name from NAS folder path.
+    """Extract target name from an archive folder path.
 
     Looks for the component immediately after any '*Deep Sky Objects' folder
     (e.g. '01_Deep Sky Objects', '04_Deep Sky Objects'). Falls back based on
@@ -451,10 +455,10 @@ def init_db(db_path: Path) -> None:
                 created_at    TEXT,
                 updated_at    TEXT
             );
-            -- U2: archive folder moves owed to the NAS after identity edits
-            -- changed a session's lights_path. The webapi host has no NAS
-            -- mount, so renames are recorded here and executed later on the
-            -- Mac via `darkroom catalog apply-renames`. One row per session
+            -- U2: archive folder moves still owed after an identity edit
+            -- changed a session's lights_path. The webapi host has no
+            -- archive mount, so renames are recorded here and executed later
+            -- on the Mac via `darkroom catalog apply-renames`. One row per session
             -- (UNIQUE session_row_id): old_path stays pinned to what's still
             -- on disk while new_path tracks the latest catalog value.
             CREATE TABLE IF NOT EXISTS pending_renames (
@@ -790,9 +794,7 @@ def upsert_session_guiding(db_path: Path, guiding: dict) -> None:
     row = {col: guiding.get(col) for col in _GUIDING_COLUMNS}
     if isinstance(row["source_logs"], (list, tuple)):
         row["source_logs"] = json.dumps(list(row["source_logs"]))
-    row["computed_at"] = row["computed_at"] or datetime.now(timezone.utc).strftime(
-        "%Y-%m-%d %H:%M:%S"
-    )
+    row["computed_at"] = row["computed_at"] or _now()
     placeholders = ", ".join(f":{col}" for col in _GUIDING_COLUMNS)
     with sqlite3.connect(db_path) as conn:
         conn.execute(
@@ -835,21 +837,13 @@ def set_processed_state(
         raise ValueError(
             f"Invalid processed state: {state!r} (must be one of {sorted(PROCESSED_STATES)})"
         )
-    now = _now()
-    if notes is not None:
-        sql = (
-            "UPDATE sessions SET processed_state = ?, processed_date = ?, "
-            "processed_path = ?, notes = ?, updated_at = ? WHERE session_id = ?"
-        )
-        params = (state, processed_date, processed_path, notes, now, session_id)
-    else:
-        sql = (
-            "UPDATE sessions SET processed_state = ?, processed_date = ?, "
-            "processed_path = ?, updated_at = ? WHERE session_id = ?"
-        )
-        params = (state, processed_date, processed_path, now, session_id)
     with sqlite3.connect(db_path) as conn:
-        cursor = conn.execute(sql, params)
+        cursor = conn.execute(
+            "UPDATE sessions SET processed_state = ?, processed_date = ?, "
+            "processed_path = ?, notes = COALESCE(?, notes), updated_at = ? "
+            "WHERE session_id = ?",
+            (state, processed_date, processed_path, notes, _now(), session_id),
+        )
     return cursor.rowcount > 0
 
 
@@ -929,27 +923,28 @@ class SessionAnalyzer:
         if not metadata_list:
             return []
 
-        # Group frames by imaging night
-        groups: dict[str, list[dict]] = {}
+        # Group frames by imaging night. DATE-OBS is parsed once here and
+        # carried alongside each frame — the representative-frame pick and the
+        # span below both need it, and the astropy parse is not cheap.
+        groups: dict[str, list[tuple[datetime, dict]]] = {}
         for meta in metadata_list:
-            night = compute_imaging_night(meta.get("date_obs", ""))
+            dt = parse_date_obs(meta.get("date_obs", ""))
+            night = compute_imaging_night(dt)
             if night is None:
                 print(
                     f"Warning: skipping {meta['file_path']} — no resolvable DATE-OBS",
                     file=sys.stderr,
                 )
                 continue
-            groups.setdefault(night, []).append(meta)
+            groups.setdefault(night, []).append((dt, meta))
 
         sessions = []
-        for night, frames in sorted(groups.items()):
-            # Pick the chronologically-first frame as representative —
-            # `frames` is in directory-walk order (filename sort), not
+        for night, timed in sorted(groups.items()):
+            frames = [meta for _, meta in timed]
+            # The chronologically-first frame is the representative —
+            # `metadata_list` is in directory-walk order (filename sort), not
             # capture order (B14).
-            first = min(
-                frames,
-                key=lambda f: parse_date_obs(f.get("date_obs", "")) or datetime.max,
-            )
+            first = min(timed, key=lambda p: p[0])[1]
 
             # Filter: filename-first, header fallback — scoped to this night's frames
             filter_ = None
@@ -962,7 +957,14 @@ class SessionAnalyzer:
 
             focallen = first.get("focallen")
             start_utc, end_utc = compute_session_span(
-                (f.get("date_obs", ""), f.get("exposure")) for f in frames
+                (dt, meta.get("exposure")) for dt, meta in timed
+            )
+            # B16: the modal position across the night, as ingest already
+            # did — never the first frame's, which is the one most likely to
+            # hold a stale or WiFi-geolocated fix.
+            site_lat, site_lon = session_site(
+                ((f.get("site_lat"), f.get("site_lon")) for f in frames),
+                f"{lights_path} {night}",
             )
 
             # M1: the panel can arrive from two places, and they disagree in
@@ -991,8 +993,8 @@ class SessionAnalyzer:
                 "total_integration_sec": int(sum(f["exposure"] for f in frames)),
                 "ra_deg": first.get("ra_deg"),
                 "dec_deg": first.get("dec_deg"),
-                "site_lat": first.get("site_lat"),
-                "site_lon": first.get("site_lon"),
+                "site_lat": site_lat,
+                "site_lon": site_lon,
                 "start_utc": start_utc,
                 "end_utc": end_utc,
                 "lights_path": str(lights_path),
@@ -1123,12 +1125,7 @@ class CalibrationCataloger:
                 # Reclassify by exposure: anything under the threshold is a flat dark.
                 frame_type = reclassify_flat_dark(frame_type, exposure)
 
-                # Filter: only meaningful for flats and flat darks; extract from filename.
-                filter_ = None
-                if frame_type in ("Flat", "FlatDark"):
-                    filter_ = parse_filter(Path(fname).stem)
-                    if filter_ is None:
-                        filter_ = meta.get("filter_header") or None
+                filter_ = calibration_filter(fpath.stem, frame_type, meta.get("filter_header"))
 
                 key = (frame_type, camera, gain, exposure, temp, obs_date, folder)
                 if key not in groups:
@@ -1148,17 +1145,11 @@ class CalibrationCataloger:
 
         cal_sets = []
         for group in groups.values():
-            camera_slug = _normalize_camera(group["camera"])
-            temp_str = f"{int(group['temperature_c'])}C"
-            # set_id omits folder deliberately — same params from different folders merge on re-scan,
-            # keeping the most recent folder_path. This is intentional for portability.
-            set_id = (
-                f"{group['frame_type']}_{camera_slug}"
-                f"_{group['exposure_sec']:.3g}s_{_format_gain(group['camera'], group['gain'])}"
-                f"_{temp_str}_{group['capture_date']}"
-            )
             cal_sets.append({
-                "set_id": set_id,
+                "set_id": make_cal_set_id(
+                    group["frame_type"], group["camera"], group["gain"],
+                    group["exposure_sec"], group["temperature_c"], group["capture_date"],
+                ),
                 "frame_type": group["frame_type"],
                 "camera": group["camera"],
                 "ota": group["ota"],
@@ -1254,7 +1245,7 @@ def scan_all_command(args, *, backend=None):
     extracts metadata from each group, builds a session record with collision-resistant
     session_id, and writes to SQLite database (or the webapi when a backend is given).
 
-    Handles three coexisting NAS folder structures:
+    Handles three coexisting archive folder structures:
     1. Canonical: Target/Date_Equipment_Filter/Lights/
     2. Partial: Target/Date_Equipment_Filter/  (Lights optional)
     3. Old: Target/Lights - Label/

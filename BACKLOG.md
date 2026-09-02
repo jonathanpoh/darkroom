@@ -328,7 +328,17 @@ per-session values) — different code, worth its own entry.
   computing "what it should be" — fix this first, or the rescan tool will
   confidently confirm a still-wrong value on the next mixed-exposure night.
 
-### B16. Archive-side scan takes `site_lat`/`site_lon` from one frame; ingest takes the modal value
+### B16. Archive-side scan takes `site_lat`/`site_lon` from one frame; ingest takes the modal value — ✅ FIXED
+> Shipped 2026-09-02. `sites.session_site(positions, label)` is now the one
+> call — modal position plus the stderr disagreement warning — used by
+> `SessionAnalyzer.analyze_sessions`, `scanner._scan_lights` and
+> `catalog_cli._extract_site` (`backfill-sites`), which had each spelled the
+> `modal_site` + `describe_disagreement` pair out by hand or, in the archive
+> scan's case, not at all. Tests:
+> `tests/test_sites.py::TestSessionSite`,
+> `tests/test_cataloger.py::TestAnalyzeSessionsSiteCoords::test_modal_site_coords_not_first_frame`.
+> Original entry follows.
+>
 > Filed 2026-09-01 from the `/simplify` reuse pass. Decision (Jonathan,
 > 2026-09-01): a site does not change mid-session, so the two scans must
 > agree — the modal value is the right one, everywhere.
@@ -586,7 +596,15 @@ new side table; prefer the numeric `sessions.id` as the foreign key.
   (`_normalize_target` vs `_target_slug`). ~100 lines of confusable dead surface.
   Remove once nothing references it.
 
-### R3. Unify the two `set_id` builders
+### R3. Unify the two `set_id` builders — ✅ FIXED
+> Shipped 2026-09-02. `names.make_cal_set_id` is the single builder (camera
+> via `_normalize_camera`, gain via `_format_gain`, so a DSLR set gets the
+> `ISO` form from both paths); `ingest.build_cal_entry`,
+> `ingest_review.recompute_cal_entry` and `CalibrationCataloger.scan` all call
+> it. No backfill, as predicted below. Tests:
+> `tests/test_ingest.py::test_make_cal_set_id_dslr_uses_iso`,
+> `tests/test_cataloger.py::TestCalSetIdParity`. Original entry follows.
+>
 > Re-found 2026-09-01 by the `/simplify` reuse pass, still open. Line numbers
 > refreshed; the decision is now easy — see below.
 
@@ -733,6 +751,24 @@ new side table; prefer the numeric `sessions.id` as the foreign key.
 > `is_master` via `PRAGMA table_info` checks at `cataloger.py:298-304`) — follow
 > that pattern, never drop columns on a live DB, and back up `astro_catalog.db`
 > first.
+
+
+### R8. `SessionAnalyzer.analyze_sessions` and `scanner._scan_lights` still each resolve filter and panel by hand
+> Filed 2026-09-02 from the `/simplify` altitude pass over `cataloger.py`.
+> B16 was one symptom of these two night→session builders drifting; that
+> pass shared the site position (`sites.session_site`) and the once-per-frame
+> DATE-OBS parse, and left the rest alone on purpose — the two differ in
+> grouping (night vs night+filter) and output shape (DB dict vs `Session`
+> dataclass), so one function would need an `is_ingest` branch, which is worse
+> than the duplication.
+
+- **What is still worth sharing:** two pure helpers over a night's frames —
+  filter resolution (filename-first across the frames, header/path
+  fallback) and panel resolution (`parse_panel` + `panel_from_dirname`
+  fallback). Each is ~6 lines in both `cataloger.py:~960` and
+  `scanner.py:~130`.
+- **Do:** only when one of them next changes; lift it into `parse.py` at
+  that point, the way `calibration_filter` was.
 
 ### W1. Replace overloaded `processed_status` free-text with structured status — ✅ DONE
 > Added `processed_state` (enum `unprocessed`/`processed`/`skipped`, `NOT NULL

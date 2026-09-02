@@ -242,6 +242,18 @@ def test_make_cal_set_id():
     assert result == "Flat_ZWOASI585MCPro_1.35s_200g_-20C_2026-02-20"
 
 
+def test_make_cal_set_id_dslr_uses_iso():
+    # R3: every Canon6D set in the catalog carries the ISO form; ingest used
+    # to write "1600g", so the same physical set got two ids.
+    assert (
+        make_cal_set_id("Flat", "Canon EOS 6D", 1600, 0.004, 15.0, "2026-02-20")
+        == "Flat_Canon6D_0.004s_ISO1600_15C_2026-02-20"
+    )
+    assert make_cal_set_id("Bias", "Canon6D", 0, 0.0001, 15.0, "2026-02-20").startswith(
+        "Bias_Canon6D_0.0001s_ISOAuto_"
+    )
+
+
 from darkroom.ingest import build_cal_entry
 from darkroom.scanner import CalibrationGroup
 

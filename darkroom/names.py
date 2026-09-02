@@ -34,6 +34,27 @@ def _format_gain(camera: str, gain: int) -> str:
     return f"{gain}g"
 
 
+def make_cal_set_id(
+    frame_type: str,
+    camera: str,
+    gain: int,
+    exposure_sec: float,
+    temperature_c: float,
+    capture_date: str,
+) -> str:
+    """Calibration-set primary key, e.g. `Flat_Canon6D_0.004s_ISO1600_15C_2026-02-20`.
+
+    Folder is deliberately not part of it: the same parameters shot into
+    different folders merge on re-scan, keeping the most recent folder_path.
+    The one builder for `ingest commit` and the archive-side scan (R3) — they
+    used to format gain differently, so a Canon6D set got two ids.
+    """
+    return (
+        f"{frame_type}_{_normalize_camera(camera)}_{exposure_sec:.3g}s"
+        f"_{_format_gain(camera, gain)}_{int(temperature_c)}C_{capture_date}"
+    )
+
+
 # Canonical prefixes in alternation order (longer/compound forms before their
 # single-letter subsets so e.g. 'Col'/'Cr' win over 'C'). The casing here is the
 # canonical casing we store and use to build archive folder paths.

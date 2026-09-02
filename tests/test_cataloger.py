@@ -978,20 +978,30 @@ class TestAnalyzeSessionsSiteCoords:
         base.update(overrides)
         return base
 
-    def test_carries_first_frame_site_coords(self, tmp_path):
+    def test_modal_site_coords_not_first_frame(self, tmp_path, capsys):
+        # B16: the first frame is the one most likely to carry a stale or
+        # WiFi-geolocated fix, so the night's modal position wins — same rule
+        # as ingest (scanner.py), and it warns about the outlier.
         lights = tmp_path / "M81" / "Lights"
         lights.mkdir(parents=True)
         meta_list = [
-            self._make_meta(site_lat=38.5631, site_lon=-8.88149),
+            self._make_meta(
+                date_obs="2026-02-19T21:00:00", site_lat=38.9999, site_lon=-9.9999,
+            ),
             self._make_meta(
                 filename_stem="Light_M81_180.0s_Bin1_0C_20260219_L-Pro_0002",
-                site_lat=38.9999, site_lon=-9.9999,  # second frame's value ignored
+                date_obs="2026-02-19T22:00:00", site_lat=38.5631, site_lon=-8.88149,
+            ),
+            self._make_meta(
+                filename_stem="Light_M81_180.0s_Bin1_0C_20260219_L-Pro_0003",
+                date_obs="2026-02-19T23:00:00", site_lat=38.5631, site_lon=-8.88149,
             ),
         ]
         result = SessionAnalyzer.analyze_sessions(meta_list, lights)
         assert len(result) == 1
         assert result[0]["site_lat"] == pytest.approx(38.5631)
         assert result[0]["site_lon"] == pytest.approx(-8.88149)
+        assert "site coordinates disagree" in capsys.readouterr().err
 
     def test_missing_site_coords_are_none(self, tmp_path):
         lights = tmp_path / "M81" / "Lights"
@@ -1713,3 +1723,46 @@ class TestPanelAndNullPanelCoexist:
         assert len(session_ids) == 5  # every row got a distinct session_id
         panels = {r["panel"] for r in rows}
         assert panels == {None, "1-1", "1-2", "2-1", "2-2"}
+
+
+# ── R3: one set_id builder for both scan paths (names.make_cal_set_id). ──
+
+class TestCalSetIdParity:
+    def test_dslr_set_gets_one_id_from_both_scans(self, tmp_path):
+        from darkroom.ingest import build_cal_entry
+        from darkroom.scanner import scan_source
+
+        path = tmp_path / "Dark" / "dark_0001.fit"
+        path.parent.mkdir(parents=True)
+        hdu = fits.PrimaryHDU()
+        hdu.header["IMAGETYP"] = "Dark Frame"
+        hdu.header["DATE-OBS"] = "2026-02-20T09:20:00"
+        hdu.header["EXPOSURE"] = 180.0
+        hdu.header["INSTRUME"] = "Canon EOS 6D"
+        hdu.header["ISO"] = 1600
+        hdu.writeto(path)
+
+        archive_ids = {c["set_id"] for c in CalibrationCataloger.scan(tmp_path)}
+        groups = scan_source(tmp_path).calibration
+        assert len(groups) == 1
+        ingest_id = build_cal_entry(groups[0], tmp_path / "out", interactive=False)["set_id"]
+
+        assert archive_ids == {ingest_id}
+        assert "_ISO1600_" in ingest_id
+
+
+# ── DATE-OBS is parsed once per frame; the datetime is accepted downstream. ──
+
+class TestParseDateObsPassthrough:
+    def test_datetime_passes_through_and_agrees_with_string(self):
+        from datetime import datetime, timezone
+        from darkroom.cataloger import compute_session_span, parse_date_obs
+
+        dt = parse_date_obs("2026-02-19T03:30:00")
+        assert dt == datetime(2026, 2, 19, 3, 30, tzinfo=timezone.utc)
+        assert parse_date_obs(dt) is dt
+        assert parse_date_obs(dt.replace(tzinfo=None)) == dt
+        # Both scan paths hand the parsed datetime to these two.
+        assert compute_imaging_night(dt) == compute_imaging_night("2026-02-19T03:30:00") == "2026-02-18"
+        assert compute_session_span([(dt, 60)]) == compute_session_span([("2026-02-19T03:30:00", 60)])
+        assert parse_date_obs(None) is None

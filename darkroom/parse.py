@@ -91,6 +91,18 @@ def parse_filter(stem: str) -> str | None:
     return normalize_filter(s)
 
 
+def calibration_filter(stem: str, frame_type: str, filter_header: str | None) -> str | None:
+    """Filter of a calibration frame: filename first, FITS header as fallback.
+
+    Only flats and flat darks carry one; darks and bias frames get None. The
+    one statement of that rule for both the ASIAir-side scan (scanner) and
+    the archive-side one (CalibrationCataloger).
+    """
+    if frame_type not in ("Flat", "FlatDark"):
+        return None
+    return parse_filter(stem) or (filter_header or None)
+
+
 def parse_exposure(stem: str) -> str | None:
     """Return exposure string (e.g. '180.0s', '130.0ms') from filename stem."""
     m = EXPOSURE_RE.search(stem)

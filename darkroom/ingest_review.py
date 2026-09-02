@@ -26,7 +26,6 @@ from darkroom.ingest import (
     cal_dest_rel,
     catalog_frame_counts,
     flat_filter_candidates,
-    make_cal_set_id,
     plan_session_files,
     report_catalog,
 )
@@ -35,6 +34,7 @@ from darkroom.names import (
     PLACEHOLDERS,
     _normalize_camera,
     _normalize_target,
+    make_cal_set_id,
     make_session_id,
     session_dest_rel,
 )

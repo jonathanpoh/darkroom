@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -14,13 +13,14 @@ from darkroom.cataloger import (
 )
 from darkroom.names import _normalize_camera, _round_exposure
 from darkroom.parse import (
+    calibration_filter,
     fits_files,
     parse_filter,
     parse_ota,
     parse_panel,
     reclassify_flat_dark,
 )
-from darkroom.sites import describe_disagreement, modal_site
+from darkroom.sites import session_site
 
 
 @dataclass
@@ -92,22 +92,6 @@ def _resolve_scan_roots(source: Path) -> list[Path]:
     return roots or [source]
 
 
-def _session_site(
-    metas: list[dict], label: str
-) -> tuple[float | None, float | None]:
-    """Modal SITELAT/SITELONG across a session's frames, warning on disagreement.
-
-    See sites.modal_site for why the first frame's value can't be trusted.
-    """
-    positions = [(m.get("site_lat"), m.get("site_lon")) for m in metas]
-    lat, lon, outliers = modal_site(positions)
-    if outliers:
-        usable = sum(1 for la, lo in positions if la is not None and lo is not None)
-        for line in describe_disagreement(label, lat, lon, outliers, usable):
-            print(line, file=sys.stderr)
-    return lat, lon
-
-
 def _scan_lights(light_root: Path) -> list[Session]:
     if not light_root.is_dir():
         return []
@@ -135,31 +119,30 @@ def _scan_lights(light_root: Path) -> list[Session]:
 
         # Group by imaging night + filter so multi-filter nights
         # produce separate sessions (each gets its own catalog entry
-        # and archive Lights/<filter>/ subdir).
-        groups: dict[tuple[str, str | None], list[tuple[dict, Path]]] = {}
+        # and archive Lights/<filter>/ subdir). DATE-OBS is parsed once
+        # per frame and carried along, as in SessionAnalyzer.
+        groups: dict[tuple[str, str | None], list[tuple[datetime, dict, Path]]] = {}
         for meta, path in pairs:
-            night = compute_imaging_night(meta.get("date_obs", ""))
+            dt = parse_date_obs(meta.get("date_obs", ""))
+            night = compute_imaging_night(dt)
             if night is None:
                 continue
             filt = parse_filter(meta["filename_stem"])
-            groups.setdefault((night, filt), []).append((meta, path))
+            groups.setdefault((night, filt), []).append((dt, meta, path))
 
         for (night, filter_), frames in sorted(groups.items(), key=lambda kv: (kv[0][0], kv[0][1] or "")):
-            # Pick the chronologically-first frame as representative.
+            # The chronologically-first frame is the representative.
             # `frames` is in directory-walk order (filename sort), not
             # capture order — B14.  The span is derived from all frames
             # (compute_session_span sorts by DATE-OBS itself).
-            first_meta = min(
-                (meta for meta, _ in frames),
-                key=lambda m: parse_date_obs(m.get("date_obs", "")) or datetime.max,
-            )
+            first_meta = min(frames, key=lambda f: f[0])[1]
 
             focallen = first_meta.get("focallen")
             start_utc, end_utc = compute_session_span(
-                (meta.get("date_obs", ""), meta.get("exposure")) for meta, _ in frames
+                (dt, meta.get("exposure")) for dt, meta, _ in frames
             )
-            site_lat, site_lon = _session_site(
-                [meta for meta, _ in frames],
+            site_lat, site_lon = session_site(
+                ((meta.get("site_lat"), meta.get("site_lon")) for _, meta, _ in frames),
                 f"{target_dir.name} {night} {filter_ or 'no-filter'}",
             )
             sessions.append(Session(
@@ -179,7 +162,7 @@ def _scan_lights(light_root: Path) -> list[Session]:
                 site_lon=site_lon,
                 start_utc=start_utc,
                 end_utc=end_utc,
-                files=[path for _, path in frames],
+                files=[path for _, _, path in frames],
             ))
 
     return sessions
@@ -203,12 +186,7 @@ def _scan_calibration(source: Path) -> list[CalibrationGroup]:
 
             capture_date = capture_date_of(meta.get("date_obs", ""))
 
-            # Filter only meaningful for Flat and FlatDark
-            filter_: str | None = None
-            if frame_type in ("Flat", "FlatDark"):
-                filter_ = parse_filter(path.stem)
-                if filter_ is None:
-                    filter_ = meta.get("filter_header")
+            filter_ = calibration_filter(path.stem, frame_type, meta.get("filter_header"))
 
             temp_rounded = round(meta["temperature"])
             camera = _normalize_camera(meta["camera"])

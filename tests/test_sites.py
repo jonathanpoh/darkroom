@@ -7,6 +7,7 @@ from darkroom.sites import (
     home_sqm,
     modal_site,
     resolve_site,
+    session_site,
     session_weight,
 )
 
@@ -134,6 +135,22 @@ class TestModalSite:
 
     def test_empty(self):
         assert modal_site([]) == (None, None, {})
+
+
+class TestSessionSite:
+    def test_modal_position_and_warning(self, capsys):
+        lat, lon = session_site([PALMELA] + [SANTA_SUSANA] * 3, "M 81 2026-02-19")
+        assert (lat, lon) == SANTA_SUSANA
+        err = capsys.readouterr().err
+        assert "M 81 2026-02-19" in err and "3/4 frames" in err
+
+    def test_agreement_is_silent(self, capsys):
+        assert session_site([SANTA_SUSANA, SANTA_SUSANA], "s") == SANTA_SUSANA
+        assert capsys.readouterr().err == ""
+
+    def test_nothing_usable(self, capsys):
+        assert session_site([(None, None)], "s") == (None, None)
+        assert capsys.readouterr().err == ""
 
 
 class TestDescribeDisagreement:

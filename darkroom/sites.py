@@ -1,6 +1,6 @@
 """darkroom.sites — shared site-resolution and SQM-weighting logic.
 
-Pure, stdlib-only (math) functions for matching a session's SITELAT/SITELONG
+Stdlib-only functions for matching a session's SITELAT/SITELONG
 coordinates against the catalog's named `sites` table, and for weighting
 integration time by relative sky brightness (SQM). Used by both `darkroom`
 CLI subcommands and the webapi UI, so it must not import astropy or anything
@@ -10,6 +10,7 @@ else with a heavy/optional dependency.
 from __future__ import annotations
 
 import math
+import sys
 from collections import Counter
 from typing import Iterable
 
@@ -82,6 +83,27 @@ def modal_site(
         if haversine_m(lat, lon, *pos) > SITE_DISAGREEMENT_M
     }
     return lat, lon, outliers
+
+
+def session_site(
+    positions: Iterable[tuple[float | None, float | None]], label: str
+) -> tuple[float | None, float | None]:
+    """A session's (lat, lon): modal_site, warning on stderr when frames disagree.
+
+    The one call every scan makes (B16). Ingest, the archive-side scan and
+    `backfill-sites` each used to spell out the modal_site + describe_
+    disagreement pair, and the archive-side scan did not — it read the
+    chronologically first frame, the one most likely to carry the stale fix,
+    so a rescan could propose "correcting" a good position back to a bad one.
+    *label* names the session in the warning.
+    """
+    positions = list(positions)
+    lat, lon, outliers = modal_site(positions)
+    if outliers:
+        usable = sum(1 for la, lo in positions if la is not None and lo is not None)
+        for line in describe_disagreement(label, lat, lon, outliers, usable):
+            print(line, file=sys.stderr)
+    return lat, lon
 
 
 def describe_disagreement(

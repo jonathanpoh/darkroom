@@ -15,7 +15,13 @@ from darkroom.catalog import flat_offset_days
 from darkroom.cataloger import make_session_id
 from darkroom.catalog_client import resolve_backend
 from darkroom.config import resolve_catalog, resolve_catalog_url, resolve_path
-from darkroom.names import KNOWN_FILTERS, PLACEHOLDERS, _normalize_camera, session_dest_rel
+from darkroom.names import (
+    KNOWN_FILTERS,
+    PLACEHOLDERS,
+    _normalize_camera,
+    make_cal_set_id,
+    session_dest_rel,
+)
 from darkroom.scanner import CalibrationGroup, Session, ScanResult, scan_source
 
 
@@ -269,20 +275,6 @@ def resolve_catalog_sessions(catalog: Path) -> tuple[dict[str, int], bool]:
             file=sys.stderr,
         )
         return {}, False
-
-
-def make_cal_set_id(
-    frame_type: str,
-    camera: str,
-    gain: int,
-    exposure_sec: float,
-    temperature_c: float,
-    capture_date: str,
-) -> str:
-    """Build a calibration set primary key."""
-    slug = camera_slug(camera)
-    temp_str = f"{int(temperature_c)}C"
-    return f"{frame_type}_{slug}_{exposure_sec:.3g}s_{gain}g_{temp_str}_{capture_date}"
 
 
 # ---------------------------------------------------------------------------

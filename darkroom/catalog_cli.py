@@ -20,7 +20,7 @@ from darkroom.cataloger import (
 )
 from darkroom.config import require_archive, resolve_catalog, resolve_path
 from darkroom.parse import fits_files
-from darkroom.sites import describe_disagreement, modal_site, resolve_site
+from darkroom.sites import resolve_site, session_site
 
 
 def _resolve_db(args: argparse.Namespace) -> None:
@@ -588,7 +588,7 @@ def _backfill_run(args: argparse.Namespace, spec: _Backfill) -> None:
 
 
 def _extract_site(row: dict, headers: list) -> tuple[float, float] | str:
-    """Modal SITELAT/SITELONG across the session's frames (see sites.modal_site).
+    """Modal SITELAT/SITELONG across the session's frames (see sites.session_site).
 
     A stale or WiFi-geolocated fix on one frame must not decide the whole
     session, so every frame votes and any outlier more than a kilometre off
@@ -596,17 +596,15 @@ def _extract_site(row: dict, headers: list) -> tuple[float, float] | str:
     """
     if not headers:
         return _UNREADABLE
-    positions = [
-        (_parse_site_deg(h.get("SITELAT")), _parse_site_deg(h.get("SITELONG")))
-        for h in headers
-    ]
-    lat, lon, outliers = modal_site(positions)
+    lat, lon = session_site(
+        (
+            (_parse_site_deg(h.get("SITELAT")), _parse_site_deg(h.get("SITELONG")))
+            for h in headers
+        ),
+        row["session_id"],
+    )
     if lat is None:
         return _NO_HEADERS
-    if outliers:
-        usable = sum(1 for la, lo in positions if la is not None and lo is not None)
-        for line in describe_disagreement(row["session_id"], lat, lon, outliers, usable):
-            print(line, file=sys.stderr)
     return lat, lon
 
 
