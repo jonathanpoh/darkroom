@@ -2642,6 +2642,39 @@ a session whose site differs from the rig's usual site, or simply require
 confirmation for any session attributed to a location that is not a known
 site — which is the cheap version and would have caught both.
 
+**✅ Both resolved 2026-09-02, and both were real travel** — the blind spot
+was real but the data was not wrong:
+
+| | |
+|---|---|
+| `Castillo de Cea` | 42.4635, -5.0146 · Bortle 4 · SQM 20.92 — the 8-panel M 8 mosaic |
+| `Cabo Espichel` | 38.4178, -9.2119 · Bortle 5 · SQM 20.54 — `Moon_20260827` |
+
+Added with `catalog sites add`; checked first that neither matches any other
+session at the default 1 km radius. The mosaic re-weighted from **1.00× to
+4.92×** (0.08h → 0.41h home-equivalent per panel), which is the point: an
+unmatched site is silently counted as if it were the Bortle 7 back garden.
+`M106_20260419` was corrected to Home by Jonathan; `M51_20260228` already
+held Home.
+
+#### ⚠️ Both sessions will warn on every future `rescan-archive`, forever
+
+Worth knowing before chasing it again. The catalog rows are now right, but the
+**FITS headers are not** — 59 of M 51's 102 frames and 26 of M 106's 50 still
+carry the away coordinate, and darkroom never rewrites source headers. So the
+archive scan will keep computing a modal site that disagrees with the stored
+row and keep printing the warning. That is correct behaviour, not a regression.
+
+Note also that both rows are right only because they hold the **minority**
+cluster. If `site_lat`/`site_lon` were ever added to `_CHANGE_FIELDS` as the
+naive fix, rescan would immediately propose reverting both to the modal — i.e.
+back to where the phone was. A second reason the modal is the wrong question.
+
+Silencing the warning permanently would mean rewriting `SITELAT`/`SITELONG` on
+152 files, as was done for `INSTRUME` in BLOCKERS #14 (byte-for-byte backups
+under `_backups/`, checksums, then re-scan). Not urgent; the catalog is
+already correct.
+
 Low urgency for *depth*: the SQM difference between Home (19.19) and Quinta do
 Lago (19.38) is negligible, so home-equivalent hours barely move. It is the
 site attribution that is wrong — and if the M 8 mosaic really is Spain, that
