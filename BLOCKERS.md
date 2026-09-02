@@ -126,7 +126,7 @@ Notes for the migration pass:
 - Then run `darkroom catalog apply-renames --archive … --apply` to move the
   folders (see #6).
 
-### 2b. ⚠️ One `/rescan` pair would destroy a `processed` row
+### 2b. ⚠️ One `/rescan` pair would destroy a `processed` row ✅ DONE
 
 Queue as of 2026-08-31: **6 `delete` + 2 `create` pending** (16 updates and 21
 renames already applied). One create/delete pair is the *same session*:
