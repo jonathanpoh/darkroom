@@ -68,6 +68,7 @@ from darkroom.cataloger import (
     session_id_for,
 )
 from darkroom.names import (
+    DSO_DIRNAME,
     IDENTITY_FIELDS,
     KNOWN_FILTERS,
     _normalize_target,
@@ -113,21 +114,22 @@ class EmptyDiskDivergence(Exception):
 # 'create'/'delete' proposal's `changes` dict. target/obs_date are
 # deliberately absent: together with ota/camera/filter (which ARE compared)
 # they're baked into session_id itself, so a change to target or obs_date
-# shows up as a create+delete pair, never an update.
+# shows up as a create+delete pair, never an update. `panel` (M1) is an
+# identity component too, but it lives in a column of its own: a create
+# without it produced a row whose id said "_P1-2" while its panel column was
+# NULL — a row that no longer regenerates its own session_id, and so
+# diverges on every later scan. target/obs_date/lights_path ride on the
+# proposal row itself; panel has nowhere to go but `changes`.
 _SAFE_FIELDS = frozenset({"frame_count", "total_integration_sec"})
 
 _CHANGE_FIELDS = (
-    "ota", "camera", "filter", "gain", "temperature_c", "exposure_sec",
+    "ota", "camera", "filter", "panel", "gain", "temperature_c", "exposure_sec",
     "focal_length", "frame_count", "total_integration_sec",
     "ra_deg", "dec_deg", "start_utc", "end_utc",
 )
 
 _FLOAT_FIELDS = frozenset({"exposure_sec", "temperature_c", "focal_length"})
 _INT_FIELDS = frozenset({"frame_count", "total_integration_sec", "gain"})
-
-# Identity components (names.IDENTITY_FIELDS, shared with catalog_db) — a
-# 'rename' proposal is exactly a divergence in one or more of these.
-_IDENTITY_FIELDS = IDENTITY_FIELDS
 
 
 def _canonical_session_id(row: dict) -> str:
@@ -173,10 +175,6 @@ def _canonical_session_id(row: dict) -> str:
         filter_ if filter_ in KNOWN_FILTERS and filter_ != "NoFilter" else None,
         panel=row.get("panel") or panel,
     )
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _ra_diff_deg(a: float, b: float) -> float:
@@ -317,7 +315,7 @@ def scan(
     archive_root: Path,
     backend,
     *,
-    dso_dirname: str = "01_Deep Sky Objects",
+    dso_dirname: str = DSO_DIRNAME,
     pointing_tolerance_deg: float = DEFAULT_POINTING_TOLERANCE_DEG,
     allow_empty_disk: bool = False,
 ) -> list[dict]:
@@ -347,8 +345,20 @@ def scan(
     if not disk_sessions and catalog_sessions and not allow_empty_disk:
         raise EmptyDiskDivergence(len(catalog_sessions))
 
-    detected_at = _now_iso()
+    detected_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     proposals: list[dict] = []
+
+    def emit(kind: str, tier: str, session_id: str, *, target, obs_date, lights_path, changes):
+        proposals.append({
+            "session_id": session_id,
+            "kind": kind,
+            "tier": tier,
+            "target": target,
+            "obs_date": obs_date,
+            "lights_path": lights_path,
+            "changes": changes,
+            "detected_at": detected_at,
+        })
 
     # Pair off catalog-only and disk-only sessions that are the same night
     # under two spellings of its identity (legacy `SH2-101` vs canonical
@@ -369,7 +379,7 @@ def scan(
             changes = _diff_fields(cat, disk, pointing_tolerance_deg)
             changes.update({
                 f: {"current": cat.get(f), "proposed": disk.get(f)}
-                for f in _IDENTITY_FIELDS
+                for f in IDENTITY_FIELDS
                 if cat.get(f) != disk.get(f)
                 and not _phantom_filter_change(f, cat.get(f), disk.get(f))
             })
@@ -379,16 +389,9 @@ def scan(
                 # rename with no changed field would be an empty write that
                 # keeps reappearing on every scan. Not a divergence.
                 continue
-            proposals.append({
-                "session_id": old_id,
-                "kind": "rename",
-                "tier": "review",
-                "target": cat.get("target"),
-                "obs_date": cat.get("obs_date"),
-                "lights_path": disk.get("lights_path"),
-                "changes": changes,
-                "detected_at": detected_at,
-            })
+            emit("rename", "review", old_id, target=cat.get("target"),
+                 obs_date=cat.get("obs_date"), lights_path=disk.get("lights_path"),
+                 changes=changes)
             continue
 
         disk = disk_sessions.get(session_id)
@@ -399,51 +402,18 @@ def scan(
             if not changes:
                 continue
             tier = "safe" if set(changes) <= _SAFE_FIELDS else "review"
-            proposals.append({
-                "session_id": session_id,
-                "kind": "update",
-                "tier": tier,
-                "target": cat.get("target") or disk.get("target"),
-                "obs_date": cat.get("obs_date") or disk.get("obs_date"),
-                "lights_path": disk.get("lights_path"),
-                "changes": changes,
-                "detected_at": detected_at,
-            })
+            emit("update", tier, session_id,
+                 target=cat.get("target") or disk.get("target"),
+                 obs_date=cat.get("obs_date") or disk.get("obs_date"),
+                 lights_path=disk.get("lights_path"), changes=changes)
         elif disk is not None:
-            proposals.append({
-                "session_id": session_id,
-                "kind": "create",
-                "tier": "review",
-                "target": disk.get("target"),
-                "obs_date": disk.get("obs_date"),
-                "lights_path": disk.get("lights_path"),
-                "changes": {
-                    field: {"current": None, "proposed": disk.get(field)}
-                    # M1: `panel` is an identity component that appears in the
-                    # session_id but is not a _CHANGE_FIELD, so without it here
-                    # a create produced a row whose id says "_P1-2" while its
-                    # panel column was NULL — a row that no longer regenerates
-                    # its own session_id, and so diverges on every later scan.
-                    # target/obs_date/lights_path ride on the proposal row
-                    # itself; panel has nowhere to go but `changes`.
-                    for field in (*_CHANGE_FIELDS, "panel")
-                },
-                "detected_at": detected_at,
-            })
+            emit("create", "review", session_id, target=disk.get("target"),
+                 obs_date=disk.get("obs_date"), lights_path=disk.get("lights_path"),
+                 changes={f: {"current": None, "proposed": disk.get(f)} for f in _CHANGE_FIELDS})
         else:
-            proposals.append({
-                "session_id": session_id,
-                "kind": "delete",
-                "tier": "review",
-                "target": cat.get("target"),
-                "obs_date": cat.get("obs_date"),
-                "lights_path": cat.get("lights_path"),
-                "changes": {
-                    field: {"current": cat.get(field), "proposed": None}
-                    for field in _CHANGE_FIELDS
-                },
-                "detected_at": detected_at,
-            })
+            emit("delete", "review", session_id, target=cat.get("target"),
+                 obs_date=cat.get("obs_date"), lights_path=cat.get("lights_path"),
+                 changes={f: {"current": cat.get(f), "proposed": None} for f in _CHANGE_FIELDS})
 
     return proposals
 

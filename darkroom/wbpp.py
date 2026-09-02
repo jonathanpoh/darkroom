@@ -7,14 +7,26 @@ from pathlib import Path
 from darkroom.parse import fits_files, parse_datetime, parse_exposure, parse_temperature
 
 
+_SESSION_DIR_RE = re.compile(r"SESSION_(\d+)")
+
+
+def session_dirs(target_dir: Path) -> list[Path]:
+    """Return the SESSION_N dirs directly inside target_dir, sorted; [] if it doesn't exist.
+
+    The one definition of what a session dir looks like — `next_session_num`,
+    `clear_sessions` and `darkroom.finish` all go through it.
+    """
+    if not target_dir.exists():
+        return []
+    return sorted(
+        p for p in target_dir.iterdir()
+        if p.is_dir() and _SESSION_DIR_RE.fullmatch(p.name)
+    )
+
+
 def next_session_num(target_dir: Path) -> int:
     """Return N+1 where N is the highest SESSION_N number in target_dir (or 1)."""
-    nums = []
-    if target_dir.exists():
-        for p in target_dir.iterdir():
-            m = re.fullmatch(r"SESSION_(\d+)", p.name)
-            if m and p.is_dir():
-                nums.append(int(m.group(1)))
+    nums = [int(_SESSION_DIR_RE.fullmatch(p.name).group(1)) for p in session_dirs(target_dir)]
     return max(nums, default=0) + 1
 
 
@@ -106,8 +118,5 @@ def find_real_files(target_dir: Path) -> list[Path]:
 
 def clear_sessions(target_dir: Path) -> None:
     """Delete all SESSION_N subdirectories inside target_dir."""
-    if not target_dir.exists():
-        return
-    for p in list(target_dir.iterdir()):
-        if re.fullmatch(r"SESSION_\d+", p.name) and p.is_dir():
-            shutil.rmtree(p)
+    for p in session_dirs(target_dir):
+        shutil.rmtree(p)

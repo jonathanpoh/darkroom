@@ -168,6 +168,12 @@ def make_session_id(
         session_id += f"_P{panel}"
     return session_id
 
+# Top-level archive folder for light frames. Shared by `session_dest_rel`,
+# `darkroom.finish` (which builds `_Processed/` paths under it) and the
+# archive scanners (`darkroom.rescan`, `darkroom.procscan`), so the layout
+# is spelled in one place.
+DSO_DIRNAME = "01_Deep Sky Objects"
+
 
 def session_dest_rel(
     target: str, obs_date: str, ota: str, camera: str, filter_: str | None, *, panel: str | None = None
@@ -185,7 +191,7 @@ def session_dest_rel(
     """
     f = filter_ or "NoFilter"
     folder = f"{obs_date}_{ota}_{_normalize_camera(camera)}"
-    rel = Path("01_Deep Sky Objects") / target / folder / "Lights" / f
+    rel = Path(DSO_DIRNAME) / target / folder / "Lights" / f
     if panel:
         rel = rel / f"P{panel}"
     return rel

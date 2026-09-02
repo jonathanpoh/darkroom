@@ -35,6 +35,7 @@ from pathlib import Path
 
 from darkroom import wbpplog
 from darkroom.catalog import query_all_sessions
+from darkroom.names import DSO_DIRNAME
 
 # Subs / raw lights — never evidence of processing, regardless of location.
 _SUB_EXTS = frozenset({".fit", ".fits", ".orf", ".cr2"})
@@ -241,7 +242,7 @@ def classify_session(obs_date: str, target_ev: dict) -> tuple[str, str, str | No
 
 
 def scan(
-    archive_root: Path, backend, *, dso_dirname: str = "01_Deep Sky Objects"
+    archive_root: Path, backend, *, dso_dirname: str = DSO_DIRNAME
 ) -> list[Transition]:
     """Read every session from the catalog backend and propose a processed_state.
 

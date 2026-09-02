@@ -9,11 +9,11 @@ import sqlite3
 from darkroom.catalog_client import LocalBackend
 from darkroom.cataloger import init_db, upsert_calibration_set, upsert_session
 from darkroom.finish import (
-    _find_processing_date, _build_dest, _copy_flat,
-    _list_session_dirs, _confirm_and_delete, _resolve_session_ids,
-    _mark_sessions_processed, _panel_dirs, cmd_finish,
+    _find_processing_date, _build_dest, _copy_flat, _confirm_and_delete,
+    _lights_index, _resolve_session_ids, _mark_sessions, _panel_dirs, cmd_finish,
 )
 from darkroom.names import wbpp_panel_dir
+from darkroom.wbpp import session_dirs
 from darkroom.prep import _build_night, _no_darks_note, add_subparser as prep_add_subparser
 
 
@@ -147,14 +147,14 @@ def test_list_session_dirs_returns_only_session_dirs(tmp_path):
     (tmp_path / "SESSION_1").mkdir()
     (tmp_path / "SESSION_2").mkdir()
     (tmp_path / "Output").mkdir()        # should NOT appear
-    result = _list_session_dirs(tmp_path)
+    result = session_dirs(tmp_path)
     names = {p.name for p in result}
     assert names == {"SESSION_1", "SESSION_2"}
 
 
 def test_list_session_dirs_empty(tmp_path):
     (tmp_path / "Output").mkdir()
-    result = _list_session_dirs(tmp_path)
+    result = session_dirs(tmp_path)
     assert result == []
 
 
@@ -217,13 +217,14 @@ def test_resolve_session_ids_filter_subdir_layout(tmp_path):
     link_dir.mkdir(parents=True)
     (link_dir / light.name).symlink_to(light.resolve())
 
-    assert _resolve_session_ids(wbpp_target, LocalBackend(catalog), archive) == [sid]
+    index = _lights_index(LocalBackend(catalog), archive)
+    assert _resolve_session_ids([wbpp_target], index) == [sid]
 
 
 # ── W1: finish marks structured processed_state ────────────────────────────
 
 def test_mark_sessions_processed_sets_structured_state(tmp_path):
-    """finish's _mark_sessions_processed must set processed_state='processed'
+    """finish's _mark_sessions must set processed_state='processed'
     with processed_path/processed_date, not the legacy processed_status."""
     archive = tmp_path / "archive"
     catalog = tmp_path / "cat.db"
@@ -249,9 +250,9 @@ def test_mark_sessions_processed_sets_structured_state(tmp_path):
     (link_dir / light.name).symlink_to(light.resolve())
 
     status = "01_Deep Sky Objects/M 81/_Processed/2026-05-15"
-    _mark_sessions_processed(
-        [wbpp_target], archive, status, "2026-05-15", LocalBackend(catalog)
-    )
+    backend = LocalBackend(catalog)
+    session_ids = _resolve_session_ids([wbpp_target], _lights_index(backend, archive))
+    _mark_sessions(session_ids, backend, status, "2026-05-15", state="processed", dry_run=False)
 
     with sqlite3.connect(catalog) as conn:
         row = conn.execute(
@@ -271,7 +272,8 @@ def test_resolve_session_ids_no_match_returns_empty(tmp_path):
     link_dir.mkdir(parents=True)
     stray = touch(archive / "elsewhere" / "x.fit")
     (link_dir / "x.fit").symlink_to(stray.resolve())
-    assert _resolve_session_ids(wbpp_target, LocalBackend(catalog), archive) == []
+    index = _lights_index(LocalBackend(catalog), archive)
+    assert _resolve_session_ids([wbpp_target], index) == []
 
 
 # ── B2: flat darks captured the morning after the flats ───────────────────────
