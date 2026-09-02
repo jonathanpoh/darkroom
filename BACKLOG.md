@@ -2671,9 +2671,10 @@ naive fix, rescan would immediately propose reverting both to the modal — i.e.
 back to where the phone was. A second reason the modal is the wrong question.
 
 Silencing the warning permanently would mean rewriting `SITELAT`/`SITELONG` on
-152 files, as was done for `INSTRUME` in BLOCKERS #14 (byte-for-byte backups
-under `_backups/`, checksums, then re-scan). Not urgent; the catalog is
-already correct.
+the **85 frames that carry the wrong value** (59 of M 51's, 26 of M 106's), as
+was done for `INSTRUME` in BLOCKERS #14 — byte-for-byte backups under
+`_backups/`, checksums, then re-scan. Filed as **BLOCKERS #15**, low priority;
+the catalog is already correct and nothing downstream is wrong.
 
 Low urgency for *depth*: the SQM difference between Home (19.19) and Quinta do
 Lago (19.38) is negligible, so home-equivalent hours barely move. It is the

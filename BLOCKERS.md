@@ -34,14 +34,17 @@ is drained. What is left are judgement calls about your own data.
    is purely "is it worth stacking".
 4. **The no-filter backlog** (**#10**) — **69 sessions**, down from 95. Long and
    low-intensity, best in batches by night; not blocking anything.
-5. **Push and deploy** (**#7**) — local `main` is **ahead 4** of origin.
+5. **Rewrite `SITELAT`/`SITELONG` on 85 frames** (**#15**) — low priority. The
+   catalog is right; this only silences a `rescan-archive` warning that will
+   otherwise recur on every run forever.
 
 **Closed since the last pass, no action needed:** the `/rescan` queue (worked to
 zero — 53 proposals lifetime), the trap create/delete pair (**#2b**), the
 `Stars` split (**#4** — you chose `NoFilter`; both sessions are live), the
 `INSTRUME` rewrite (**#14**), the M 8 mosaic ingest (**#1** — 8 panels
-`P1-1`…`P4-2`, 10 frames each), the rename ledger, and the last NULL
-`start_utc` (**#8**).
+`P1-1`…`P4-2`, 10 frames each), the rename ledger, the last NULL `start_utc`
+(**#8**), and the push + deploy (**#7** — prod on `3d6ca8e`; only doc commits
+are unpushed).
 
 ---
 
@@ -219,35 +222,37 @@ The `IC4604_20250427` 2-frame row is back and correct — its 2 frames now sit
 in their own `2025-04-27_FRA400_Canon6D/Lights/L-Pro/P1-2/` folder, registered.
 Whether to keep them at all is #3.
 
-### 7. Push and deploy — ⚠️ 4 commits waiting
+### 7. Push and deploy — ✅ all code deployed; 3 doc commits waiting
 
-Local `main` is **ahead 4** of origin as of 2026-09-02. Push is your step (your
-key), then pull + deploy on the LXC:
+**Prod is on `3d6ca8e`** (deployed 2026-09-02, 12:37 WEST). Every code change
+is live. Local `main` is ahead 3, and all three are **documentation only** —
+`5efeb8f`, `73001c3`, `0d12ef3`, the S4 filing.
+
+Deployed today, in two passes:
 
 | | |
 |---|---|
 | `0682665` | M1's web half — panel rollups, editable panel, panel-aware merge |
 | `7a90874` | **B17** — integration time is the per-frame sum, not a product |
-| `c3fd30c` | BACKLOG: B17 done; M3 was already done |
-| `f3af12a` | BLOCKERS: 2b done |
+| `f2582ce` | panel-time counts panelled sessions only (M 8 read 1.5h/panel against an actual 0.1h) |
+| `3d6ca8e` | panel rollups moved to the rig group — a target holding a deep pointing *and* a mosaic has no honest per-panel figure |
 
-Nothing here needs a schema migration. B17 changes what **new** ingests write;
-the 12 live rows that disagree heal on the next `rescan-archive` as `safe`-tier
-updates, and ingest no longer flips them back.
+Also landed without a deploy (catalog data, not code): the sites `Castillo de
+Cea` and `Cabo Espichel`, which re-weighted the M 8 mosaic 1.00× → 4.92× and
+the 2026-08-27 Moon session to 3.467×.
 
-**Previous deploy: 2026-08-31, 23:45 WEST, prod on `1d232db`** — `acc9bc7`
-(nested rename classification), all of **M3** (panel-aware `wbpp` prep,
-two-stage `finish`, mixed-target guard, picker fix) and **F9** (Canon lens OTAs
-+ the acquisition-date rule), including the calibration-upsert fix that lets a
-rescan correct an `ota` at all.
+B17 changes what **new** ingests write; the 12 live rows that disagree heal on
+the next `rescan-archive` as `safe`-tier updates, and ingest no longer flips
+them back.
 
 Rollback backups on the server, newest last:
 `astro_catalog-pre-M1-20260831-090848.db`, `-pre-F9-20260831-222645.db`,
-`-pre-F9cal-20260831-224730.db`, `-pre-deploy-20260831-225233.db`.
+`-pre-F9cal-20260831-224730.db`, `-pre-deploy-20260831-225233.db`,
+`-pre-B17-20260902-120953.db`, `-pre-panelfix-20260902-123746.db`.
 
 Post-deploy state, read from the server 2026-09-02: **244 sessions, 1050
-calibration sets, 0 pending renames, 0 pending rescan proposals, 0 `Unknown`
-OTAs.**
+calibration sets, 10 sites, 0 pending renames, 0 pending rescan proposals,
+0 `Unknown` OTAs.**
 
 ### 8. One session still has a NULL `start_utc` ✅ DONE
 
@@ -353,6 +358,64 @@ where they feed site matching and the home-equivalent-hours weighting.
 
 Check the coordinates on the tablet before a dark-site trip. Wrong coordinates
 are much harder to notice after the fact than to prevent.
+
+**The failure mode is broader than a bad first fix** (found 2026-09-02, and it
+is the *phone* that matters, not the rig):
+
+- **The phone moving mid-session rewrites the coordinate mid-session.** Leaving
+  home, or monitoring the run remotely over Tailscale from somewhere else, both
+  do it. Two nights are affected — see #15. A mid-session flip is therefore
+  *positive evidence the rig did not move*: you cannot travel 10 km in a
+  5-minute inter-frame gap and resume on the same target.
+- **A whole-session absence is invisible.** If the phone is away for the entire
+  run, every frame agrees and nothing flags it — the session is silently filed
+  at wherever the phone was. Only two candidates existed and both turned out to
+  be genuine travel, but nothing would have caught a false one.
+- **An unmatched location is silently counted as home.** A session whose
+  coordinates match no site gets `weight = 1.0`, i.e. treated as the Bortle 7
+  back garden. The M 8 mosaic sat that way until `Castillo de Cea` was added,
+  and re-weighted **1.00× → 4.92×**. So a missing site entry does not merely
+  lose a label, it understates depth.
+
+Swept the whole archive 2026-09-02: of 579 lights folders, 44 carry more than
+one coordinate but **42 are sub-kilometre jitter at one place** and harmless.
+Only the two nights in #15 had clusters far enough apart to matter.
+
+### 15. Rewrite `SITELAT`/`SITELONG` on 85 frames — low priority
+
+The catalog is already correct for both affected sessions. This is only about
+silencing a warning that will otherwise recur forever.
+
+`rescan-archive` re-derives a session's site from its frames, so while those
+frames disagree it will keep printing "site coordinates disagree across
+frames" on **every run**, for these two nights, permanently:
+
+```
+M 51  2026-02-28   43 frames  38.5632,-8.8815  Home        20:37 -> 00:28
+                   59 frames  38.5157,-9.0086  (phone)     00:33 -> 06:06   <- wrong
+M 106 2026-04-19   26 frames  38.5396,-8.9894  (phone)     20:25 -> 22:48   <- wrong
+                   24 frames  38.5631,-8.8815  Home        23:13 -> 01:25
+```
+
+**85 files** carry the wrong value (59 + 26). The rig was at home for both —
+the coordinate followed the phone, either because you left mid-session or were
+monitoring the run remotely over Tailscale from elsewhere (see #12).
+
+**Decide before running it:** write the *session's own* home-cluster value
+(`38.5632,-8.8815` for M 51, `38.5631,-8.8815` for M 106 — what the ASIAir
+actually recorded while the phone was home), or normalise all 152 frames in
+both sessions to the canonical site `38.563,-8.881`. The first preserves what
+the hardware wrote; the second makes the two nights internally uniform. Either
+resolves the warning.
+
+Follow the **#14 pattern**, which worked: byte-for-byte backups with checksums
+and a README under `_backups/<date>_SITELATLON-rewrite/` at **archive root**
+(not beside the originals — `_SKIP_DIR_NAMES_LOWER` only guards the lights
+walk), rewrite, then re-run `rescan-archive` and confirm the warning is gone.
+
+Genuinely low priority: nothing downstream is wrong. Both session rows hold
+the right site, the SQM weighting is right, and the only cost of leaving it is
+a recurring warning you now know to ignore.
 
 ### 13. Triage "finalize / promote" workflow
 
