@@ -8,144 +8,125 @@ call about your own data.
 something here is unblocked, the corresponding backlog item can move.
 
 > Catalog figures below were read from the live server (`darkroom.jpoh.net`) on
-> **2026-08-31**. Re-check before trusting them — `darkroom catalog list`, or
+> **2026-09-02**. Re-check before trusting them — `darkroom catalog list`, or
 > the web UI.
 
-## ⚡ Start here (2026-08-31, evening)
+## ⚡ Start here (2026-09-02)
+
+Read live: **244 sessions, 0 pending `/rescan` proposals, 0 pending renames,
+0 `Unknown` OTAs, 0 NULL `start_utc`.** Every queue that used to be listed here
+is drained. What is left are judgement calls about your own data.
 
 **Actually waiting on you, in order:**
 
-1. **One `/rescan` pair is a trap — do not apply it as-is.** See **#2b**. Edit
-   that session's OTA in the web UI instead of applying delete + create. (Its
-   row now reads `Canon50mm` rather than `Unknown`, but the trap is unchanged.)
-2. **Finish the `Stars` split** (**#4**) — decided; it is its own session. Needs
-   the deploy of `a218e07` (creates were broken), then the 3-step sequence in
-   #4. Pick `NoFilter` vs `L-Pro` before you start.
-3. **Rewrite `INSTRUME` on 154 April-2023 files** (**#14**) — the last of the
-   `ASCOMCameraDriver` mess. Fixes the M 42 session that currently matches none
-   of its own flats.
-4. **Then work the `/rescan` deletes** (**#2b**) — safe to apply now that the
-   orphan-guiding fix is deployed; before it, each delete left a stale row.
+1. **Were the April-2023 flats shot through the L-Pro?** (**#14 residual**)
+   All nine `Canon100mm` flat sets still carry `filter = NULL`, so the M 42
+   2023-04-15 session matches its darks but **none of its flats**. If they were
+   L-Pro, rename `00_Calibration/Flats/100mm_Canon6D/` to
+   `Canon100mm_Canon6D_L-Pro` and re-run `scan-calibration`. Only you know.
+2. **The M 8 mosaic has no flats** (**#1**) — confirmed live: there is not a
+   single `Canon50mm` + `ZWOASI585MCPro` flat set in the catalog, because none
+   were shot that night. Decide: shoot a matching set now, or stack the 8 panels
+   without flats.
+3. **Keep or delete the 2-frame `IC 4604` stray** (**#3**) —
+   `IC4604_20250427_FRA400_Canon6D_L-Pro_P1-2`, a 4-minute aborted start past
+   the night boundary. It is now correctly registered in its own folder, so this
+   is purely "is it worth stacking".
+4. **The no-filter backlog** (**#10**) — **69 sessions**, down from 95. Long and
+   low-intensity, best in batches by night; not blocking anything.
+5. **Push and deploy** (**#7**) — local `main` is **ahead 4** of origin.
 
-**Done today, no action needed** — deploy (prod on `c7a5ef7`), the F9 optics
-decision applied across the whole corpus, the rename ledger drained to zero,
-and every folder that held two sessions' frames split apart. The catalog now
-has **zero `Unknown` OTAs** and **zero `lights_path`s shared by two sessions**.
-
-**Two small loose ends:** 2 unregistered frames in
-`IC 4604/2025-04-26_.../P1-2` (they belong to the night of 2025-04-27 — a
-4-minute aborted start; register or relocate), and the M 8 mosaic has no flats
-because none were shot that night (**#1**) — stack it with flats from another
-`Canon50mm` + `ZWOASI585MCPro` occasion, or without.
+**Closed since the last pass, no action needed:** the `/rescan` queue (worked to
+zero — 53 proposals lifetime), the trap create/delete pair (**#2b**), the
+`Stars` split (**#4** — you chose `NoFilter`; both sessions are live), the
+`INSTRUME` rewrite (**#14**), the M 8 mosaic ingest (**#1** — 8 panels
+`P1-1`…`P4-2`, 10 frames each), the rename ledger, and the last NULL
+`start_utc` (**#8**).
 
 ---
 
 ## 🔴 Blocking other work
 
-### 1. Ingest the M8 mosaic ✅ done
+### 1. Ingest the M8 mosaic ✅ DONE — but it has no flats
 
-**Status: unblocked as of 2026-08-30 — this is the next thing to do.**
+Ingested. Live as of 2026-09-02: **8 sessions, target `M 8`, 2026-08-12,
+panels `1-1` … `4-2`, OTA `Canon50mm`, camera `ZWOASI585MCPro`, filter
+`AstronomikL2`, 10 frames each**, under
+`.../Lights/AstronomikL2/P1-1/` … `/P4-2/`. The first live exercise of M1's
+panel path, and it came out clean.
 
-The 8-panel 50mm mosaic (shot 2026-08-13) has been held since M1's ingest half
-didn't exist. It does now: `parse_panel`, the `sessions.panel` column, the
-`Canon50mm` OTA, and the wiring through scan → review → commit are all on
-`main`. Everything needed to ingest it correctly is in place.
+As predicted, `scan-guiding` lists those 8 as unmatched — no guidescope at
+50mm, so there is no PHD2 log for that night. Correct, not a failure.
 
-```bash
-darkroom ingest scan --asiair <staging> --manifest ~/ingest/m8-mosaic.yaml
-darkroom ingest review ~/ingest/m8-mosaic.yaml
-darkroom ingest commit ~/ingest/m8-mosaic.yaml
-```
+**⚠️ Still open: there are no flats for it.** Checked live — the catalog holds
+**zero** `Canon50mm` + `ZWOASI585MCPro` flat sets, because none were shot that
+night. `wbpp` will build all 8 panel trees with an empty `Flats/`. Your call:
+shoot a matching set (the adapter makes the optical path repeatable, so a set
+shot now is still valid), or stack without and accept the vignetting.
 
-**Check in `review` before committing** — this is the first exercise of the
-panel path on live data:
+### 2. Work the `/rescan` queue ✅ DONE — the queue is empty
 
-- 8 session entries, target `M 8`, panels `1-1` … `4-2` (a 4×2 grid).
-- OTA `Canon50mm`, camera `ZWOASI585MCPro`, filter `AstronomikL2`.
-- Destinations ending `.../Lights/AstronomikL2/P1-1/` … `/P4-2/`.
+Verified live 2026-09-02: **0 pending proposals.** Lifetime total 53 —
+21 `rename`, 18 `update`, 9 `delete` and 4 `create` applied, 1 `create`
+dismissed. Both of the holds recorded here are resolved: the `Stars` `create`
+(#4) and the trap pair (#2b).
 
-Expect `scan-guiding` to list those 8 sessions as **unmatched** afterwards —
-no guidescope was used at 50mm, so there is no PHD2 log for that night. That is
-correct, not a failure to debug.
+The one durable lesson, for the next time the queue fills:
 
-### 2. Work the `/rescan` queue — 21 pending proposals ✅ done except 'Stars' create and all deletes
+- **After applying anything that changes a session's `start_utc`/`end_utc`,
+  re-run `darkroom catalog scan-guiding --apply`.** `backfill-times` only fills
+  NULLs and will not revisit a row, so guiding stats derived from the old span
+  stay stale silently.
+- A `delete` against an unmounted NAS is indistinguishable from a genuinely
+  removed session. Deletes now confirm before removing a row, but still read
+  each one.
 
-Verified live 2026-08-30: **15 `update`, 5 `delete`, 1 `create`** pending
-(12 `rename` proposals from the earlier pass are already applied).
+### 3. Supply the real filter for the IC 4604 mosaic nights ✅ DONE — one stray left to judge
 
-Review them at `/rescan` in the web UI, then apply.
+You supplied it: **`L-Pro`**. The five fake targets (`IC 4604_1-1` …) are gone,
+folded into one `IC 4604` with `panel` set, and the folders were moved to match.
+Live 2026-09-02, catalog and archive agreeing frame-for-frame:
 
-- **Hold the single `create`.** It is the `NGC 7000/2025-08-01` `Stars`
-  sub-folder — a broadband star layer shot to be composited onto narrowband
-  data. Applying it would create a session whose "filter" is `Stars`. It waits
-  on decision **#4** below.
-- The 5 `delete` proposals now ask for confirmation before removing a row
-  (fixed in `840605b`), but still read each one: a `delete` against an
-  unmounted NAS is indistinguishable from a genuinely removed session.
-- After applying anything that changes a session's `start_utc`/`end_utc`,
-  **re-run `darkroom catalog scan-guiding --apply`**. `backfill-times` only
-  fills NULLs and will not revisit a row, so the guiding stats derived from the
-  old span stay stale silently.
+| Session | Panel | Night | Frames |
+|---|---|---|---|
+| `IC4604_20230715_Canon100mm_Canon6D_L-Pro` | — | 2023-07-15 | 21 |
+| `IC4604_20250426_..._P1-1` / `P1-2` / `P2-1` / `P2-2` | 1-1…2-2 | 2025-04-26 | 33, 33, 35, 32 |
+| `IC4604_20250427_..._P1-2` | 1-2 | 2025-04-27 | **2** |
+| `IC4604_20250524_..._P1-1` / `P1-2` / `P2-1` / `P2-2` | 1-1…2-2 | 2025-05-24 | 19, 30, 30, 28 |
 
-### 3. Supply the real filter for the IC 4604 mosaic nights ✅ Done
+Ten rows, not the nine BACKLOG.md claimed, and **all four** panels were
+revisited on 2025-05-24 — the mosaic is two full nights plus a stray.
 
-**Nobody has this information but you, and it is not recoverable from disk.**
+The bare 2023-07-15 row is a **legitimate single-pointing session**, not a
+stray panel; its `panel` is correctly NULL. A target holding both panelled and
+non-panelled sessions is the intended design — though note that `wbpp` now
+**refuses** to prep both in one go (M3's mixed-target guard), so work the
+mosaic by date.
 
-Those rows were catalogued by a scan that read `Lights/<subdir>` as the filter,
-so the panel name landed in the filter column. M2's `KNOWN_FILTERS` guard
-(`0e54759`) then correctly evicted those bogus values — which means the **real
-filter for those nights is now recorded nowhere**.
+**⚠️ Left to judge: the 2-frame 2025-04-27 stray.** A 4-minute aborted start
+past the night boundary. It is now correctly registered in its own folder, so
+nothing is broken either way — the only question is whether 2 frames are worth
+carrying. Delete the row and the folder, or leave it.
 
-Live state (10 rows across 5 fake targets, all with `filter = NULL`):
+### 2b. One `/rescan` pair would have destroyed a `processed` row ✅ DONE
 
-| Target (as catalogued) | Nights | Frames |
-|---|---|---|
-| `IC 4604` | 2023-07-15 | 21 |
-| `IC 4604_1-1` | 2025-04-26, 2025-05-24 | 33, 18 |
-| `IC 4604_1-2` | 2025-04-26, 2025-04-27, 2025-05-24 | 30, **2**, 23 |
-| `IC 4604_2-1` | 2025-04-26, 2025-05-24 | 29, 27 |
-| `IC 4604_2-2` | 2025-04-26, 2025-05-24 | 22, 24 |
-
-Two corrections to what BACKLOG.md says about this data:
-
-- It says **9** rows; there are **10**.
-- It says only panel `1-1` was revisited on 2025-05-24. In fact **all four
-  panels** were revisited that night. The mosaic is 2 full nights plus a stray.
-
-Notes for the migration pass:
-
-- The bare `IC 4604` (2023-07-15, Canon6D, 21 frames) is a **legitimate
-  single-pointing session**, not a stray panel. Leave its `panel` NULL. A
-  target holding both panelled and non-panelled sessions is the intended
-  design, not a mess to clean up.
-- The 2-frame `IC 4604_1-2` on 2025-04-27 looks like a tail past the night
-  boundary. Decide whether to keep or delete it.
-- Once you supply the filter, each row is **one** edit setting target + panel +
-  filter together. Target-only hits the same-night collision — though M1's
-  `panel` in the session_id is exactly what now makes that edit possible.
-- Then run `darkroom catalog apply-renames --archive … --apply` to move the
-  folders (see #6).
-
-### 2b. ⚠️ One `/rescan` pair would destroy a `processed` row ✅ DONE
-
-Queue as of 2026-08-31: **6 `delete` + 2 `create` pending** (16 updates and 21
-renames already applied). One create/delete pair is the *same session*:
+Resolved as prescribed — the OTA was edited in the web UI rather than the
+delete + create pair being applied, so the row kept its `processed` state and
+its guiding row and was renamed in place.
 
 ```
-delete  NGC7000_20230914_Unknown_Canon6D_UnknownFilter    fl=53.0, state=processed
-create  NGC7000_20230914_Canon50mm_Canon6D_UnknownFilter
+was:  NGC7000_20230914_Unknown_Canon6D_UnknownFilter     fl=53.0, state=processed
+now:  NGC7000_20230914_Canon50mm_Canon6D_UnknownFilter
 ```
 
-M1's `Canon50mm` window (45–55) retroactively reclassified that 2023 night,
-which shot at 53mm. `rescan` can't pair an OTA change across the session_id, so
-it proposes delete + create — and **applying that drops the row's `processed`
-state and any guiding row** (the B15 failure mode).
+**Keep the pattern, it will recur.** M1's `Canon50mm` window (45–60)
+retroactively reclassified that night. `rescan` cannot pair an OTA change
+across the `session_id`, so it will always propose delete + create for one —
+and applying that drops `processed` state and the guiding row (the B15 failure
+mode). Any rescan pair that is the *same session under a new identity* is an
+**edit in the UI**, never an apply.
 
-**Do this instead:** edit its OTA to `Canon50mm` in the web UI. That is an
-identity edit, so it renames the row in place and carries everything forward,
-then `apply-renames` moves the folder. Only this one session is affected.
-
-### 4. The `Stars` sub-folder ✅ decided 2026-09-01 — it is its own session
+### 4. The `Stars` sub-folder ✅ DONE — decided 2026-09-01, applied
 
 A session folder can contain a sub-folder that is **not** a filter and not a
 mosaic panel — `NGC 7000/2025-08-01_FRA400_Canon6D/20250802_FRA400_NoFilter_RGB_Stars/`,
@@ -167,22 +148,24 @@ NGC 7000/2025-08-01_FRA400_Canon6D/
   Lights/NoFilter/    ← 40 × 10s+30s (star layer)
 ```
 
-**To finish it — order matters:**
+**Done.** Both sessions are live as of 2026-09-02, and you chose **`NoFilter`**
+for the star layer:
 
-1. Set the parent session's filter to `L-Extreme` in the web UI. That queues a
-   *deepening* rename (`.../2025-08-01_FRA400_Canon6D` →
-   `.../Lights/L-Extreme`), which `apply-renames` reports as **conflict** while
-   the 12 frames are still loose in the old folder. Move them into
-   `Lights/L-Extreme/` by hand, then `apply-renames` acks it.
-2. Apply the `create` proposal for the star layer (needs the fix in `a218e07`
-   deployed — creates were broken until then).
-3. Re-send its `filter` unchanged via the API to force a `lights_path`
-   recompute, then `apply-renames` moves
-   `20250802_FRA400_NoFilter_RGB_Stars/` → `Lights/NoFilter/`.
+```
+NGC7000_20250801_FRA400_Canon6D_L-Extreme   12 frames  .../Lights/L-Extreme
+NGC7000_20250801_FRA400_Canon6D_NoFilter    40 frames  .../Lights/NoFilter
+```
 
-**Decide `NoFilter` vs `L-Pro` first** — the folder name you wrote says
-`NoFilter`, nothing in the FITS can confirm it, and it gets baked into the
-`session_id` and the folder.
+Worth keeping from the three-step sequence it took, because the same shape will
+recur on any *deepening* rename (a session folder gaining a `Lights/<filter>/`
+level it did not have):
+
+- Setting the parent's filter queues a rename that `apply-renames` reports as
+  **conflict** while the old frames are still loose in the folder above. Move
+  them by hand into the new `Lights/<filter>/`, then it acks.
+- A `create` proposal needed `a218e07` deployed — creates were broken before it.
+- Re-sending a `filter` **unchanged** via the API is the way to force a
+  `lights_path` recompute when the row is right but the folder is not.
 
 Multi-exposure bracketing — the HDR and solar/lunar case this was originally
 tangled with — is now **F11**, and is deliberately a separate problem.
@@ -213,7 +196,7 @@ guidescope is used at 50mm).
 
 ### 6. Drain the rename ledger ✅ done — 0 pending
 
-Verified live **2026-08-31, evening**: the ledger is **empty**. The 8 IC 4604
+Verified live **2026-09-02**: the ledger is still **empty**. The 8 IC 4604
 panel moves, the 28 F9 renames and the 6 session-split recomputes have all been
 applied. The two `Sh2-101` case-only conflicts are gone with them.
 
@@ -232,34 +215,45 @@ darkroom catalog apply-renames --archive "$DARKROOM_ARCHIVE"           # dry run
 darkroom catalog apply-renames --archive "$DARKROOM_ARCHIVE" --apply
 ```
 
-The old `IC4604_20250427` 2-frame row is gone, and its 2 frames sit
-unregistered in the 2025-04-26 `P1-2` folder — see Start here #6.
+The `IC4604_20250427` 2-frame row is back and correct — its 2 frames now sit
+in their own `2025-04-27_FRA400_Canon6D/Lights/L-Pro/P1-2/` folder, registered.
+Whether to keep them at all is #3.
 
-### 7. Push and deploy ✅ done — prod on `1d232db`
+### 7. Push and deploy — ⚠️ 4 commits waiting
 
-Deployed **2026-08-31, 23:45 WEST** (an earlier deploy that evening put
-`c7a5ef7` live; this one adds the F10 filing and the orphan-guiding fix). That shipped `acc9bc7` (nested rename
-classification), all of **M3** (panel-aware `wbpp` prep, two-stage `finish`,
-mixed-target guard, picker fix) and **F9** (Canon lens OTAs + the
-acquisition-date rule), including the calibration-upsert fix that lets a rescan
-correct an `ota` at all.
+Local `main` is **ahead 4** of origin as of 2026-09-02. Push is your step (your
+key), then pull + deploy on the LXC:
+
+| | |
+|---|---|
+| `0682665` | M1's web half — panel rollups, editable panel, panel-aware merge |
+| `7a90874` | **B17** — integration time is the per-frame sum, not a product |
+| `c3fd30c` | BACKLOG: B17 done; M3 was already done |
+| `f3af12a` | BLOCKERS: 2b done |
+
+Nothing here needs a schema migration. B17 changes what **new** ingests write;
+the 12 live rows that disagree heal on the next `rescan-archive` as `safe`-tier
+updates, and ingest no longer flips them back.
+
+**Previous deploy: 2026-08-31, 23:45 WEST, prod on `1d232db`** — `acc9bc7`
+(nested rename classification), all of **M3** (panel-aware `wbpp` prep,
+two-stage `finish`, mixed-target guard, picker fix) and **F9** (Canon lens OTAs
++ the acquisition-date rule), including the calibration-upsert fix that lets a
+rescan correct an `ota` at all.
 
 Rollback backups on the server, newest last:
 `astro_catalog-pre-M1-20260831-090848.db`, `-pre-F9-20260831-222645.db`,
 `-pre-F9cal-20260831-224730.db`, `-pre-deploy-20260831-225233.db`.
 
-Everything local is pushed and deployed. Post-deploy state, read from the
-server: **247 sessions, 150 guiding rows (150 joined), 1050 calibration sets,
-0 pending renames, 0 `Unknown` OTAs.**
+Post-deploy state, read from the server 2026-09-02: **244 sessions, 1050
+calibration sets, 0 pending renames, 0 pending rescan proposals, 0 `Unknown`
+OTAs.**
 
-### 8. One session still has a NULL `start_utc`
+### 8. One session still has a NULL `start_utc` ✅ DONE
 
-`NGC7000_20260616_FRA400-07x_ZWOASI585MCPro_L-Synergy` (2026-06-16) has no
-wall-clock span, so it can never match a guide log.
-
-`backfill-times` derives the span from the FITS frames, so this usually means
-the frames aren't where the catalog thinks they are. Worth a look at the
-folder before re-running the backfill.
+Verified live 2026-09-02: **no session has a NULL `start_utc`.**
+`NGC7000_20260616_FRA400-07x_ZWOASI585MCPro_L-Synergy` now carries a span, so
+every row in the catalog can match a guide log.
 
 ---
 
@@ -289,7 +283,9 @@ than beside the originals, because `_SKIP_DIR_NAMES_LOWER` only guards the
 is given, so a backup folder inside `00_Calibration` would have registered as
 duplicate calibration sets.
 
-**Residual — the flats still don't match.** They now carry the right
+**⚠️ Residual, still open — the flats still don't match.** Re-checked live
+2026-09-02: all nine `Canon100mm` flat sets carry `filter = NULL`. They now
+carry the right
 `ota='Canon100mm'` and `camera='Canon6D'`, but `filter` is NULL while the
 session is `L-Pro`, and flat matching keys on OTA + camera + filter. The folder
 `Flats/100mm_Canon6D/` has no filter component and ASIAir writes no FILTER
@@ -324,19 +320,17 @@ review`. The date rule is retrospective only.
 
 ### 10. The bulk no-filter backlog
 
-Verified live 2026-08-30: **95 of 240 sessions had no filter recorded** (40% of
-the catalog). Recheck — the catalog is now 247 sessions and you have corrected
-a batch since.
+Verified live 2026-09-02: **69 of 244 sessions have no filter recorded** (28% of
+the catalog) — down from 95 of 240, so a batch of 26 has been recovered since.
 
 | | |
 |---|---|
-| By camera | Canon6D 70, ZWOASI585MCPro 25 |
-| By year | 2023: 21 · 2024: 17 · 2025: 57 |
+| By camera | Canon6D 44, ZWOASI585MCPro 25 |
 
-Mostly legacy, and mostly Canon6D — but 57 are from 2025, which is recent
-enough to be worth recovering while you still remember. These surface in the
-web UI's filter queue. Not urgent; it's a long, low-intensity pass rather than
-a blocker, and worth doing in batches by night.
+Mostly legacy and mostly Canon6D. These surface in the web UI's filter queue.
+Not urgent; it's a long, low-intensity pass rather than a blocker, and worth
+doing in batches by night — the closer to the shoot you can still remember, the
+more recoverable it is.
 
 ~~Related: 20 sessions sit at `ota='Unknown'`~~ ✅ **all resolved** by F9 —
 the catalog now holds zero `Unknown` OTAs. The filter backlog above is
