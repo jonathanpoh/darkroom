@@ -219,30 +219,7 @@ the session.
   (assert only the matching one is symlinked) and an uncooled ladder where the
   session temperature falls between rungs (assert nearest wins, and that a
   session outside the tolerance gets none rather than all).
-
-### B13. `wbpp` takes a whole night's dark params from `sessions[0]`
-
-Found 2026-07-29 while verifying **B11** against live data, not reported.
-
-- **Where:** `darkroom/prep.py:_build_night` — `s0 = sessions[0]`, then camera,
-  gain, exposure *and now temperature* for both Darks and Bias come from that
-  one row. The comment claims "all sessions same night share params".
-- **They don't.** IC 1805 2023-12-14 has three sessions in one SESSION_N:
-  L-Extreme at ISO3200/6.0C, L-Pro at **ISO1600**/5.0C, and an unfiltered one
-  at ISO3200/8.0C. The night gets ISO3200 darks; the L-Pro lights are
-  calibrated with darks from a different ISO.
-- **Scale (live catalog):** 10 of 220 nights have >1 session; of those, 1 has
-  mixed gain, 2 have mixed exposure, and **0 have a temperature spread >3C**.
-  So B11's temperature dimension is safe under this assumption — it's gain and
-  exposure that actually diverge.
-- **Why it's still open:** the fix isn't just "use each session's params" —
-  WBPP's `Darks/` folder is per-SESSION_N, shared by every filter in that
-  night, so supporting mixed gain means either splitting the night into
-  separate SESSION_N dirs per (gain, exposure) or symlinking multiple dark
-  sets and letting WBPP's own frame matching sort it out. That's a design call,
-  not a patch. Low frequency (1 night in 220), so it can wait — but it should
-  at minimum *warn* when a night's sessions disagree, rather than silently
-  using row zero.
+  
 
 ### B12. `wbpp` prefers the previous night's flats over the morning-after set — ✅ FIXED
 
@@ -282,6 +259,43 @@ Found 2026-07-29 while verifying **B11** against live data, not reported.
   morning after. The exception is a dark-site trip with a mid-session filter
   change, where he may shoot flats both before and after the change — which is
   why offset `0` has to stay a valid in-run match rather than being excluded.
+
+### B13. `wbpp` takes a whole night's dark params from `sessions[0]` — ✅ DONE
+
+Found 2026-07-29 while verifying **B11** against live data, not reported.
+
+**Fixed 2026-09-02.** Decision: split the night, don't stack dark sets.
+`prep.build_wbpp_sessions` groups a night's rows by `_dark_key`
+(camera, gain, exposure) and builds one `SESSION_N` per group; `_build_night`
+raises if handed a mixed group, and warns when a group's temperatures spread
+wider than `--dark-temp-tolerance` (F5's territory). Splitting is the right
+altitude because WBPP keys darks on exposure but *not* gain, so symlinking two
+same-exposure masters into one `Darks/` cannot work, while a second `SESSION_N`
+costs nothing — WBPP integrates across session dirs anyway. Live scale at fix
+time: 9 of 235 nights are multi-session, 4 of those mixed (1 gain, 3 exposure),
+and one of the mixed ones — NGC 281 2026-07-26, L-Extreme 180s + L-Synergy
+300s — was still unprocessed and about to be prepped wrong.
+
+- **Where:** `darkroom/prep.py:_build_night` — `s0 = sessions[0]`, then camera,
+  gain, exposure *and now temperature* for both Darks and Bias come from that
+  one row. The comment claims "all sessions same night share params".
+- **They don't.** IC 1805 2023-12-14 has three sessions in one SESSION_N:
+  L-Extreme at ISO3200/6.0C, L-Pro at **ISO1600**/5.0C, and an unfiltered one
+  at ISO3200/8.0C. The night gets ISO3200 darks; the L-Pro lights are
+  calibrated with darks from a different ISO.
+- **Scale (live catalog):** 10 of 220 nights have >1 session; of those, 1 has
+  mixed gain, 2 have mixed exposure, and **0 have a temperature spread >3C**.
+  So B11's temperature dimension is safe under this assumption — it's gain and
+  exposure that actually diverge.
+- **Why it's still open:** the fix isn't just "use each session's params" —
+  WBPP's `Darks/` folder is per-SESSION_N, shared by every filter in that
+  night, so supporting mixed gain means either splitting the night into
+  separate SESSION_N dirs per (gain, exposure) or symlinking multiple dark
+  sets and letting WBPP's own frame matching sort it out. That's a design call,
+  not a patch. Low frequency (1 night in 220), so it can wait — but it should
+  at minimum *warn* when a night's sessions disagree, rather than silently
+  using row zero.
+
 
 ### B14. Session `exposure_sec`/`ra_deg`/`dec_deg`/`gain`/`temperature_c` come from directory order, not the chronologically-first frame — ✅ FIXED
 > Fixed 2026-08-29. Both `scanner.py:_scan_lights` and
@@ -736,23 +750,7 @@ new side table; prefer the numeric `sessions.id` as the foreign key.
 - **Not in scope:** the `ui.py` HTML views call `catalog_db.query_sessions`
   directly with one or two filters — they benefit from step 2 but need no
   edits.
-
----
-
-## W — Web-UI prep (display + edit the catalog)
-
-> Architecture note: model the catalog UI on the **triage subpackage** — it's a
-> working `FastAPI + Jinja2 + db.py + server.py + templates/` reference. Add a
-> new subcommand (e.g. `catalog ui` / `catalog serve-ui`) distinct from the
-> existing datasette `serve`. Read-only display can ship on today's schema;
-> the items below are needed for a UI that **edits/works with** the catalog.
->
-> Migration safety: `init_db` already does additive migrations (`focal_length`,
-> `is_master` via `PRAGMA table_info` checks at `cataloger.py:298-304`) — follow
-> that pattern, never drop columns on a live DB, and back up `astro_catalog.db`
-> first.
-
-
+  
 ### R8. `SessionAnalyzer.analyze_sessions` and `scanner._scan_lights` still each resolve filter and panel by hand
 > Filed 2026-09-02 from the `/simplify` altitude pass over `cataloger.py`.
 > B16 was one symptom of these two night→session builders drifting; that
@@ -769,6 +767,21 @@ new side table; prefer the numeric `sessions.id` as the foreign key.
   `scanner.py:~130`.
 - **Do:** only when one of them next changes; lift it into `parse.py` at
   that point, the way `calibration_filter` was.
+
+---
+
+## W — Web-UI prep (display + edit the catalog)
+
+> Architecture note: model the catalog UI on the **triage subpackage** — it's a
+> working `FastAPI + Jinja2 + db.py + server.py + templates/` reference. Add a
+> new subcommand (e.g. `catalog ui` / `catalog serve-ui`) distinct from the
+> existing datasette `serve`. Read-only display can ship on today's schema;
+> the items below are needed for a UI that **edits/works with** the catalog.
+>
+> Migration safety: `init_db` already does additive migrations (`focal_length`,
+> `is_master` via `PRAGMA table_info` checks at `cataloger.py:298-304`) — follow
+> that pattern, never drop columns on a live DB, and back up `astro_catalog.db`
+> first.
 
 ### W1. Replace overloaded `processed_status` free-text with structured status — ✅ DONE
 > Added `processed_state` (enum `unprocessed`/`processed`/`skipped`, `NOT NULL
@@ -1354,7 +1367,7 @@ was no clean way to do it).
 
 ## F — Features
 
-### F1. Derive processing state by scanning the archive for output artifacts — ✅ IMPLEMENTED (pending commit)
+### F1. Derive processing state by scanning the archive for output artifacts — ✅ IMPLEMENTED 
 > Shipped 2026-07-04 as `darkroom catalog scan-processed --archive PATH
 > [--apply]`. New `darkroom/procscan.py` (strictly read-only on the archive;
 > dry-run is pure-read — no `init_db`, reads via `query_all_sessions`). Added a
