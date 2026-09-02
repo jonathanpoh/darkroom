@@ -144,6 +144,27 @@ def compute_session_span(frames) -> tuple[str | None, str | None]:
     return _format_utc(parsed[0][0]), _format_utc(last_dt + timedelta(seconds=last_exp))
 
 
+def total_integration_sec(exposures) -> int:
+    """Sum an iterable of per-frame exposures into a session's integration time.
+
+    The per-frame sum is the truth, not `frame_count * exposure_sec` (B17):
+    a night whose exposure changed mid-run — the same shape as B13's
+    mixed-gain night — is mis-counted by the product, and `exposure_sec` on
+    the row is only the *representative* frame's exposure.  Both the ingest
+    manifest and the archive scan call this so the two agree; before it, a
+    row's integration time depended on which command last touched it.
+
+    Unparseable exposures count as zero, matching `compute_session_span`.
+    """
+    total = 0.0
+    for exposure in exposures:
+        try:
+            total += float(exposure or 0.0)
+        except (TypeError, ValueError):
+            continue
+    return int(total)
+
+
 # ============================================================================
 # Archive walking and per-frame parsing helpers
 # ============================================================================
@@ -990,7 +1011,7 @@ class SessionAnalyzer:
                 "exposure_sec": first["exposure"],
                 "focal_length": float(focallen) if focallen is not None else None,
                 "frame_count": len(frames),
-                "total_integration_sec": int(sum(f["exposure"] for f in frames)),
+                "total_integration_sec": total_integration_sec(f["exposure"] for f in frames),
                 "ra_deg": first.get("ra_deg"),
                 "dec_deg": first.get("dec_deg"),
                 "site_lat": site_lat,

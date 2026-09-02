@@ -835,3 +835,47 @@ def test_cmd_commit_tolerates_a_manifest_without_span_keys(tmp_path):
 
     rows = LocalBackend(catalog).query_sessions()
     assert rows[0]["start_utc"] is None
+
+
+# ── B17: integration time is the per-frame sum, not frame_count x exposure ───
+
+def test_build_session_entry_carries_the_per_frame_integration_sum():
+    session = _make_session()
+    # 10 x 120s + 5 x 60s: the product formula would say 15 x 180 = 2700.
+    session.total_integration_sec = 1500
+
+    entry = build_session_entry(session, Path("/staging"), catalog_sessions={}, interactive=False)
+
+    assert entry["total_integration_sec"] == 1500
+
+
+def test_cmd_commit_registers_the_per_frame_integration_sum(tmp_path):
+    """A mixed-exposure night commits as 1500, not the 1800 the product gives."""
+    from darkroom.catalog_client import LocalBackend
+
+    entry = _committable_session(tmp_path / "card", ["a.fit"])
+    entry["frame_count"] = 15          # 10 x 120s + 5 x 60s
+    entry["exposure_sec"] = 120.0      # the representative frame's exposure
+    entry["total_integration_sec"] = 1500
+    path, _, catalog = _commit_manifest(tmp_path, [entry])
+
+    cmd_commit(argparse.Namespace(manifest=str(path)))
+
+    rows = LocalBackend(catalog).query_sessions()
+    assert rows[0]["total_integration_sec"] == 1500
+
+
+def test_cmd_commit_falls_back_to_the_product_on_a_pre_b17_manifest(tmp_path):
+    """Manifests written before the field existed must still commit."""
+    from darkroom.catalog_client import LocalBackend
+
+    entry = _committable_session(tmp_path / "card", ["a.fit"])
+    entry["frame_count"] = 10
+    entry["exposure_sec"] = 180.0
+    assert "total_integration_sec" not in entry
+    path, _, catalog = _commit_manifest(tmp_path, [entry])
+
+    cmd_commit(argparse.Namespace(manifest=str(path)))
+
+    rows = LocalBackend(catalog).query_sessions()
+    assert rows[0]["total_integration_sec"] == 1800

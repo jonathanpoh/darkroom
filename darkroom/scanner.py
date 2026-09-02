@@ -10,6 +10,7 @@ from darkroom.cataloger import (
     compute_imaging_night,
     compute_session_span,
     parse_date_obs,
+    total_integration_sec,
 )
 from darkroom.names import _normalize_camera, _round_exposure
 from darkroom.parse import (
@@ -36,6 +37,10 @@ class Session:
     focal_length: float | None
     ra_deg: float | None
     dec_deg: float | None
+    # B17: the per-frame sum, not frame_count * exposure_sec — `exposure_sec`
+    # above is only the representative frame's, so a night whose exposure
+    # changed mid-run is mis-counted by the product.
+    total_integration_sec: int = 0
     # M1: mosaic panel label ("1-1"), None for an ordinary single-pointing
     # session. The ASIAir writes one folder per panel ("M 8_1-1"), so this is
     # split off the folder name at scan time — see _scan_lights.
@@ -155,6 +160,9 @@ def _scan_lights(light_root: Path) -> list[Session]:
                 gain=first_meta["gain"],
                 temperature_c=first_meta["temperature"],
                 exposure_sec=_round_exposure(first_meta["exposure"]),
+                total_integration_sec=total_integration_sec(
+                    meta.get("exposure") for _, meta, _ in frames
+                ),
                 focal_length=float(focallen) if focallen is not None else None,
                 ra_deg=first_meta.get("ra_deg"),
                 dec_deg=first_meta.get("dec_deg"),

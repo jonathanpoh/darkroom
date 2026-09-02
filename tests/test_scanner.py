@@ -371,3 +371,41 @@ def test_scan_source_span_is_none_without_date_obs():
             result = scan_source(source)
 
     assert result.sessions == []
+
+
+# ── B17: a mixed-exposure night sums per frame ───────────────────────────────
+
+def test_scan_source_sums_integration_per_frame():
+    """10 x 120s + 5 x 60s is 1500s, not frame_count x the first exposure."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        source = Path(tmpdir)
+        light_dir = source / "Light" / "M 81"
+        light_dir.mkdir(parents=True)
+
+        frames = {}   # stem -> (exposure, date_obs)
+        for i in range(15):
+            exp = 120.0 if i < 10 else 60.0
+            name = (
+                f"Light_M 81_{exp}s_Bin1_585MC_gain200_"
+                f"20260219-22{i:02d}00_-20.0C_L-Pro_{i + 1:04d}.fit"
+            )
+            (light_dir / name).touch()
+            frames[Path(name).stem] = (exp, f"2026-02-19T22:{i:02d}:00")
+
+        def mock_extract(path):
+            exp, date_obs = frames[path.stem]
+            return {
+                **light_meta(path.stem, date_obs=date_obs),
+                "file_path": str(path),
+                "exposure": exp,
+            }
+
+        with patch("darkroom.scanner.FITSHeaderExtractor.extract_metadata", side_effect=mock_extract):
+            result = scan_source(source)
+
+    assert len(result.sessions) == 1
+    s = result.sessions[0]
+    assert len(s.files) == 15
+    assert s.total_integration_sec == 1500
+    # The representative frame's exposure is still the scalar on the row.
+    assert s.exposure_sec == 120.0

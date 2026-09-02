@@ -372,6 +372,7 @@ def build_session_entry(
         "exposure_sec": session.exposure_sec,
         "focal_length": session.focal_length,
         "frame_count": len(session.files),
+        "total_integration_sec": session.total_integration_sec,
         "ra_deg": session.ra_deg,
         "dec_deg": session.dec_deg,
         "site_lat": session.site_lat,
@@ -557,6 +558,21 @@ def _run_review(args: argparse.Namespace) -> None:
     cmd_review(args)
 
 
+def _entry_integration_sec(entry: dict) -> int:
+    """A session entry's integration time, per-frame sum preferred (B17).
+
+    `scan` writes `total_integration_sec` into the manifest as the sum of every
+    frame's own exposure, which is what the archive scan stores too — so a
+    night whose exposure changed mid-run agrees whichever command last wrote
+    the row.  Manifests written before that field existed fall back to the old
+    `frame_count * exposure_sec` product, so `commit` still works on one.
+    """
+    total = entry.get("total_integration_sec")
+    if total:
+        return int(total)
+    return int(entry["frame_count"] * entry["exposure_sec"])
+
+
 def cmd_commit(args: argparse.Namespace) -> None:
     """Execute a manifest: copy files and register in catalog."""
     if args.manifest is None:
@@ -666,7 +682,7 @@ def cmd_commit(args: argparse.Namespace) -> None:
             "exposure_sec": entry["exposure_sec"],
             "focal_length": entry.get("focal_length"),
             "frame_count": entry["frame_count"],
-            "total_integration_sec": int(entry["frame_count"] * entry["exposure_sec"]),
+            "total_integration_sec": _entry_integration_sec(entry),
             "ra_deg": entry.get("ra_deg"),
             "dec_deg": entry.get("dec_deg"),
             "site_lat": entry.get("site_lat"),
