@@ -2531,6 +2531,68 @@ folding it into the main payload is too heavy for list views. Prefer the
 former — it's the same shape other JSON consumers will want, and it keeps
 `_build_aggregate` from being the only place this math runs.
 
+### S4. A session whose frames disagree about *where* it was shot has no review path
+
+Filed 2026-09-02, from Jonathan running `rescan-archive --apply` and asking the
+right question: if the sites disagree, why doesn't it queue?
+
+**It cannot.** `rescan._CHANGE_FIELDS` lists the 14 fields a proposal may
+carry, and `site_lat`/`site_lon` are not among them — the strings appear
+nowhere in `rescan.py`. So `catalog rescan-archive` prints B16's
+"site coordinates disagree across frames" warning and then reports
+`0 proposal(s)`, which reads like agreement and is not: the comparison is
+never made. The stored site and the archive's modal site can disagree
+indefinitely and nothing surfaces it.
+
+**Two real sessions, checked frame by frame 2026-09-02:**
+
+```
+M 51  2026-02-28   02-28 20:37 -> 03-01 00:28   43 frames   Home (Palmela)
+                   03-01 00:33 -> 03-01 06:06   59 frames   38.5157,-9.00862
+M 106 2026-04-19   04-19 20:25 -> 04-19 22:48   26 frames   Quinta do Lago
+                   04-19 23:13 -> 04-20 01:25   24 frames   Home (Palmela)
+```
+
+Each is **one session** — the catalog rows are 102 and 50 frames, exactly the
+folder totals, so this is not two sessions sharing a folder. The coordinate
+**flips exactly once, at a frame boundary**, across a 5- and a 25-minute gap
+respectively, between places ~10 km apart. That is not drift and not a move;
+it is the phone re-geolocating mid-session (BLOCKERS #12). Corroborating: the
+"Home" fix is identical to 5 decimal places on nights two months apart, while
+the two "away" fixes differ from each other by 3 km.
+
+#### ⚠️ Do NOT just add the site fields to `_CHANGE_FIELDS`
+
+The proposed value would be `sites.session_site`'s **modal** coordinate, and
+the modal is not a finding — on M 106 it wins **26 frames to 24**. Rescan
+would launder a coin flip into the review queue with the same authority as a
+frame-count correction.
+
+Worse, it would actively damage M 51: the catalog stores Home (a named site,
+SQM 19.19), while the modal is `38.5157,-9.00862`, which is **3.2 km from
+Quinta do Lago and inside no site's radius at all**. The proposal would move a
+correctly-sited session to an unnamed location and cost it its SQM weighting.
+
+#### The shape it should take
+
+A distinct review item — "this session's frames disagree about location" —
+that presents **both clusters with their frame counts and time spans** and
+asks which one the session was actually at, rather than proposing a winner.
+The answer is never in the data: only Jonathan knows where the rig was. Notes:
+
+- The cluster the *catalog currently holds* must be one of the offered
+  choices, not overwritten by default.
+- Prefer a cluster that matches a named site over one that matches none, as a
+  *hint* in the UI, never as an automatic pick.
+- Scope: `sites.session_site` already computes the clusters and their counts
+  for the warning; this is about carrying them to the review queue instead of
+  dropping them on stderr.
+
+Low urgency — the SQM difference between Home (19.19) and Quinta do Lago
+(19.38) is negligible, so the depth accounting barely moves. It is the site
+*attribution* that is wrong on one of these two nights, and the count of
+affected sessions is unknown until something looks for them.
+
 ### S3. Show moon phase in the session list; open question on moon/elevation weighting
 Queued 2026-07-29. Checked: there is no moon-phase, moon-separation, or
 altitude/elevation-tracking code anywhere in the repo today (no `skyfield`/
