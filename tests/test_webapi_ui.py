@@ -2030,3 +2030,71 @@ def test_queue_targets_rename_without_panel_leaves_it_alone(tmp_path):
     finally:
         conn.close()
     assert row["panel"] == "1-1"
+
+
+# ── M1: panel-time counts panelled sessions only ─────────────────────────────
+
+_PERPANEL_HARNESS = """
+const fs = require("fs");
+const src = fs.readFileSync(process.argv[1], "utf8");
+const grab = re => { const m = src.match(re); if (!m) throw new Error("not found: " + re); return m[0]; };
+const code = [
+  grab(/const cmpPanel = [\\s\\S]*?\\n};/),
+  grab(/const panelsOf = .*/),
+  grab(/const panelledOnly = .*/),
+  grab(/const sumH  = .*/),
+  grab(/const sumWH = .*/),
+  grab(/const perPanel = [\\s\\S]*?: sum\\(nights\\);/),
+].join("\\n");
+const { perPanel } = new Function(code + "\\nreturn { perPanel };")();
+const nights = JSON.parse(process.argv[2]);
+const np = new Set(nights.map(n => n.panel).filter(Boolean)).size;
+console.log(JSON.stringify({ np, per: perPanel(nights, np) }));
+"""
+
+
+def _per_panel(nights: list[dict]) -> dict:
+    """Run the real `perPanel` from app.js over *nights*, via node."""
+    import json as _json
+    import shutil as _shutil
+    import subprocess as _subprocess
+
+    from pathlib import Path as _Path
+
+    node = _shutil.which("node")
+    if node is None:
+        pytest.skip("node not available")
+    js = _Path(__file__).resolve().parents[1] / "darkroom/webapi/static/app.js"
+    out = _subprocess.run(
+        [node, "-e", _PERPANEL_HARNESS, str(js), _json.dumps(nights)],
+        capture_output=True, text=True, check=True,
+    )
+    return _json.loads(out.stdout)
+
+
+def test_panel_time_excludes_unpanelled_sessions():
+    """M 8's shape: an 8-panel mosaic beside six single-pointing nights.
+
+    Folding the unpanelled 11.7h into the numerator read as 1.5h per panel
+    against an actual 0.083h — a 15x overstatement, and in the direction that
+    says a one-night mosaic is deep enough. Unpanelled hours are not
+    panel-time; the breakdown gives them their own cell.
+    """
+    nights = (
+        [{"panel": f"{r}-{c}", "h": 300 / 3600, "wh": 300 / 3600}
+         for r in range(1, 5) for c in (1, 2)]
+        + [{"panel": None, "h": 1.95, "wh": 1.95} for _ in range(6)]
+    )
+    result = _per_panel(nights)
+
+    assert result["np"] == 8
+    assert result["per"] == pytest.approx(300 / 3600, abs=1e-6)   # 0.083h, not 1.55h
+
+
+def test_per_panel_is_unchanged_for_a_non_mosaic_target():
+    """np < 2 must stay a plain total — the overwhelming majority of targets."""
+    nights = [{"panel": None, "h": 3.0, "wh": 3.0}, {"panel": None, "h": 2.0, "wh": 2.0}]
+    assert _per_panel(nights)["per"] == pytest.approx(5.0)
+
+    single = [{"panel": "1-1", "h": 3.0, "wh": 3.0}, {"panel": None, "h": 2.0, "wh": 2.0}]
+    assert _per_panel(single)["per"] == pytest.approx(5.0)

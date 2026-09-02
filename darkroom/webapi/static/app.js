@@ -148,11 +148,22 @@ const cmpPanel = (a, b) => {
 };
 const panelsOf = nights => [...new Set(nights.map(n => n.panel).filter(Boolean))].sort(cmpPanel);
 const panelCount = nights => panelsOf(nights).length;
+const panelledOnly = nights => nights.filter(n => n.panel);
+const sumH  = ns => ns.reduce((a, n) => a + n.h, 0);
+const sumWH = ns => ns.reduce((a, n) => a + (n.wh ?? n.h), 0);
 /* Divide by the panel count only when there is more than one panel — a single
-   panel is just a session that happens to carry a label. Unpanelled hours
-   inside a mosaic target (the odd pre-M1 row) ride along in the numerator;
-   they are listed separately in the breakdown rather than silently dropped. */
-const perPanel = (h, np) => (np > 1 ? h / np : h);
+   panel is just a session that happens to carry a label.
+
+   The numerator counts ONLY panelled sessions. An earlier revision let a
+   mosaic target's unpanelled hours ride along, on the assumption they were
+   "the odd pre-M1 row"; M 8 disproved that — six single-pointing nights
+   (11.7h) sit beside an 8-panel mosaic (0.7h), and folding them in read as
+   **1.5h per panel against an actual 0.1h**. A 15x overstatement, and in the
+   direction that says "deep enough" about a mosaic that has had one night.
+   Unpanelled hours are not panel-time; the breakdown gives them their own
+   `unpanelled` cell, which is where they belong. */
+const perPanel = (nights, np, sum = sumH) =>
+  np > 1 ? sum(panelledOnly(nights)) / np : sum(nights);
 
 /* Hours, weighted-first: a night under a dark site banks more usable depth than
    the clock says, and that — not the raw figure — is what decides whether the
@@ -225,8 +236,8 @@ function guidingCell(g) {
 }
 
 const backlogNights = t => t.nights.filter(n => n.state === "unprocessed" || n.state === "in_progress");
-const backlogH = t => backlogNights(t).reduce((a, n) => a + n.h, 0);
-const backlogWH = t => backlogNights(t).reduce((a, n) => a + (n.wh ?? n.h), 0);
+const backlogH = t => sumH(backlogNights(t));
+const backlogWH = t => sumWH(backlogNights(t));
 const recountStates = t => { t.states = {}; t.nights.forEach(n => t.states[n.state] = (t.states[n.state] || 0) + 1); };
 
 /* ── overview ──────────────────────────────── */
@@ -268,7 +279,7 @@ function renderOverview() {
       return `<a class="row cols" href="/targets/${encodeURIComponent(t.target)}">
         ${nameCell(t)}
         ${stripHTML(t.hours, maxH)}
-        ${gaugeHTML(perPanel(backlogWH(t), np), false, perPanel(open, np), true, np)}
+        ${gaugeHTML(perPanel(backlogNights(t), np, sumWH), false, perPanel(backlogNights(t), np, sumH), true, np)}
         <span class="hnum num"><b>${t.total_h.toFixed(1)}</b>h</span>
         <span class="opennum num ${open > 0 ? "some" : ""}">${open > 0 ? open.toFixed(1) + "h" : "—"}</span>
         <span class="marks">${counts}</span>
@@ -360,8 +371,7 @@ const NIGHT_SORTS = {
 function panelBlockHTML(t) {
   const labels = panelsOf(t.nights);
   if (labels.length < 2) return "";
-  const hOf = ns => ns.reduce((a, n) => a + n.h, 0);
-  const whOf = ns => ns.reduce((a, n) => a + (n.wh ?? n.h), 0);
+  const hOf = sumH, whOf = sumWH;
   const bucket = p => t.nights.filter(n => (n.panel || null) === p);
   const deepest = Math.max(...labels.map(p => whOf(bucket(p))));
   const cell = (label, nights, cls = "", tip = "") => {
@@ -380,7 +390,8 @@ function panelBlockHTML(t) {
       short ? `<b>panel ${p} is short</b> · ${whOf(ns).toFixed(1)}h against ${deepest.toFixed(1)}h on the deepest panel` : "");
   }).join("");
   const loose = bucket(null);
-  const total = hOf(t.nights);
+  /* Panelled sessions only — see perPanel. The loose cell reports the rest. */
+  const total = hOf(panelledOnly(t.nights));
   return `<div class="panelblock">
     <div class="pblockhead">
       <span class="ptitle">Panels</span>
@@ -425,7 +436,7 @@ function renderDetail() {
       <summary class="rigsum">
         <svg class="tri" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2.5 1 L8 5 L2.5 9 Z" fill="currentColor"/></svg>
         <span class="rigname display">${rig}</span>
-        ${gaugeHTML(perPanel(ghw, gnp), true, perPanel(gh, gnp), false, gnp)}
+        ${gaugeHTML(perPanel(nights, gnp, sumWH), true, perPanel(nights, gnp, sumH), false, gnp)}
         ${stripHTML(hoursOf(nights), null)}
         ${hoursHTML(gh, ghw, "hnum num")}
         <span class="n">${nights.length} sessions${gnp > 1 ? ` · ${gnp} panels` : ""}</span>
@@ -445,7 +456,7 @@ function renderDetail() {
     <div class="dethead">
       ${nameCell(t)}
       <span class="sub">${t.n} sessions · <b style="color:var(--ink)">${t.total_h.toFixed(1)}h</b>${
-        np > 1 ? ` panel-time · <b style="color:var(--ink)">${perPanel(t.total_h, np).toFixed(1)}h</b> per panel` : ""
+        np > 1 ? ` · <b style="color:var(--ink)">${perPanel(t.nights, np).toFixed(1)}h</b> per panel across ${np} panels` : ""
       } · last acquired ${t.last}</span>
       ${stripHTML(t.hours, null)}
     </div>

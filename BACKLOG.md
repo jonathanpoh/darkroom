@@ -2612,6 +2612,26 @@ site lat/lon, angular separation.
 >   still leaves an existing one alone.
 >
 > Suite 1271 → 1284.
+>
+> **⚠️ Fixed on the same day it deployed (`M 8`, caught by Jonathan):
+> panel-time counted unpanelled sessions.** `perPanel` divided the *target's*
+> hours by the panel count, and `panelBlockHTML` totalled every night — on the
+> stated assumption that a mosaic target's unpanelled hours are "the odd pre-M1
+> row" riding along in the numerator. M 8 disproves that: **six single-pointing
+> nights (11.7h) sit beside an 8-panel mosaic (0.7h)**, so the page read
+> `8 panels · 1.5h per panel · 12.4h of panel-time` against an actual **0.1h
+> per panel** — a 15× overstatement, and in the direction that says a
+> one-night mosaic is deep enough. IC 4604 hid it (2.1h vs 2.0h) because there
+> the assumption nearly held.
+>
+> Panel-time is now **panelled sessions only**, in all four places
+> (`perPanel`, the overview gauge, the per-rig gauge, the panel breakdown);
+> unpanelled hours keep their own `unpanelled` cell, which is where they were
+> always meant to be reported. `perPanel` takes the nights array rather than a
+> pre-summed number, so the filter cannot be forgotten at a call site again.
+> Guarded by a test that executes the real `app.js` helpers under node
+> (skipped where node is absent) — verified to fail against the old numerator.
+> Suite 1288 → 1290.
 
 Queued 2026-07-30, out of Jonathan's question: the U2 cleanup queue flags
 `IC 4604_1-1` … `IC 4604_2-2` as a probable 4-panel mosaic — so how should a
