@@ -1173,6 +1173,70 @@ Depends on: W9 (done).
 
 ---
 
+### W11. No way to delete a calibration set — orphan rows accumulate
+
+`webapi/app.py` exposes `DELETE /api/sessions/{session_id}` (W10) and
+`DELETE /api/pending-renames/{rename_id}`, but calibration sets have only
+`POST /api/calibration-sets` (upsert) and `GET /api/calibration-sets`. There is
+no delete route, no `catalog_db.delete_calibration_set`, and no `HttpBackend`
+client method.
+
+This matters more than the session case because `scan-calibration` **only
+upserts**. Every time a calibration folder is deleted, renamed, or
+reorganised, its old row survives — still pointing at a path that no longer
+exists, still a live candidate in `catalog.find_flats` /
+`find_flat_darks` / `find_darks`. Nothing ever reaps them, and the archive-side
+scan has no idea they went stale.
+
+Two distinct failure shapes seen so far:
+
+- **Folder deleted, row remains.** Removed the April 2023 Canon100mm/L-Pro
+  flats + flat darks (see below); three rows stayed behind pointing at deleted
+  folders.
+- **Folder renamed, row forks.** `set_id` is derived from
+  frame_type/camera/gain/exposure/temp/date (`names.make_cal_set_id`) — it does
+  *not* include the folder path. But `frame_type` is re-resolved on each scan,
+  so a reclassification mints a *new* `set_id` and leaves the old one intact.
+  `2023-04-17_Canon100_LPro` → `2023-04-17_Canon100mm_LPro` left both
+  `Flat_Canon6D_0.001s_ISO12_36C_2023-04-17` (stale, wrong type, dead path) and
+  `FlatDark_Canon6D_0.001s_ISO12_36C_2023-04-17` (correct) in the table.
+
+Hit 2026-09-02: the M42 2023-04-15 session wasn't matching its flats. Root
+cause was a NULL `filter` (see the open note in R8 / the 198 NULL-filter flat
+sets), but the frames turned out to be junk on inspection — the flats were
+46-82% clipped at the Canon 6D white level (15283), green channels 73-97%
+clipped, and the "flat darks" were 99.66% a single constant value, i.e. fully
+saturated daylight exposures carrying `IMAGETYP=DARK`. Both folders were
+deleted, and cleaning up the four resulting orphan rows meant SSHing into the
+LXC and hand-running `DELETE` against
+`/var/lib/darkroom/astro_catalog.db` — exactly the W10 complaint, one table
+over. Backup `astro_catalog-pre-calclean-20260902-164853.db`; row-level restore
+`calclean-restore.sql`, both in `/var/lib/darkroom/backups/`.
+
+Fix, in the order they're worth doing:
+
+1. `catalog_db.delete_calibration_set(conn, set_id)` + bearer-auth
+   `DELETE /api/calibration-sets/{set_id}` + `HttpBackend` client method,
+   mirroring the W10 session delete exactly (auth-gated, single row by
+   `set_id`, catalog row only — never touches archive files).
+2. A `--prune` flag on `scan-calibration` that drops rows whose `folder_path`
+   no longer exists **under the root just scanned**. This is the one that
+   matches how the archive actually gets reorganised — bulk, on disk, in
+   Finder — and it's the difference between reaping orphans automatically and
+   noticing them months later when a bad flat gets matched. Scope the
+   existence check to the scanned root so a partial scan can't reap rows it
+   never looked at; dry-run by default like every other destructive path.
+3. Consider a UI affordance only if the calibration sets ever get their own
+   page; today they surface only through F3's per-session indicator.
+
+Note `--prune` can only run on the Mac — the LXC has no archive mount, so it
+cannot check `folder_path` existence at all. The API route works from
+anywhere.
+
+Depends on: W9 (done), W10 (done — mirror its delete path).
+
+---
+
 ## U — CLI UX / interactive modes
 
 Captured 2026-07-04. Root complaint: the CLI demands exact recall (target
