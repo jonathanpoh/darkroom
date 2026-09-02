@@ -221,6 +221,43 @@ details[open] .rigsum .strip { visibility: hidden; }
 .wbadge { color: var(--ink-2); font-size: 10px; font-variant-numeric: tabular-nums;
           border: 1px solid var(--hairline); border-radius: 2px; padding: 0 4px; flex: none; }
 
+/* ── mosaic panels (M1) ──────────────────────
+   A panelled target grows one extra 56px column between Night and Filter; the
+   flexible Site track pays for it, the same way F4's Guiding column did. The
+   plain .nightcols grid is untouched, so every single-pointing target renders
+   exactly as before. */
+.nightcols.panelled { grid-template-columns: 36px 100px 46px 108px 150px 110px 1fr 68px 62px 130px; }
+.pchip { font-size: 11px; font-variant-numeric: tabular-nums; color: var(--ink-2);
+         border: 1px solid var(--hairline); border-radius: 2px; padding: 0 4px;
+         justify-self: start; }
+.pchip.none { color: var(--ink-3); border-style: dashed; }
+/* Overview badge: sits under the common name, so a mosaic is identifiable
+   without opening it — its Total column is panel-time, not depth. */
+.pcount { display: block; font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
+          color: var(--safelight); margin-top: 3px; }
+
+.panelblock { padding: 14px 0 18px; border-bottom: 1px solid var(--hairline); }
+.pblockhead { display: flex; align-items: baseline; gap: 14px; padding: 0 10px 10px; }
+.ptitle { font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); }
+.panelblock .sub { color: var(--ink-2); font-size: 12px; }
+.pgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 4px 18px; }
+/* The label track sizes to content (so the wider "unpanelled" cell isn't
+   clipped) while the P<n>-<m> cells all hit the 46px floor and stay aligned
+   with each other; the night count takes the slack at the right. */
+.pcell { display: grid; grid-template-columns: minmax(46px, auto) auto auto auto; gap: 10px;
+         justify-content: start; align-items: center; padding: 6px 10px; border-radius: 3px; }
+.pcell:hover { background: var(--panel); }
+.plabel { font-size: 12.5px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pcell .n { color: var(--ink-3); font-size: 11px; white-space: nowrap; }
+.pcell .hnum { white-space: nowrap; }
+/* Under three-quarters of the deepest panel — the tile that still needs a
+   night. Marked with the same dim glyph the spike-dominated RMS uses, so the
+   colour is never the only carrier; the hours themselves are not in doubt. */
+.pcell.short .plabel { color: var(--safelight); }
+.pcell.short .plabel::after { content: "▼"; font-size: 8px; color: var(--ink-3);
+                              margin-left: 4px; vertical-align: 2px; font-weight: 400; }
+.pcell.loose .plabel { color: var(--ink-3); font-weight: 400; font-size: 11px; letter-spacing: .06em; }
+
 .markbtn { background: none; border: none; padding: 0; cursor: pointer; width: 36px; height: 30px; position: relative; }
 .markbtn svg { position: absolute; inset: 0; margin: auto; overflow: visible; }
 .markbtn .pencil { stroke: var(--safelight); stroke-width: 2.4; fill: none; stroke-linecap: round; opacity: .92; }
@@ -423,6 +460,13 @@ details[open] .rigsum .strip { visibility: hidden; }
   background: var(--panel); border: 1px solid var(--hairline); color: var(--ink);
   font: inherit; font-size: 12px; padding: 5px 8px; border-radius: 3px; flex: 1; max-width: 220px;
 }
+/* Optional on a manual merge, so it stays narrow and doesn't read as required. */
+.targetmerge input[name="panel"] { flex: 0 0 130px; max-width: 130px; }
+/* The panel a suggested merge would set, alongside the base target it strips
+   to — a target-only merge is exactly what M1 exists to prevent. */
+.panelchip { color: var(--ink-2); font-size: 10px; letter-spacing: .08em; text-transform: uppercase;
+             border: 1px solid var(--hairline); border-radius: 2px; padding: 1px 6px;
+             font-variant-numeric: tabular-nums; }
 
 /* ── rescan review (F8) ───────
    Reuses .qsection/.qrow/.qhead/.qbadge/.qfield/.qfixform/.qempty/.success/

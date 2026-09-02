@@ -18,6 +18,7 @@
   {{ text_field("OTA", "ota", session.ota) }}
   {{ text_field("Camera", "camera", session.camera) }}
   {{ text_field("Filter", "filter", session.filter) }}
+  {{ text_field("Panel", "panel", session.panel) }}
   {{ text_field("Gain", "gain", session.gain) }}
   {{ text_field("Temperature (C)", "temperature_c", session.temperature_c) }}
   {{ text_field("Exposure (s)", "exposure_sec", session.exposure_sec) }}
@@ -40,6 +41,10 @@
 
   <button type="submit">Save</button>
 </form>
+<p class="footnote">Panel is a mosaic panel label (<code>1-1</code>, <code>4-2</code>); leave it empty for an
+  ordinary single-pointing session. Like target, OTA, camera and filter it is part of the session's
+  identity — changing it recomputes <code>session_id</code> and <code>lights_path</code>, and queues the
+  archive folder move for <code>darkroom catalog apply-renames</code> on the Mac.</p>
 
 {% if cal %}
 <div class="readonly-block calblock">

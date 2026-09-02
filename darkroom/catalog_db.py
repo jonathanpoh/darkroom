@@ -504,7 +504,12 @@ def update_session_fields(conn: sqlite3.Connection, session_id: str, **fields) -
     return True
 
 
-def rename_target(conn: sqlite3.Connection, old_target: str, new_target: str) -> dict:
+def rename_target(
+    conn: sqlite3.Connection,
+    old_target: str,
+    new_target: str,
+    panel: str | None = None,
+) -> dict:
     """Rename a target across every session that matches it (U2 phase 3).
 
     Merges duplicate/suspect target names (mosaic panels cataloged as
@@ -526,6 +531,13 @@ def rename_target(conn: sqlite3.Connection, old_target: str, new_target: str) ->
     genuine no-op ('M 81' -> 'M 81') matches nothing. Raises ValueError if
     `new_target` is empty/whitespace-only.
 
+    `panel` (M1) is set on every renamed row alongside the new target. That is
+    what makes a mosaic merge work at all: "IC 4604_1-1" ... "IC 4604_2-2" all
+    collapse to the base target, and without a panel to keep them apart the
+    four panels of one night derive an identical session identity and three of
+    them fail on collision. None (the default) leaves each row's existing panel
+    untouched — it never clears one.
+
     Returns {"renamed": <int>, "errors": [{"session_id", "error"}, ...],
     "total": <int>}. `total` counts the matched rows that actually needed a
     change (renamed + errors == total). A collision on one row (e.g. two
@@ -541,21 +553,27 @@ def rename_target(conn: sqlite3.Connection, old_target: str, new_target: str) ->
     old_raw = old_target.strip()
 
     rows = conn.execute(
-        "SELECT session_id, target FROM sessions "
+        "SELECT session_id, target, panel FROM sessions "
         "WHERE (target = ? COLLATE NOCASE OR target = ? COLLATE NOCASE) "
         "ORDER BY obs_date, session_id",
         (old_norm, old_raw),
     ).fetchall()
 
+    changes: dict = {"target": new_norm}
+    if panel is not None:
+        changes["panel"] = panel
+
     renamed = 0
     errors: list[dict] = []
     total = 0
     for row in rows:
-        if row["target"] == new_norm:
+        # Skip only a row this call would leave untouched — same target and,
+        # when a panel was given, the same panel already.
+        if row["target"] == new_norm and (panel is None or row["panel"] == panel):
             continue
         total += 1
         try:
-            update_session_fields(conn, row["session_id"], target=new_norm)
+            update_session_fields(conn, row["session_id"], **changes)
         except ValueError as e:
             errors.append({"session_id": row["session_id"], "error": str(e)})
         else:

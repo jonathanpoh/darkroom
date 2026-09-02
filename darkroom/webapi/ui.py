@@ -31,6 +31,7 @@ from darkroom import catalog_db
 from darkroom.catalog import match_session_calibration
 from darkroom.catalog_client import MemoryCalibrationBackend
 from darkroom.names import KNOWN_FILTERS, PLACEHOLDERS, PROCESSED_STATES, _normalize_target
+from darkroom.parse import parse_panel
 from darkroom.sites import annotate_sessions
 from darkroom.webapi import auth
 from darkroom.webapi.common_names import common_name
@@ -105,11 +106,17 @@ def reset_login_rate_limit() -> None:
 
 
 # The manual edit form's fields, in form order. A subset of
-# catalog_db._EDITABLE_FIELDS: panel, start/end_utc, frame_count and
+# catalog_db._EDITABLE_FIELDS: start/end_utc, frame_count and
 # total_integration_sec are catalog-derived and only reachable via the JSON
 # API and the rescan apply path.
+#
+# `panel` is here (M1) because a mosaic ingested before panels existed needs a
+# way to acquire one, and a panel typed onto a single-pointing session by
+# mistake needs a way to be cleared. It is an identity field like target and
+# filter — editing it renames session_id and moves lights_path, via the same
+# update_session_fields path.
 _EDIT_FIELDS = (
-    "target", "obs_date", "ota", "camera", "filter",
+    "target", "obs_date", "ota", "camera", "filter", "panel",
     "gain", "temperature_c", "exposure_sec", "focal_length",
     "ra_deg", "dec_deg", "site_lat", "site_lon", "notes",
     "processed_state", "processed_path", "processed_date",
@@ -289,6 +296,7 @@ def _build_aggregate(
                 "site": s["site"],
                 "w": s["weight"],
                 "wh": s["weighted_hours"],
+                "panel": s.get("panel"),
             }
             if cal_backend is not None:
                 night["cal"] = match_session_calibration(cal_backend, s)
@@ -309,6 +317,12 @@ def _build_aggregate(
             "states": states,
             "last": last,
             "nights": nights,
+            # M1: distinct mosaic panels under this target. >1 means the
+            # target's total hours are panel-time, not depth — 8h spread over
+            # 4 panels is a 2h-deep mosaic, and the renderer divides by this
+            # rather than letting the total read as depth. 0 for the
+            # overwhelming majority of targets (a single pointing).
+            "n_panels": len({s["panel"] for s in nights if s["panel"]}),
         })
     return aggregate
 
@@ -469,10 +483,6 @@ def _known_otas(conn) -> list[str]:
     return [r[0] for r in rows]
 
 
-# Mosaic panel suffix, e.g. "IC 4604_1-1" -> base "IC 4604" (U2 phase 3
-# heuristic a). Suggested even when the base isn't itself an existing target.
-_PANEL_SUFFIX_RE = re.compile(r"^(.*)_\d+-\d+$")
-
 # Two catalog-style designations back to back with nothing else, e.g.
 # "M 82 M 82" (duplicated) or "M 81 M 82" (two different designations,
 # ambiguous unless the first is itself an existing target) — heuristic b.
@@ -487,7 +497,11 @@ def _target_suggestions(targets: list[str]) -> list[dict]:
     suggestion's `count`); candidate names are the distinct values within it.
 
     Heuristics are tried in priority order per target, first match wins:
-      a. Mosaic panel suffix (`_N-M` at the end) -> strip it, normalize.
+      a. Mosaic panel suffix (`_N-M` at the end) -> strip it, normalize, and
+         carry the label out as `panel` so the merge sets target *and* panel
+         in one edit. A target-only merge is what M1 exists to prevent: four
+         panels of one night collapsing to "IC 4604" all derive the same
+         session identity, so three of the four fail on collision.
       b. Duplicated designation ("M 82 M 82" -> "M 82") or two distinct
          designations where the first is itself an existing target
          ("M 81 M 82" -> "M 81", but ONLY if "M 81" already exists —
@@ -495,7 +509,8 @@ def _target_suggestions(targets: list[str]) -> list[dict]:
       c. Normalization drift: `_normalize_target(target) != target`.
 
     A target that matches nothing, or whose only candidate suggestion is
-    itself (a self-map), gets no entry in the result.
+    itself (a self-map), gets no entry in the result. Every entry carries a
+    `panel` key — the label for heuristic (a), None for the others.
     """
     counts = Counter(targets)
     distinct = sorted(counts)
@@ -504,12 +519,13 @@ def _target_suggestions(targets: list[str]) -> list[dict]:
     suggestions: list[dict] = []
     for target in distinct:
         suggested: str | None = None
+        panel: str | None = None
 
-        m = _PANEL_SUFFIX_RE.match(target)
-        if m:
-            base = _normalize_target(m.group(1).strip())
+        stem, label = parse_panel(target)
+        if label:
+            base = _normalize_target(stem.strip())
             if base:
-                suggested = base
+                suggested, panel = base, label
 
         if suggested is None:
             m = _DOUBLE_DESIGNATION_RE.match(target)
@@ -534,6 +550,7 @@ def _target_suggestions(targets: list[str]) -> list[dict]:
         suggestions.append({
             "target": target,
             "suggested": suggested,
+            "panel": panel,
             "count": counts[target],
         })
 
@@ -782,9 +799,12 @@ def build_ui_router(db_path: Path, ui_password_hash: str) -> APIRouter:
         form_data = await request.form()
         old_target = _form_str(form_data, "old_target")
         new_target = _form_str(form_data, "new_target")
+        # M1: a mosaic merge sets target *and* panel in one edit — target-only
+        # collapses every panel of a night onto one session identity.
+        panel = _form_str(form_data, "panel") or None
 
         try:
-            result = catalog_db.rename_target(conn, old_target, new_target)
+            result = catalog_db.rename_target(conn, old_target, new_target, panel=panel)
         except ValueError as e:
             return _render_queue(request, conn, error=str(e), status_code=400)
 
@@ -794,9 +814,10 @@ def build_ui_router(db_path: Path, ui_password_hash: str) -> APIRouter:
                 error=f"No sessions found for target {old_target!r}",
             )
 
+        into = new_target + (f" · panel {panel}" if panel else "")
         success = (
             f"renamed {result['renamed']} session"
-            f"{'' if result['renamed'] == 1 else 's'} of {old_target} → {new_target}"
+            f"{'' if result['renamed'] == 1 else 's'} of {old_target} → {into}"
             if result["renamed"] else None
         )
         error = None

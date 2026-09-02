@@ -2577,15 +2577,28 @@ site lat/lon, angular separation.
 > moved, ledger drained). Live catalog now holds 16 panelled sessions —
 > IC 4604 ×8 and M 8 ×8.
 >
-> **Still open — the web UI only.** `webapi/ui.py` has no `panel` awareness:
-> `_EDIT_FIELDS` (line 82) omits it, so the session edit form cannot set or
-> clear a panel even though `catalog_db` and the JSON API both accept it; there
-> are no panel-aware target rollups (a target view still implies 8 panel-hours
-> are 8 hours of depth); and `_PANEL_SUFFIX_RE` (line 419) still suggests a
-> **target-only** merge, which is the same-night collision M1 exists to
-> prevent. That last one is currently *latent* — no catalog target carries a
-> `_N-M` suffix any more, so it has nothing to fire on — but it would mis-handle
-> the next mosaic ingested the old way.
+> **✅ WEB UI HALF DONE 2026-09-02.** All three gaps closed:
+>
+> - `_EDIT_FIELDS` carries `panel`, and `session.html` has the field — a mosaic
+>   ingested before panels existed can acquire one, and a panel typed on by
+>   mistake can be cleared. It is an identity edit like target/filter, so the
+>   same `update_session_fields` path renames `session_id`, recomputes
+>   `lights_path` and queues the folder move.
+> - **Panel-aware rollups.** `_build_aggregate` puts `panel` on each night and
+>   `n_panels` on each target; `app.js` divides every *depth* figure by the
+>   panel count (overview gauge, per-rig gauge) while leaving the *totals* as
+>   the true panel-time they are, so 18.5h across 8 panels now reads as a
+>   2.3h-deep mosaic instead of a deep target. The target page gains a per-panel
+>   breakdown (one gauge per panel, panels under ¾ of the deepest marked) and a
+>   Panel column on the night table; the overview gains an `N-panel mosaic`
+>   badge and a mosaic count in the statline.
+> - `_PANEL_SUFFIX_RE` is gone — the suggestion now uses `parse.parse_panel`
+>   (which also catches the `" N-M"` spelling) and carries the label out, so
+>   `rename_target(..., panel=...)` sets target **and** panel in one edit. Two
+>   panels of the same night merge without colliding; a merge with no panel
+>   still leaves an existing one alone.
+>
+> Suite 1271 → 1284.
 
 Queued 2026-07-30, out of Jonathan's question: the U2 cleanup queue flags
 `IC 4604_1-1` … `IC 4604_2-2` as a probable 4-panel mosaic — so how should a
@@ -2642,7 +2655,7 @@ per-panel frame counts, and 2025-04-27 has a 2-frame tail on `1-2` alone).
 | `ingest_review.py` | show panel in the summary block, editable like filter |
 | `prep.py` / `wbpp.py` | **the one real behaviour change** — panels must not be stacked together, so a mosaic prep emits one tree per panel: `~/WBPP/IC4604_P1-1/SESSION_1..N/`. Picker grows a panel step (or "all panels" → N trees in one go). ✅ **Re-confirmed 2026-08-31** after the nested-grouping-keyword alternative was tested and failed at integration — see **M3**. ⚠️ But "keeps the `wbpp → finish` handoff working unchanged" below is **wrong**: `finish.py:189` looks up `wbpp_root/target_slug(target)` and would never find `IC4604_P1-1`. See M3 for what finish actually needs |
 | `finish.py` | output to `_Processed/<date>/P1-1/` |
-| `webapi/ui.py` | the `_PANEL_SUFFIX_RE` suggestion must set target **and** panel in one edit (target-only hits the collision); target view shows "4 panels · 2.1h/panel" rather than implying that 8.4h of panel-time is 8.4h of depth |
+| `webapi/ui.py` | ✅ the panel suggestion sets target **and** panel in one edit (target-only hits the collision); the target view shows "4 panels · 2.1h/panel" and a per-panel breakdown rather than implying that 8.4h of panel-time is 8.4h of depth |
 
 Nothing else moves: `parse.fits_files` is non-recursive by default (so the new
 nesting can't leak frames into a sibling panel's symlink set), and flat/dark

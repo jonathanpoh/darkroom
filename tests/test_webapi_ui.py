@@ -1007,12 +1007,16 @@ def test_target_suggestions_panel_suffix():
 def test_target_suggestions_panel_suffix_suggested_even_if_base_absent():
     # "NGC 6960" isn't itself a target in the input list — still suggested.
     result = _target_suggestions(["NGC 6960_1-1"])
-    assert result == [{"target": "NGC 6960_1-1", "suggested": "NGC 6960", "count": 1}]
+    assert result == [
+        {"target": "NGC 6960_1-1", "suggested": "NGC 6960", "panel": "1-1", "count": 1}
+    ]
 
 
 def test_target_suggestions_duplicated_designation():
     result = _target_suggestions(["M 82 M 82", "M 82 M 82"])
-    assert result == [{"target": "M 82 M 82", "suggested": "M 82", "count": 2}]
+    assert result == [
+        {"target": "M 82 M 82", "suggested": "M 82", "panel": None, "count": 2}
+    ]
 
 
 def test_target_suggestions_two_designations_only_if_base_exists():
@@ -1028,7 +1032,7 @@ def test_target_suggestions_two_designations_only_if_base_exists():
 
 def test_target_suggestions_normalization_drift():
     result = _target_suggestions(["m81"])
-    assert result == [{"target": "m81", "suggested": "M 81", "count": 1}]
+    assert result == [{"target": "m81", "suggested": "M 81", "panel": None, "count": 1}]
 
 
 def test_target_suggestions_skips_clean_targets():
@@ -1791,3 +1795,238 @@ def test_rescan_rename_apply_form_does_not_confirm(tmp_path):
     resp = client.get("/rescan")
 
     assert "confirm(" not in resp.text
+
+
+# ---------------------------------------------------------------------------
+# mosaic panels in the UI (M1 web half)
+# ---------------------------------------------------------------------------
+
+
+def _panel_sessions(db_path, target="IC 4604", panels=("1-1", "1-2"), frames=(100, 40)):
+    """One session per panel of `target`, each with its own frame count."""
+    for panel, count in zip(panels, frames):
+        upsert_session(
+            db_path,
+            _session(
+                f"IC4604_20260219_FRA400_ZWOASI585MCPro_L-Pro_P{panel}",
+                target=target, panel=panel, frame_count=count,
+            ),
+        )
+
+
+def test_build_aggregate_counts_distinct_panels():
+    rows = [
+        _session("a", panel="1-1", processed_state="unprocessed"),
+        _session("b", panel="1-2", processed_state="unprocessed"),
+        # same panel, second night
+        _session("c", panel="1-2", processed_state="unprocessed"),
+    ]
+    (agg,) = _build_aggregate(rows)
+    assert agg["n_panels"] == 2
+    assert [n["panel"] for n in agg["nights"]] == ["1-1", "1-2", "1-2"]
+
+
+def test_build_aggregate_unpanelled_target_has_no_panels():
+    (agg,) = _build_aggregate([
+        _session("a", processed_state="unprocessed"),
+        _session("b", processed_state="unprocessed"),
+    ])
+    assert agg["n_panels"] == 0
+    assert all(n["panel"] is None for n in agg["nights"])
+
+
+def test_build_aggregate_panel_absent_from_row_is_none():
+    """Fixtures and older rows without the column must not raise."""
+    row = _session("a", processed_state="unprocessed")
+    row.pop("panel", None)
+    (agg,) = _build_aggregate([row])
+    assert agg["n_panels"] == 0
+    assert agg["nights"][0]["panel"] is None
+
+
+def test_target_page_embeds_panels(tmp_path):
+    client, db_path = make_client(tmp_path)
+    _panel_sessions(db_path)
+    login(client)
+
+    resp = client.get("/targets/IC%204604")
+    assert resp.status_code == 200
+    (entry,) = _embedded_data(resp.text)
+    assert entry["n_panels"] == 2
+    assert sorted(n["panel"] for n in entry["nights"]) == ["1-1", "1-2"]
+
+
+def test_index_embeds_panels(tmp_path):
+    client, db_path = make_client(tmp_path)
+    _panel_sessions(db_path)
+    login(client)
+
+    (entry,) = _embedded_data(client.get("/").text)
+    assert entry["n_panels"] == 2
+
+
+# ── panel on the session edit form (_EDIT_FIELDS) ──────────────────────────
+
+
+def test_session_form_shows_panel_field(tmp_path):
+    client, db_path = make_client(tmp_path)
+    sid = "IC4604_20260219_FRA400_ZWOASI585MCPro_L-Pro_P1-1"
+    upsert_session(db_path, _session(sid, target="IC 4604", panel="1-1"))
+    login(client)
+
+    resp = client.get(f"/sessions/{sid}")
+    assert resp.status_code == 200
+    assert 'name="panel"' in resp.text
+    assert 'value="1-1"' in resp.text
+
+
+def test_session_edit_sets_panel(tmp_path):
+    """A mosaic ingested before panels existed can acquire one from the form."""
+    client, db_path = make_client(tmp_path)
+    sid = "IC4604_20260219_FRA400_ZWOASI585MCPro_L-Pro"
+    upsert_session(db_path, _session(sid, target="IC 4604"))
+    login(client)
+
+    form = {f: "" for f in ("notes", "processed_path", "processed_date")}
+    form.update({
+        "target": "IC 4604", "obs_date": "2026-02-19", "ota": "FRA400",
+        "camera": "ZWOASI585MCPro", "filter": "L-Pro", "panel": "1-1",
+        "gain": "200", "temperature_c": "-20.0", "exposure_sec": "180.0",
+        "focal_length": "400.0", "processed_state": "unprocessed",
+    })
+    resp = client.post(f"/sessions/{sid}", data=form, follow_redirects=False)
+    assert resp.status_code == 303
+
+    conn = catalog_db.open_db(db_path)
+    try:
+        (row,) = catalog_db.query_sessions(conn, target="IC 4604")
+    finally:
+        conn.close()
+    assert row["panel"] == "1-1"
+    # An identity edit renames the row and the redirect follows it.
+    assert row["session_id"].endswith("_P1-1")
+    assert resp.headers["location"] == f"/sessions/{row['session_id']}"
+
+
+def test_session_edit_clears_panel(tmp_path):
+    """A panel typed onto a single-pointing session by mistake can be removed."""
+    client, db_path = make_client(tmp_path)
+    sid = "M81_20260219_FRA400_ZWOASI585MCPro_L-Pro_P1-1"
+    upsert_session(db_path, _session(sid, panel="1-1"))
+    login(client)
+
+    form = {f: "" for f in ("notes", "processed_path", "processed_date", "panel")}
+    form.update({
+        "target": "M 81", "obs_date": "2026-02-19", "ota": "FRA400",
+        "camera": "ZWOASI585MCPro", "filter": "L-Pro",
+        "gain": "200", "temperature_c": "-20.0", "exposure_sec": "180.0",
+        "focal_length": "400.0", "processed_state": "unprocessed",
+    })
+    assert client.post(f"/sessions/{sid}", data=form, follow_redirects=False).status_code == 303
+
+    conn = catalog_db.open_db(db_path)
+    try:
+        (row,) = catalog_db.query_sessions(conn, target="M 81")
+    finally:
+        conn.close()
+    assert row["panel"] is None
+
+
+# ── panel-aware merge suggestions (_PANEL_SUFFIX_RE replacement) ───────────
+
+
+def test_target_suggestions_panel_suffix_carries_the_label():
+    result = _target_suggestions(["IC 4604_1-1", "IC 4604_2-2"])
+    by_target = {s["target"]: s for s in result}
+    assert by_target["IC 4604_1-1"]["panel"] == "1-1"
+    assert by_target["IC 4604_2-2"]["panel"] == "2-2"
+
+
+def test_queue_suggestion_form_posts_the_panel(tmp_path):
+    client, db_path = make_client(tmp_path)
+    upsert_session(
+        db_path,
+        _session(
+            "IC46041_1_20260219_FRA400_ZWOASI585MCPro_L-Pro",
+            target="IC 4604_1-1", obs_date="2026-02-19",
+        ),
+    )
+    login(client)
+
+    resp = client.get("/queue")
+    assert '<input type="hidden" name="panel" value="1-1">' in resp.text
+    assert "Merge into IC 4604 as panel 1-1" in resp.text
+
+
+def test_queue_targets_rename_sets_target_and_panel(tmp_path):
+    """The whole point of M1's UI half: a panel merge must not be target-only."""
+    client, db_path = make_client(tmp_path)
+    upsert_session(
+        db_path,
+        _session(
+            "IC46041_1_20260219_FRA400_ZWOASI585MCPro_L-Pro",
+            target="IC 4604_1-1", obs_date="2026-02-19",
+        ),
+    )
+    login(client)
+
+    resp = client.post(
+        "/queue/targets/rename",
+        data={"old_target": "IC 4604_1-1", "new_target": "IC 4604", "panel": "1-1"},
+    )
+    assert resp.status_code == 200
+    assert "IC 4604 · panel 1-1" in resp.text
+
+    conn = catalog_db.open_db(db_path)
+    try:
+        (row,) = catalog_db.query_sessions(conn, target="IC 4604")
+    finally:
+        conn.close()
+    assert row["panel"] == "1-1"
+
+
+def test_queue_targets_rename_two_panels_same_night_do_not_collide(tmp_path):
+    """Target-only would collapse both onto one identity and fail the second."""
+    client, db_path = make_client(tmp_path)
+    for panel in ("1-1", "1-2"):
+        upsert_session(
+            db_path,
+            _session(
+                f"IC4604{panel}_20260219_FRA400_ZWOASI585MCPro_L-Pro",
+                target=f"IC 4604_{panel}", obs_date="2026-02-19",
+            ),
+        )
+    login(client)
+
+    for panel in ("1-1", "1-2"):
+        resp = client.post(
+            "/queue/targets/rename",
+            data={"old_target": f"IC 4604_{panel}", "new_target": "IC 4604", "panel": panel},
+        )
+        assert resp.status_code == 200
+        assert "failed to merge" not in resp.text
+
+    conn = catalog_db.open_db(db_path)
+    try:
+        rows = catalog_db.query_sessions(conn, target="IC 4604")
+    finally:
+        conn.close()
+    assert sorted(r["panel"] for r in rows) == ["1-1", "1-2"]
+
+
+def test_queue_targets_rename_without_panel_leaves_it_alone(tmp_path):
+    client, db_path = make_client(tmp_path)
+    sid = "M82M82_20260219_FRA400_ZWOASI585MCPro_L-Pro_P1-1"
+    upsert_session(db_path, _session(sid, target="M 82 M 82", panel="1-1"))
+    login(client)
+
+    client.post(
+        "/queue/targets/rename", data={"old_target": "M 82 M 82", "new_target": "M 82"}
+    )
+
+    conn = catalog_db.open_db(db_path)
+    try:
+        (row,) = catalog_db.query_sessions(conn, target="M 82")
+    finally:
+        conn.close()
+    assert row["panel"] == "1-1"

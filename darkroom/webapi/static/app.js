@@ -110,21 +110,49 @@ const zoneLadder = () => ZONES.map(([, word, , , range]) => `${range} ${word}`).
 
 /* `showNumbers` is off wherever the hours are already on the row (the target
    page's rig summary, since hoursHTML puts them there); on the overview the
-   tooltip is the only place the weighted figure appears, so it keeps them. */
-function gaugeHTML(h, withWord = true, rawH, showNumbers = true) {
+   tooltip is the only place the weighted figure appears, so it keeps them.
+
+   `panels` > 1 means `h` is already a per-panel figure (see perPanel) — the
+   gauge reads the same way, but the tooltip has to say so, or "2.1h workable"
+   on an 8.4h mosaic looks like a bug rather than the point. */
+function gaugeHTML(h, withWord = true, rawH, showNumbers = true, panels = 0) {
   const [, word, colour, mod, range] = zoneOf(h);
   const w = Math.min(Math.sqrt(h / GAUGE_MAX), 1) * 100;
   const tick = v => `<i class="gtick" style="left:${Math.sqrt(v / GAUGE_MAX) * 100}%"></i>`;
   const weighted = rawH !== undefined && Math.abs(h - rawH) > 0.05;
+  const per = panels > 1 ? ` <i>per panel, across ${panels} panels</i>` : "";
   const tip = !showNumbers
-    ? `<b>${word}</b> — ${range}`
+    ? `<b>${word}</b> — ${range}${per}`
     : weighted
-      ? `<b>${h.toFixed(1)}h</b> home-equivalent (${rawH.toFixed(1)}h raw) — ${word}`
-      : `<b>${h.toFixed(1)}h</b> — ${word}`;
+      ? `<b>${h.toFixed(1)}h</b> home-equivalent (${rawH.toFixed(1)}h raw) — ${word}${per}`
+      : `<b>${h.toFixed(1)}h</b> — ${word}${per}`;
   return `<span class="gauge" data-tip="${tip}">
     <span class="gtrack"><span class="gfill" style="width:${w}%; background:${colour}"></span>${tick(2)}${tick(10)}${tick(20)}</span>
     ${withWord ? `<span class="gword ${mod}">${word}</span>` : ""}</span>`;
 }
+
+/* ── mosaic panels (M1) ────────────────────────
+   A mosaic's hours are panel-time, not depth: 8.4h spread over four panels is
+   a 2.1h-deep mosaic, and each panel is stacked and finished on its own (WBPP
+   merges panels at final integration and fails, so one tree per panel). So
+   every number that answers "does this need another night?" — the depth gauge
+   on the overview, the per-rig gauge on the detail page — divides by the panel
+   count, and the panel breakdown shows which panels are actually short.
+
+   Sessions with no panel are ordinary single-pointing sessions and the
+   overwhelming majority; for them panelCount is 0 and nothing below changes
+   what the page used to show. */
+const cmpPanel = (a, b) => {
+  const [ar, ac] = a.split("-").map(Number), [br, bc] = b.split("-").map(Number);
+  return (ar - br) || (ac - bc) || a.localeCompare(b);
+};
+const panelsOf = nights => [...new Set(nights.map(n => n.panel).filter(Boolean))].sort(cmpPanel);
+const panelCount = nights => panelsOf(nights).length;
+/* Divide by the panel count only when there is more than one panel — a single
+   panel is just a session that happens to carry a label. Unpanelled hours
+   inside a mosaic target (the odd pre-M1 row) ride along in the numerator;
+   they are listed separately in the breakdown rather than silently dropped. */
+const perPanel = (h, np) => (np > 1 ? h / np : h);
 
 /* Hours, weighted-first: a night under a dark site banks more usable depth than
    the clock says, and that — not the raw figure — is what decides whether the
@@ -137,8 +165,11 @@ function hoursHTML(rawH, weightedH, cls = "h") {
   return `<span class="${cls}"><b>${wh.toFixed(1)}</b>h${raw}</span>`;
 }
 
-const nameCell = (t) =>
-  `<span><span class="tname display">${t.target}</span>${t.cname ? `<span class="cname">${t.cname}</span>` : ""}</span>`;
+const nameCell = (t) => {
+  const np = t.n_panels || 0;
+  const badge = np > 1 ? `<span class="pcount">${np}-panel mosaic</span>` : "";
+  return `<span><span class="tname display">${t.target}</span>${t.cname ? `<span class="cname">${t.cname}</span>` : ""}${badge}</span>`;
+};
 
 /* ── calibration match (F3) ────────────────────
    One letter-chip per calibration class, coloured by whether `wbpp` would find
@@ -233,10 +264,11 @@ function renderOverview() {
       const counts = STATES.filter(s => t.states[s])
         .map(s => `<span title="${t.states[s]} ${STATE_LABEL[s]}">${miniMark(s)}${t.states[s]}</span>`).join("");
       const open = backlogH(t);
+      const np = t.n_panels || 0;
       return `<a class="row cols" href="/targets/${encodeURIComponent(t.target)}">
         ${nameCell(t)}
         ${stripHTML(t.hours, maxH)}
-        ${gaugeHTML(backlogWH(t), false, open)}
+        ${gaugeHTML(perPanel(backlogWH(t), np), false, perPanel(open, np), true, np)}
         <span class="hnum num"><b>${t.total_h.toFixed(1)}</b>h</span>
         <span class="opennum num ${open > 0 ? "some" : ""}">${open > 0 ? open.toFixed(1) + "h" : "—"}</span>
         <span class="marks">${counts}</span>
@@ -245,6 +277,7 @@ function renderOverview() {
     }).join("");
   const badFilters = DATA.reduce((a, t) => a + t.nights.filter(n => !n.filter || n.filter === "None" || /_\d-\d/.test(n.filter)).length, 0);
   const badTargets = DATA.filter(t => /_\d-\d|M 82 M 82/.test(t.target)).length;
+  const mosaics = DATA.filter(t => (t.n_panels || 0) > 1).length;
   document.getElementById("app").innerHTML = `
     <div class="controls">
       <input type="search" placeholder="find a target…" value="${query}" id="q">
@@ -282,7 +315,7 @@ function renderOverview() {
       <a class="go" href="/queue">→ cleanup queue</a></div>
     <p class="footnote">
       Open = hours in sessions still open or in progress ·
-      Depth = open hours: ${zoneLadder()} ·
+      Depth = open hours: ${zoneLadder()} — <b>per panel</b> on a mosaic, since 8h across 4 panels is a 2h-deep mosaic ·
       marks are clickable in the target view ·
       Depth is weighted by site sky quality (SQM flux ratio) when known — home-equivalent hours</p>`;
   document.getElementById("q").addEventListener("input", e => { query = e.target.value.toLowerCase(); renderOverview(); const q = document.getElementById("q"); q.focus(); q.setSelectionRange(q.value.length, q.value.length); });
@@ -298,7 +331,8 @@ function renderOverview() {
   if (statlineEl) {
     const totalH = DATA.reduce((a, t) => a + t.total_h, 0);
     const totalN = DATA.reduce((a, t) => a + t.n, 0);
-    statlineEl.innerHTML = `<b>${DATA.length}</b> targets · <b>${totalN}</b> sessions · <b>${totalH.toFixed(0)}h</b> integration`;
+    const mos = mosaics ? ` · <b>${mosaics}</b> mosaic${mosaics === 1 ? "" : "s"}` : "";
+    statlineEl.innerHTML = `<b>${DATA.length}</b> targets · <b>${totalN}</b> sessions · <b>${totalH.toFixed(0)}h</b> integration${mos}`;
   }
 }
 
@@ -308,10 +342,59 @@ const NIGHT_SORTS = {
   date:  (a, b) => (a.date || "").localeCompare(b.date || ""),
   state: (a, b) => STATES.indexOf(a.state) - STATES.indexOf(b.state),
   h:     (a, b) => a.h - b.h,
+  /* Panel sorts numerically ("2-1" before "10-1"), unpanelled rows last. */
+  panel: (a, b) => (!a.panel || !b.panel) ? (a.panel ? -1 : b.panel ? 1 : 0)
+                                          : cmpPanel(a.panel, b.panel),
 };
+
+/* Per-panel breakdown for a mosaic target: one cell per panel, deepest-scaled
+   gauge, so the panel that still needs a night is visible at a glance rather
+   than buried inside a total. Panels accumulate independently across nights,
+   and each is stacked on its own, so this — not the target total — is the
+   thing to read before deciding where to point next.
+
+   `short` marks a panel under three-quarters of the deepest one: the mosaic is
+   only as finished as its thinnest tile. Any unpanelled sessions under the same
+   target (a pre-M1 row, or a session genuinely shot as a single pointing) get
+   their own cell rather than being folded into a panel's figure. */
+function panelBlockHTML(t) {
+  const labels = panelsOf(t.nights);
+  if (labels.length < 2) return "";
+  const hOf = ns => ns.reduce((a, n) => a + n.h, 0);
+  const whOf = ns => ns.reduce((a, n) => a + (n.wh ?? n.h), 0);
+  const bucket = p => t.nights.filter(n => (n.panel || null) === p);
+  const deepest = Math.max(...labels.map(p => whOf(bucket(p))));
+  const cell = (label, nights, cls = "", tip = "") => {
+    const wh = whOf(nights), h = hOf(nights);
+    return `<div class="pcell ${cls}"${tip ? ` data-tip="${tip}"` : ""}>
+      <span class="plabel">${label}</span>
+      ${gaugeHTML(wh, false, h)}
+      ${hoursHTML(h, wh, "hnum num")}
+      <span class="n">${nights.length} night${nights.length === 1 ? "" : "s"}</span>
+    </div>`;
+  };
+  const cells = labels.map(p => {
+    const ns = bucket(p);
+    const short = whOf(ns) < 0.75 * deepest;
+    return cell(`P${p}`, ns, short ? "short" : "",
+      short ? `<b>panel ${p} is short</b> · ${whOf(ns).toFixed(1)}h against ${deepest.toFixed(1)}h on the deepest panel` : "");
+  }).join("");
+  const loose = bucket(null);
+  const total = hOf(t.nights);
+  return `<div class="panelblock">
+    <div class="pblockhead">
+      <span class="ptitle">Panels</span>
+      <span class="sub">${labels.length} panels · ${(total / labels.length).toFixed(1)}h per panel
+        · ${total.toFixed(1)}h of panel-time in total</span>
+    </div>
+    <div class="pgrid">${cells}${loose.length ? cell("unpanelled", loose, "loose",
+      "<b>no panel label</b> · a single pointing under this target, or a row ingested before panels existed") : ""}</div>
+  </div>`;
+}
 
 function renderDetail() {
   const t = DATA.find(x => x.target === detail.name);
+  const np = t.n_panels || 0;
   const rigs = {};
   t.nights.forEach(n => { const r = `${n.ota || "?"} · ${n.camera || "?"}`; (rigs[r] = rigs[r] || []).push(n); });
 
@@ -320,10 +403,15 @@ function renderDetail() {
     const sorted = [...nights].sort((a, b) => (gsort.desc ? -1 : 1) * NIGHT_SORTS[gsort.key](a, b));
     const gh = nights.reduce((a, n) => a + n.h, 0);
     const ghw = nights.reduce((a, n) => a + (n.wh ?? n.h), 0);
+    /* Panels within this rig, not the target's total: a mosaic can be half
+       shot on one rig and half on another, and each rig's gauge answers only
+       for the nights under it. */
+    const gnp = panelCount(nights);
     const rows = sorted.map(n => `
-      <div class="row cols nightcols night">
+      <div class="row cols nightcols${np > 1 ? " panelled" : ""} night">
         <button class="markbtn" data-sid="${n.sid}" title="${STATE_LABEL[n.state]} — click to cycle">${markSVG(n.state, n.sid)}</button>
         <span class="date"><a href="/sessions/${encodeURIComponent(n.sid)}">${n.date}</a></span>
+        ${np > 1 ? `<span class="pchip${n.panel ? "" : " none"}">${n.panel ? "P" + n.panel : "—"}</span>` : ""}
         <span class="fchip"><i style="background:${fcolor(n.filter || "None")}"></i>${fname(n.filter || "None")}</span>
         <span class="exp">${n.frames || "?"} × ${n.exp ? n.exp.toFixed(0) + "s" : "?"}${n.gain ? " · gain" + n.gain : ""}</span>
         <span class="statelabel ${n.state}">${STATE_LABEL[n.state]}</span>
@@ -337,14 +425,14 @@ function renderDetail() {
       <summary class="rigsum">
         <svg class="tri" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2.5 1 L8 5 L2.5 9 Z" fill="currentColor"/></svg>
         <span class="rigname display">${rig}</span>
-        ${gaugeHTML(ghw, true, gh, false)}
+        ${gaugeHTML(perPanel(ghw, gnp), true, perPanel(gh, gnp), false, gnp)}
         ${stripHTML(hoursOf(nights), null)}
         ${hoursHTML(gh, ghw, "hnum num")}
-        <span class="n">${nights.length} sessions</span>
+        <span class="n">${nights.length} sessions${gnp > 1 ? ` · ${gnp} panels` : ""}</span>
       </summary>
       <div class="rigbody">
-        <div class="cols nightcols headrow">
-          <span class="colhead"></span>${gs("date", "Night")}<span class="colhead">Filter</span>
+        <div class="cols nightcols${np > 1 ? " panelled" : ""} headrow">
+          <span class="colhead"></span>${gs("date", "Night")}${np > 1 ? gs("panel", "Panel") : ""}<span class="colhead">Filter</span>
           <span class="colhead">Exposure</span>${gs("state", "State")}<span class="colhead">Site</span><span class="colhead">Cal</span><span class="colhead">Guiding</span>${gs("h", "Hours", "num")}
         </div>
         ${rows}
@@ -356,13 +444,16 @@ function renderDetail() {
     <a class="backlink" href="/">← all targets</a>
     <div class="dethead">
       ${nameCell(t)}
-      <span class="sub">${t.n} sessions · <b style="color:var(--ink)">${t.total_h.toFixed(1)}h</b> · last acquired ${t.last}</span>
+      <span class="sub">${t.n} sessions · <b style="color:var(--ink)">${t.total_h.toFixed(1)}h</b>${
+        np > 1 ? ` panel-time · <b style="color:var(--ink)">${perPanel(t.total_h, np).toFixed(1)}h</b> per panel` : ""
+      } · last acquired ${t.last}</span>
       ${stripHTML(t.hours, null)}
     </div>
+    ${panelBlockHTML(t)}
     ${groups}
     <p class="footnote">grease-pencil marks: <span class="lamp">○</span> processed · half-circle in progress · strike skipped · dotted = open.
       click a mark to cycle state — updates the catalog.
-      gauge = integration banked per rig: ${zoneLadder()}, weighted by site sky quality.
+      gauge = integration banked per rig: ${zoneLadder()}, weighted by site sky quality${np > 1 ? ", and per panel — a mosaic is only as deep as each tile, which is stacked and finished on its own" : ""}.
       Hours are home-equivalent — what the integration would have been worth from home — with the raw figure alongside when the site's sky quality moves it.
       Site column: named observing site the session's coordinates matched, if any; a ×badge shows its SQM weight relative to home when it isn't 1×.
       Cal: what <b>wbpp</b> would find for Darks / Flats / FlatDarks — lit = matched, dim = missing, faded = that camera doesn't use them, dashed = can't tell. Hover for the matched set. Catalog only: this server can't see the archive.

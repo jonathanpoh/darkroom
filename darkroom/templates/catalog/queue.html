@@ -119,11 +119,13 @@
       <div class="qhead">
         <span class="tname">{{ sug.target }}</span>
         <span class="qcount">{{ sug.count }} session{{ '' if sug.count == 1 else 's' }}</span>
+        {% if sug.panel %}<span class="panelchip">panel {{ sug.panel }}</span>{% endif %}
       </div>
       <form class="qfixform" method="post" action="/queue/targets/rename">
         <input type="hidden" name="old_target" value="{{ sug.target }}">
         <input type="hidden" name="new_target" value="{{ sug.suggested }}">
-        <button type="submit">Merge into {{ sug.suggested }}</button>
+        {% if sug.panel %}<input type="hidden" name="panel" value="{{ sug.panel }}">{% endif %}
+        <button type="submit">Merge into {{ sug.suggested }}{% if sug.panel %} as panel {{ sug.panel }}{% endif %}</button>
       </form>
     </div>
     {% endfor %}
@@ -139,6 +141,7 @@
       {% endfor %}
     </select>
     <input type="text" name="new_target" placeholder="new target name" required>
+    <input type="text" name="panel" placeholder="panel (e.g. 1-1)" size="12">
     <button type="submit">Merge</button>
   </form>
 </section>
