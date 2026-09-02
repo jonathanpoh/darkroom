@@ -15,7 +15,7 @@ from darkroom.wbpp import (
 from darkroom.cataloger import init_db, upsert_calibration_set
 from darkroom.catalog_client import LocalBackend
 from darkroom.names import make_session_id, parse_wbpp_panel_dir, session_dest_rel
-from darkroom.prep import _has_existing_sessions, build_wbpp_sessions
+from darkroom.prep import _build_night, _has_existing_sessions, build_wbpp_sessions
 
 
 def touch(p: Path, content: bytes = b"") -> Path:
@@ -527,3 +527,121 @@ def test_has_existing_sessions_ignores_non_panel_dirs(tmp_path):
     (target / "Output" / "processed").mkdir(parents=True)
     (target / "notes").mkdir()
     assert _has_existing_sessions(target) is False
+
+
+# ── B13: a night whose sessions disagree on dark params is split ─────────────
+#
+# WBPP's Darks/ is per SESSION_N and shared by every filter in it, so one
+# SESSION_N can only serve one camera/gain/exposure. Live case (2026-09-02):
+# NGC 281 2026-07-26 has L-Extreme at 180s and L-Synergy at 300s — in one
+# SESSION_N the 300s lights got 180s darks.
+
+def _master_dark(archive: Path, catalog: Path, *, set_id: str, gain: int, exposure_sec: float,
+                 camera: str = "ZWOASI585MCPro", temperature_c: float = -10.0) -> str:
+    rel = f"00_Calibration/Darks/{camera}/masterDark_{exposure_sec:g}s_gain{gain}_{temperature_c:g}C.xisf"
+    touch(archive / rel)
+    upsert_calibration_set(catalog, {
+        "set_id": set_id, "frame_type": "Dark", "camera": camera, "ota": None,
+        "filter": None, "gain": gain, "exposure_sec": exposure_sec,
+        "temperature_c": temperature_c, "frame_count": 1, "capture_date": "2026-07-01",
+        "folder_path": rel, "is_master": 1,
+    })
+    return rel
+
+
+def _dark_targets(session_dir: Path) -> set[str]:
+    return {os.readlink(p).rsplit("/", 1)[-1] for p in (session_dir / "Darks").glob("*")}
+
+
+def test_build_wbpp_sessions_splits_mixed_exposure_night(tmp_path):
+    archive = tmp_path / "archive"
+    catalog = tmp_path / "cat.db"
+    init_db(catalog)
+    _master_dark(archive, catalog, set_id="d180", gain=200, exposure_sec=180.0)
+    _master_dark(archive, catalog, set_id="d300", gain=200, exposure_sec=300.0)
+    rows = [
+        _panel_row(archive, obs_date="2026-07-26", panel=None, target="NGC 281",
+                   filter_="L-Extreme", exposure_sec=180.0),
+        _panel_row(archive, obs_date="2026-07-26", panel=None, target="NGC 281",
+                   filter_="L-Synergy", exposure_sec=300.0),
+    ]
+
+    build_wbpp_sessions(rows, backend=LocalBackend(catalog), output=archive,
+                        wbpp_root=tmp_path / "WBPP", target_name="NGC 281")
+
+    target_dir = tmp_path / "WBPP" / "NGC281"
+    s1, s2 = target_dir / "SESSION_1", target_dir / "SESSION_2"
+    assert s1.is_dir() and s2.is_dir() and not (target_dir / "SESSION_3").exists()
+    # Sorted by exposure within the night: 180s first, 300s second — and each
+    # SESSION_N carries only its own filter and its own dark master.
+    assert (s1 / "Lights" / "FILTER_L-Extreme").is_dir() and not (s1 / "Lights" / "FILTER_L-Synergy").exists()
+    assert (s2 / "Lights" / "FILTER_L-Synergy").is_dir() and not (s2 / "Lights" / "FILTER_L-Extreme").exists()
+    assert _dark_targets(s1) == {"masterDark_180s_gain200_-10C.xisf"}
+    assert _dark_targets(s2) == {"masterDark_300s_gain200_-10C.xisf"}
+
+
+def test_build_wbpp_sessions_splits_mixed_gain_night(tmp_path):
+    """IC 1805 2023-12-14: same exposure, ISO3200 vs ISO1600 — WBPP does not
+    key darks on gain, so these cannot share a Darks/ folder."""
+    archive = tmp_path / "archive"
+    catalog = tmp_path / "cat.db"
+    init_db(catalog)
+    _master_dark(archive, catalog, set_id="d3200", gain=3200, exposure_sec=180.0, camera="Canon6D", temperature_c=6.0)
+    _master_dark(archive, catalog, set_id="d1600", gain=1600, exposure_sec=180.0, camera="Canon6D", temperature_c=6.0)
+    rows = [
+        _panel_row(archive, obs_date="2023-12-14", panel=None, target="IC 1805", camera="Canon6D",
+                   filter_="L-Extreme", gain=3200, exposure_sec=180.0, temperature_c=6.0),
+        _panel_row(archive, obs_date="2023-12-14", panel=None, target="IC 1805", camera="Canon6D",
+                   filter_="L-Pro", gain=1600, exposure_sec=180.0, temperature_c=5.0),
+    ]
+
+    build_wbpp_sessions(rows, backend=LocalBackend(catalog), output=archive,
+                        wbpp_root=tmp_path / "WBPP", target_name="IC 1805")
+
+    target_dir = tmp_path / "WBPP" / "IC1805"
+    s1, s2 = target_dir / "SESSION_1", target_dir / "SESSION_2"
+    assert _dark_targets(s1) == {"masterDark_180s_gain1600_6C.xisf"}
+    assert _dark_targets(s2) == {"masterDark_180s_gain3200_6C.xisf"}
+    assert (s1 / "Lights" / "FILTER_L-Pro").is_dir()
+    assert (s2 / "Lights" / "FILTER_L-Extreme").is_dir()
+
+
+def test_build_wbpp_sessions_same_params_night_stays_one_session(tmp_path):
+    """Two filters at the same camera/gain/exposure still share one SESSION_N —
+    the normal filter-change-mid-night workflow is unchanged."""
+    archive = tmp_path / "archive"
+    backend = _empty_backend(tmp_path)
+    rows = [
+        _panel_row(archive, obs_date="2026-04-26", panel=None, filter_="L-Pro"),
+        _panel_row(archive, obs_date="2026-04-26", panel=None, filter_="L-Extreme"),
+    ]
+    build_wbpp_sessions(rows, backend=backend, output=archive,
+                        wbpp_root=tmp_path / "WBPP", target_name="IC 4604")
+    target_dir = tmp_path / "WBPP" / "IC4604"
+    assert (target_dir / "SESSION_1" / "Lights" / "FILTER_L-Pro").is_dir()
+    assert (target_dir / "SESSION_1" / "Lights" / "FILTER_L-Extreme").is_dir()
+    assert not (target_dir / "SESSION_2").exists()
+
+
+def test_build_night_refuses_mixed_dark_params(tmp_path):
+    archive = tmp_path / "archive"
+    backend = _empty_backend(tmp_path)
+    rows = [
+        _panel_row(archive, obs_date="2026-04-26", panel=None, filter_="L-Pro", exposure_sec=60.0),
+        _panel_row(archive, obs_date="2026-04-26", panel=None, filter_="L-Extreme", exposure_sec=120.0),
+    ]
+    with pytest.raises(ValueError, match="disagree on camera/gain/exposure"):
+        _build_night(rows, output=archive, backend=backend,
+                     session_dir=tmp_path / "WBPP" / "X" / "SESSION_1", flat_window=3)
+
+
+def test_build_night_warns_on_temperature_spread(tmp_path, capsys):
+    archive = tmp_path / "archive"
+    backend = _empty_backend(tmp_path)
+    rows = [
+        _panel_row(archive, obs_date="2026-04-26", panel=None, filter_="L-Pro", temperature_c=10.0),
+        _panel_row(archive, obs_date="2026-04-26", panel=None, filter_="L-Extreme", temperature_c=16.0),
+    ]
+    _build_night(rows, output=archive, backend=backend,
+                 session_dir=tmp_path / "WBPP" / "X" / "SESSION_1", flat_window=3)
+    assert "WARNING: sessions span 10C–16C" in capsys.readouterr().out

@@ -319,6 +319,11 @@ For each imaging night the session covers, builds:
 
 Then in PixInsight: WBPP → Add Directory → select the `SESSION_N/` folder.
 
+A night whose sessions disagree on camera, gain or exposure is split into one
+`SESSION_N/` per combination, so each gets darks that actually match (WBPP's
+`Darks/` is per session dir and is not keyed on gain). WBPP still integrates
+them together — `SESSION_N` only scopes calibration.
+
 ### `darkroom finish`
 
 After WBPP produces `master/*.xisf` (and you've optionally hand-finished into

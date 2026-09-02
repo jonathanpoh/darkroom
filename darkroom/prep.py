@@ -168,6 +168,28 @@ def _no_darks_note(
     )
 
 
+def _dark_key(row: dict) -> tuple:
+    """What one SESSION_N's shared Darks/ (and Bias/) can serve: camera, gain, exposure.
+
+    WBPP's Darks/ folder is per SESSION_N and shared by every filter in it, and
+    WBPP matches darks to lights by exposure (not gain) — so two sessions may
+    share a SESSION_N only if they agree on all three. `build_wbpp_sessions`
+    groups a night by this key (BACKLOG.md B13); `_build_night` enforces it.
+    None-safe so rows can be sorted.
+    """
+    gain = row.get("gain")
+    exposure = row.get("exposure_sec")
+    return (
+        row.get("camera") or "",
+        -1 if gain is None else gain,
+        -1.0 if exposure is None else float(exposure),
+    )
+
+
+def _describe_dark_key(row: dict) -> str:
+    return f"gain{row.get('gain')} · {float(row.get('exposure_sec') or 0):g}s"
+
+
 def _build_night(
     sessions: list[dict],
     *,
@@ -177,7 +199,20 @@ def _build_night(
     flat_window: int,
     dark_temp_tolerance: float = DEFAULT_DARK_TEMP_TOLERANCE,
 ) -> None:
-    """Build one SESSION_N directory from one or more sessions on the same night."""
+    """Build one SESSION_N directory from one or more sessions on the same night.
+
+    Every session must share `_dark_key` (camera/gain/exposure) — the Darks/
+    and Bias/ built here serve all of them. `build_wbpp_sessions` splits a
+    night on that key before calling this; a caller that doesn't is a bug,
+    not a warning (B13: IC 1805 2023-12-14 once had ISO1600 lights calibrated
+    with ISO3200 darks because the night's first row set the parameters).
+    """
+    keys = {_dark_key(s) for s in sessions}
+    if len(keys) > 1:
+        raise ValueError(
+            "sessions in one SESSION_N disagree on camera/gain/exposure: "
+            + ", ".join(str(k) for k in sorted(keys))
+        )
     session_dir.mkdir(parents=True, exist_ok=True)
 
     # Lights — split by filter
@@ -189,10 +224,18 @@ def _build_night(
         count = make_symlinks(files, dest)
         print(f"  Lights/FILTER_{filter_name}/    {count} symlinks")
 
-    # Darks — camera/gain/exposure/temperature from first session (all sessions
-    # same night share params)
+    # Darks — camera/gain/exposure are shared (guarded above); temperature is
+    # the first session's. Nights don't spread more than the tolerance today
+    # (0 of 235 live nights, 2026-09-02) — F5 is where a range would be modelled.
     s0 = sessions[0]
     session_temp = s0.get("temperature_c")
+    temps = [s["temperature_c"] for s in sessions if s.get("temperature_c") is not None]
+    if temps and max(temps) - min(temps) > dark_temp_tolerance:
+        print(
+            f"  WARNING: sessions span {min(temps):g}C–{max(temps):g}C, wider than the"
+            f" ±{dark_temp_tolerance:g}C dark tolerance — darks are matched to"
+            f" {session_temp:g}C (the first session) for all of them."
+        )
     dark_rows = find_darks(
         backend, camera=s0["camera"], gain=s0["gain"], exposure_sec=s0["exposure_sec"],
         temperature_c=session_temp, temp_tolerance=dark_temp_tolerance,
@@ -471,25 +514,36 @@ def build_wbpp_sessions(
             panel_root = target_dir
             panel_output_dir = None
 
-        rows_sorted = sorted(panel_rows, key=lambda r: r["obs_date"])
-        for night_date, night_rows in groupby(rows_sorted, key=lambda r: r["obs_date"]):
-            night_sessions = list(night_rows)
-            n = next_session_num(panel_root)
-            session_dir = panel_root / f"SESSION_{n}"
-            session_dir.mkdir(parents=True, exist_ok=True)  # create before next iteration reads num
-            filters = ", ".join(s["filter"] or "NoFilter" for s in night_sessions)
-            total_lights = sum(s["frame_count"] for s in night_sessions)
-            label = f"{target_name} panel {panel}" if panel else target_name
-            print(f"\nSESSION_{n}  ({label} · {night_date} · {filters} · {total_lights} lights)")
-            _build_night(
-                night_sessions,
-                output=output,
-                backend=backend,
-                session_dir=session_dir,
-                flat_window=flat_window,
-                dark_temp_tolerance=dark_temp_tolerance,
-            )
-            print(f"\nIn PixInsight: WBPP → Add Directory → select {session_dir}/")
+        rows_sorted = sorted(panel_rows, key=lambda r: (r["obs_date"], _dark_key(r)))
+        for night_date, night_iter in groupby(rows_sorted, key=lambda r: r["obs_date"]):
+            # One SESSION_N per night — unless the night's sessions disagree on
+            # camera/gain/exposure, in which case each group gets its own
+            # SESSION_N so its Darks/ actually match its lights (B13). WBPP
+            # still integrates them together: SESSION_N only scopes calibration.
+            runs = [list(g) for _, g in groupby(night_iter, key=_dark_key)]
+            if len(runs) > 1:
+                print(
+                    f"\nNote: {night_date} mixes gain/exposure across its sessions — "
+                    f"building {len(runs)} SESSION_N dirs so each gets matching darks."
+                )
+            for night_sessions in runs:
+                n = next_session_num(panel_root)
+                session_dir = panel_root / f"SESSION_{n}"
+                session_dir.mkdir(parents=True, exist_ok=True)  # create before next iteration reads num
+                filters = ", ".join(s["filter"] or "NoFilter" for s in night_sessions)
+                total_lights = sum(s["frame_count"] for s in night_sessions)
+                label = f"{target_name} panel {panel}" if panel else target_name
+                params = f" · {_describe_dark_key(night_sessions[0])}" if len(runs) > 1 else ""
+                print(f"\nSESSION_{n}  ({label} · {night_date}{params} · {filters} · {total_lights} lights)")
+                _build_night(
+                    night_sessions,
+                    output=output,
+                    backend=backend,
+                    session_dir=session_dir,
+                    flat_window=flat_window,
+                    dark_temp_tolerance=dark_temp_tolerance,
+                )
+                print(f"\nIn PixInsight: WBPP → Add Directory → select {session_dir}/")
 
         if panel_output_dir is not None:
             print(f"Set WBPP output directory for PANEL_{panel} to: {panel_output_dir}/")
