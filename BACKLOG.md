@@ -2588,10 +2588,64 @@ The answer is never in the data: only Jonathan knows where the rig was. Notes:
   for the warning; this is about carrying them to the review queue instead of
   dropping them on stderr.
 
-Low urgency — the SQM difference between Home (19.19) and Quinta do Lago
-(19.38) is negligible, so the depth accounting barely moves. It is the site
-*attribution* that is wrong on one of these two nights, and the count of
-affected sessions is unknown until something looks for them.
+#### ⚠️ The cause, from Jonathan — the coordinate tracks the PHONE, not the rig
+
+Settled 2026-09-02, and it invalidates the modal heuristic rather than just
+tuning it. The ASIAir takes its GPS from the phone, and Jonathan either left
+home mid-session or was **monitoring the run remotely from the ASIAir app over
+Tailscale while away**. The rig never moved; the phone did. He has never shot
+a full night at Quinta do Lago.
+
+Two consequences:
+
+- **A mid-session coordinate flip is positive evidence the rig did *not*
+  move.** You cannot travel 10 km in a 5-minute inter-frame gap and resume on
+  the same target. So the flip is the signature of a phone that travelled, and
+  the correct reading is "one of these clusters is spurious", never "the
+  session was at the modal one".
+- **Frame count is meaningless here.** The number of frames that carry the
+  phone's away-location has no bearing on where the telescope stood. M 106's
+  26-to-24 vote is not a close call to be broken more carefully; it is the
+  wrong question.
+
+#### The blast radius — swept 2026-09-02, and it is small
+
+Every lights folder in the archive was read frame by frame (579 folders):
+
+| | |
+|---|---|
+| 44 | folders whose frames carry more than one coordinate |
+| **42** | all clusters **within 1 km** — ordinary GPS jitter at one place, harmless, and `session_site`'s modal pick is right |
+| **2** | clusters **more than 1 km apart** — exactly the two already known |
+
+So the damage is two sessions, and only one is actually wrong:
+
+- `M51_20260228_...` stores **Home** — correct, by luck, since it stored the
+  *minority* cluster. No action.
+- `M106_20260419_...` stores **Quinta do Lago** — wrong; the rig was at home.
+  `site_lat`/`site_lon` are in `ui._EDIT_FIELDS`, so this is a UI edit, not a
+  code change. It is the only session in the catalog attributed to that site.
+
+#### ⚠️ The blind spot the sweep cannot see
+
+If the phone was away for the **whole** session, every frame agrees and there
+is no disagreement to detect — the session is silently attributed to wherever
+the phone was. Two candidates are outstanding, both matching no known site and
+both awaiting Jonathan:
+
+- the **entire 8-panel M 8 mosaic** (2026-08-12) at `42.4635,-5.0146` —
+  northern Spain, ~450 km from home;
+- `Moon_20260827_...` at `38.4178,-9.2119` — ~30 km south-west, near the coast.
+
+A detector for this cannot use frame-level disagreement. It would have to flag
+a session whose site differs from the rig's usual site, or simply require
+confirmation for any session attributed to a location that is not a known
+site — which is the cheap version and would have caught both.
+
+Low urgency for *depth*: the SQM difference between Home (19.19) and Quinta do
+Lago (19.38) is negligible, so home-equivalent hours barely move. It is the
+site attribution that is wrong — and if the M 8 mosaic really is Spain, that
+one does move the numbers, since the site is unknown and unweighted.
 
 ### S3. Show moon phase in the session list; open question on moon/elevation weighting
 Queued 2026-07-29. Checked: there is no moon-phase, moon-separation, or
