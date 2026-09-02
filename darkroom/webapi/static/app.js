@@ -134,13 +134,26 @@ function gaugeHTML(h, withWord = true, rawH, showNumbers = true, panels = 0) {
 /* ── mosaic panels (M1) ────────────────────────
    A mosaic's hours are panel-time, not depth: 8.4h spread over four panels is
    a 2.1h-deep mosaic, and each panel is stacked and finished on its own (WBPP
-   merges panels at final integration and fails, so one tree per panel). So
-   every number that answers "does this need another night?" — the depth gauge
-   on the overview, the per-rig gauge on the detail page — divides by the panel
-   count, and the panel breakdown shows which panels are actually short.
+   merges panels at final integration and fails, so one tree per panel).
+
+   **All of this is scoped to a rig group, never to a target.** Two reasons,
+   both learned from real rows:
+
+   - Panels only mean something within one mosaic run. A later mosaic of the
+     same object is very likely a different grid or framing, so its "1-1" is
+     not this one's "1-1"; summed across runs the numbers answer nothing.
+   - A target can hold a deep single pointing *and* a shallow mosaic. M 8 has
+     11.7h across six single-pointing nights beside an 8-panel mosaic worth
+     0.7h — there is no honest per-panel figure for that target, in either
+     direction. Whole-target panel maths first read it as 1.5h per panel, then
+     (after the numerator was fixed) as 0.1h of target depth. Both wrong.
+
+   So the target header and the overview gauge show plain totals, and the
+   per-panel gauge and breakdown live inside the rig group, where a single
+   mosaic actually sits and where its panels do accumulate across nights.
 
    Sessions with no panel are ordinary single-pointing sessions and the
-   overwhelming majority; for them panelCount is 0 and nothing below changes
+   overwhelming majority; for them panelCount is 0 and nothing here changes
    what the page used to show. */
 const cmpPanel = (a, b) => {
   const [ar, ac] = a.split("-").map(Number), [br, bc] = b.split("-").map(Number);
@@ -151,17 +164,18 @@ const panelCount = nights => panelsOf(nights).length;
 const panelledOnly = nights => nights.filter(n => n.panel);
 const sumH  = ns => ns.reduce((a, n) => a + n.h, 0);
 const sumWH = ns => ns.reduce((a, n) => a + (n.wh ?? n.h), 0);
-/* Divide by the panel count only when there is more than one panel — a single
-   panel is just a session that happens to carry a label.
+/* Per-panel depth, for ONE RIG GROUP. Never for a whole target — see
+   panelBlockHTML for why panels are not comparable across mosaic runs, and
+   note that a target can hold a deep single pointing beside a shallow mosaic
+   (M 8: 11.7h across six nights, plus an 8-panel mosaic at 0.7h). No single
+   per-panel number is true of such a target, so the target header and the
+   overview gauge do not compute one.
 
-   The numerator counts ONLY panelled sessions. An earlier revision let a
-   mosaic target's unpanelled hours ride along, on the assumption they were
-   "the odd pre-M1 row"; M 8 disproved that — six single-pointing nights
-   (11.7h) sit beside an 8-panel mosaic (0.7h), and folding them in read as
-   **1.5h per panel against an actual 0.1h**. A 15x overstatement, and in the
-   direction that says "deep enough" about a mosaic that has had one night.
-   Unpanelled hours are not panel-time; the breakdown gives them their own
-   `unpanelled` cell, which is where they belong. */
+   Divide by the panel count only when there is more than one panel — a single
+   panel is just a session that happens to carry a label. The numerator counts
+   ONLY panelled sessions: letting a group's unpanelled hours ride along read
+   as 1.5h per panel against an actual 0.1h on M 8. Unpanelled hours are not
+   panel-time; the breakdown gives them their own `unpanelled` cell. */
 const perPanel = (nights, np, sum = sumH) =>
   np > 1 ? sum(panelledOnly(nights)) / np : sum(nights);
 
@@ -275,11 +289,10 @@ function renderOverview() {
       const counts = STATES.filter(s => t.states[s])
         .map(s => `<span title="${t.states[s]} ${STATE_LABEL[s]}">${miniMark(s)}${t.states[s]}</span>`).join("");
       const open = backlogH(t);
-      const np = t.n_panels || 0;
       return `<a class="row cols" href="/targets/${encodeURIComponent(t.target)}">
         ${nameCell(t)}
         ${stripHTML(t.hours, maxH)}
-        ${gaugeHTML(perPanel(backlogNights(t), np, sumWH), false, perPanel(backlogNights(t), np, sumH), true, np)}
+        ${gaugeHTML(backlogWH(t), false, backlogH(t), true)}
         <span class="hnum num"><b>${t.total_h.toFixed(1)}</b>h</span>
         <span class="opennum num ${open > 0 ? "some" : ""}">${open > 0 ? open.toFixed(1) + "h" : "—"}</span>
         <span class="marks">${counts}</span>
@@ -358,21 +371,28 @@ const NIGHT_SORTS = {
                                           : cmpPanel(a.panel, b.panel),
 };
 
-/* Per-panel breakdown for a mosaic target: one cell per panel, deepest-scaled
-   gauge, so the panel that still needs a night is visible at a glance rather
-   than buried inside a total. Panels accumulate independently across nights,
-   and each is stacked on its own, so this — not the target total — is the
-   thing to read before deciding where to point next.
+/* Per-panel breakdown for ONE RIG GROUP, not for the target.
+
+   Panels are only comparable within a single mosaic run. A later mosaic of the
+   same object is very likely a different grid size or framing, so its "1-1" is
+   not this one's "1-1" and summing them answers nothing. The rig group is the
+   closest thing the catalog has to one run — same optics, same camera — and it
+   is where panels do accumulate correctly: IC 4604's four panels are built up
+   across 2025-04-26 and 2025-05-24 under one FRA400 · Canon6D group, and the
+   cumulative per-panel hours are exactly what decides where to point next.
+
+   One cell per panel, deepest-scaled gauge, so the panel that still needs a
+   night is visible at a glance rather than buried inside a total.
 
    `short` marks a panel under three-quarters of the deepest one: the mosaic is
-   only as finished as its thinnest tile. Any unpanelled sessions under the same
-   target (a pre-M1 row, or a session genuinely shot as a single pointing) get
+   only as finished as its thinnest tile. Any unpanelled sessions in the same
+   group (a pre-M1 row, or a session genuinely shot as a single pointing) get
    their own cell rather than being folded into a panel's figure. */
-function panelBlockHTML(t) {
-  const labels = panelsOf(t.nights);
+function panelBlockHTML(nights) {
+  const labels = panelsOf(nights);
   if (labels.length < 2) return "";
   const hOf = sumH, whOf = sumWH;
-  const bucket = p => t.nights.filter(n => (n.panel || null) === p);
+  const bucket = p => nights.filter(n => (n.panel || null) === p);
   const deepest = Math.max(...labels.map(p => whOf(bucket(p))));
   const cell = (label, nights, cls = "", tip = "") => {
     const wh = whOf(nights), h = hOf(nights);
@@ -391,12 +411,17 @@ function panelBlockHTML(t) {
   }).join("");
   const loose = bucket(null);
   /* Panelled sessions only — see perPanel. The loose cell reports the rest. */
-  const total = hOf(panelledOnly(t.nights));
+  const pan = panelledOnly(nights);
+  const total = hOf(pan), totalW = whOf(pan);
+  /* Weighted-first with the raw figure alongside, exactly as the cells and the
+     rig header do it — the sub-line reporting raw while the cells reported
+     home-equivalent made "2.0h per panel" sit above cells reading 11.5h. */
+  const wr = (w, r) => `${w.toFixed(1)}h${Math.abs(w - r) > 0.05 ? ` <span class="rawh">(${r.toFixed(1)}h raw)</span>` : ""}`;
   return `<div class="panelblock">
     <div class="pblockhead">
       <span class="ptitle">Panels</span>
-      <span class="sub">${labels.length} panels · ${(total / labels.length).toFixed(1)}h per panel
-        · ${total.toFixed(1)}h of panel-time in total</span>
+      <span class="sub">${labels.length} panels · ${wr(totalW / labels.length, total / labels.length)} per panel
+        · ${wr(totalW, total)} of panel-time in total</span>
     </div>
     <div class="pgrid">${cells}${loose.length ? cell("unpanelled", loose, "loose",
       "<b>no panel label</b> · a single pointing under this target, or a row ingested before panels existed") : ""}</div>
@@ -419,10 +444,10 @@ function renderDetail() {
        for the nights under it. */
     const gnp = panelCount(nights);
     const rows = sorted.map(n => `
-      <div class="row cols nightcols${np > 1 ? " panelled" : ""} night">
+      <div class="row cols nightcols${gnp > 1 ? " panelled" : ""} night">
         <button class="markbtn" data-sid="${n.sid}" title="${STATE_LABEL[n.state]} — click to cycle">${markSVG(n.state, n.sid)}</button>
         <span class="date"><a href="/sessions/${encodeURIComponent(n.sid)}">${n.date}</a></span>
-        ${np > 1 ? `<span class="pchip${n.panel ? "" : " none"}">${n.panel ? "P" + n.panel : "—"}</span>` : ""}
+        ${gnp > 1 ? `<span class="pchip${n.panel ? "" : " none"}">${n.panel ? "P" + n.panel : "—"}</span>` : ""}
         <span class="fchip"><i style="background:${fcolor(n.filter || "None")}"></i>${fname(n.filter || "None")}</span>
         <span class="exp">${n.frames || "?"} × ${n.exp ? n.exp.toFixed(0) + "s" : "?"}${n.gain ? " · gain" + n.gain : ""}</span>
         <span class="statelabel ${n.state}">${STATE_LABEL[n.state]}</span>
@@ -442,8 +467,9 @@ function renderDetail() {
         <span class="n">${nights.length} sessions${gnp > 1 ? ` · ${gnp} panels` : ""}</span>
       </summary>
       <div class="rigbody">
-        <div class="cols nightcols${np > 1 ? " panelled" : ""} headrow">
-          <span class="colhead"></span>${gs("date", "Night")}${np > 1 ? gs("panel", "Panel") : ""}<span class="colhead">Filter</span>
+        ${panelBlockHTML(nights)}
+        <div class="cols nightcols${gnp > 1 ? " panelled" : ""} headrow">
+          <span class="colhead"></span>${gs("date", "Night")}${gnp > 1 ? gs("panel", "Panel") : ""}<span class="colhead">Filter</span>
           <span class="colhead">Exposure</span>${gs("state", "State")}<span class="colhead">Site</span><span class="colhead">Cal</span><span class="colhead">Guiding</span>${gs("h", "Hours", "num")}
         </div>
         ${rows}
@@ -455,16 +481,13 @@ function renderDetail() {
     <a class="backlink" href="/">← all targets</a>
     <div class="dethead">
       ${nameCell(t)}
-      <span class="sub">${t.n} sessions · <b style="color:var(--ink)">${t.total_h.toFixed(1)}h</b>${
-        np > 1 ? ` · <b style="color:var(--ink)">${perPanel(t.nights, np).toFixed(1)}h</b> per panel across ${np} panels` : ""
-      } · last acquired ${t.last}</span>
+      <span class="sub">${t.n} sessions · <b style="color:var(--ink)">${t.total_h.toFixed(1)}h</b> · last acquired ${t.last}</span>
       ${stripHTML(t.hours, null)}
     </div>
-    ${panelBlockHTML(t)}
     ${groups}
     <p class="footnote">grease-pencil marks: <span class="lamp">○</span> processed · half-circle in progress · strike skipped · dotted = open.
       click a mark to cycle state — updates the catalog.
-      gauge = integration banked per rig: ${zoneLadder()}, weighted by site sky quality${np > 1 ? ", and per panel — a mosaic is only as deep as each tile, which is stacked and finished on its own" : ""}.
+      gauge = integration banked per rig: ${zoneLadder()}, weighted by site sky quality${np > 1 ? ", and per panel on a rig that shot a mosaic — a mosaic is only as deep as each tile, which is stacked and finished on its own" : ""}.
       Hours are home-equivalent — what the integration would have been worth from home — with the raw figure alongside when the site's sky quality moves it.
       Site column: named observing site the session's coordinates matched, if any; a ×badge shows its SQM weight relative to home when it isn't 1×.
       Cal: what <b>wbpp</b> would find for Darks / Flats / FlatDarks — lit = matched, dim = missing, faded = that camera doesn't use them, dashed = can't tell. Hover for the matched set. Catalog only: this server can't see the archive.

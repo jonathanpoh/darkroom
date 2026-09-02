@@ -2073,7 +2073,7 @@ def _per_panel(nights: list[dict]) -> dict:
 
 
 def test_panel_time_excludes_unpanelled_sessions():
-    """M 8's shape: an 8-panel mosaic beside six single-pointing nights.
+    """A group holding a mosaic beside single-pointing nights (M 8's shape).
 
     Folding the unpanelled 11.7h into the numerator read as 1.5h per panel
     against an actual 0.083h — a 15x overstatement, and in the direction that
@@ -2098,3 +2098,33 @@ def test_per_panel_is_unchanged_for_a_non_mosaic_target():
 
     single = [{"panel": "1-1", "h": 3.0, "wh": 3.0}, {"panel": None, "h": 2.0, "wh": 2.0}]
     assert _per_panel(single)["per"] == pytest.approx(5.0)
+
+
+def test_panel_figures_are_scoped_to_a_rig_group_not_the_target():
+    """Panels are only comparable within one mosaic run.
+
+    A later mosaic of the same object is likely a different grid or framing, so
+    its "1-1" is not the earlier one's; and a target can hold a deep single
+    pointing beside a shallow mosaic (M 8: 11.7h across six nights, plus an
+    8-panel mosaic worth 0.7h), for which no per-panel figure is true. So the
+    target header and the overview gauge show plain totals, and the per-panel
+    gauge and breakdown live inside the rig group — which is also what makes
+    IC 4604's panels accumulate correctly across its two nights.
+    """
+    from pathlib import Path as _Path
+
+    js = (_Path(__file__).resolve().parents[1] / "darkroom/webapi/static/app.js").read_text()
+
+    # the breakdown takes a nights array (a rig group), never the target object
+    assert "function panelBlockHTML(nights) {" in js
+    assert "panelBlockHTML(t)" not in js
+    assert "${panelBlockHTML(nights)}" in js
+
+    # the target header states a plain total, with no per-panel arithmetic
+    header = re.search(r'<span class="sub">\$\{t\.n\} sessions.*?</span>', js).group(0)
+    assert "perPanel" not in header
+    assert "panel" not in header
+
+    # the overview depth gauge no longer divides by a target-wide panel count
+    overview = re.search(r"const rows = visible[\s\S]*?\}\)\.join\(\"\"\);", js).group(0)
+    assert "perPanel" not in overview

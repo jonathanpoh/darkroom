@@ -2631,7 +2631,27 @@ site lat/lon, angular separation.
 > pre-summed number, so the filter cannot be forgotten at a call site again.
 > Guarded by a test that executes the real `app.js` helpers under node
 > (skipped where node is absent) — verified to fail against the old numerator.
-> Suite 1288 → 1290.
+>
+> **Then the rollup moved off the target entirely** (Jonathan, same day, and
+> the better call): mosaics are the exception, and **panels are only
+> comparable within one mosaic run**. A later mosaic of the same object is
+> likely a different grid size or framing, so its `1-1` is not the earlier
+> one's and summing them answers nothing. Worse, the fix above exposed the
+> other half: a target can hold a *deep single pointing beside a shallow
+> mosaic*, and then no per-panel number is true of it in either direction —
+> M 8's overview gauge went from 1.5h (wrong) to 0.1h (also wrong) for a target
+> carrying 11.7h of real single-pointing depth.
+>
+> So the target header and the overview gauge are **plain totals again**, and
+> the per-panel gauge, breakdown and Panel column live **inside the rig
+> group** — the closest thing the catalog has to one mosaic run, and where
+> panels genuinely accumulate: IC 4604's four panels build up across
+> 2025-04-26 and 2025-05-24 under one `FRA400 · Canon6D` group, reading
+> `4 panels · 13.7h (2.0h raw) per panel`. A non-mosaic rig shows no panel
+> anything. The breakdown's sub-line also became weighted-first, matching the
+> cells and the rig header instead of quoting raw hours above them.
+> Verified by rendering the live M 8 and IC 4604 rows headless in Edge.
+> Suite 1288 → 1291.
 
 Queued 2026-07-30, out of Jonathan's question: the U2 cleanup queue flags
 `IC 4604_1-1` … `IC 4604_2-2` as a probable 4-panel mosaic — so how should a
