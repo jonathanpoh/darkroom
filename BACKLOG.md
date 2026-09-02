@@ -377,9 +377,22 @@ per-session values) — different code, worth its own entry.
   point. Test: a night whose first frame has an outlier SITELAT yields the
   modal value from both scan paths.
 
-### B17. `ingest commit` computes `total_integration_sec` as `frame_count × exposure_sec`; the archive scan sums per frame
+### B17. `ingest commit` computes `total_integration_sec` as `frame_count × exposure_sec`; the archive scan sums per frame — ✅ DONE 2026-09-02
 > Filed 2026-09-01 from the `/simplify` altitude pass. Decision (Jonathan,
 > 2026-09-01): match the archive scan — the per-frame sum is the truth.
+>
+> **✅ DONE 2026-09-02.** `cataloger.total_integration_sec(exposures)` is the
+> one summing helper; the archive scan (`analyze_sessions`) and the scan-side
+> `Session.total_integration_sec` both call it, `build_session_entry` writes
+> the sum into the manifest, and `cmd_commit` reads it via
+> `ingest._entry_integration_sec` — which falls back to the old product for a
+> manifest written before the field existed, so a pre-B17 manifest still
+> commits. Tests: a 10 × 120 s + 5 × 60 s night scans as 1500 s and commits as
+> 1500 s (`tests/test_scanner.py`, `tests/test_ingest.py`); suite 1284 → 1288.
+>
+> Not backfilled: the 12 live rows that already disagree stay as they are
+> until the next `rescan-archive` proposes them as `safe`-tier updates — which
+> it now can, without ingest flipping them back.
 
 - **Where:** `ingest.py:677` (`int(entry["frame_count"] * entry["exposure_sec"])`)
   vs `cataloger.py:991` (`int(sum(f["exposure"] for f in frames))`).
@@ -2909,7 +2922,23 @@ not `Stars`), but applying it commits to the "ordinary second session" reading,
 so it's worth deciding first rather than by default.
 
 ---
-### M3. `wbpp` must emit one tree per mosaic panel
+### M3. `wbpp` must emit one tree per mosaic panel — ✅ DONE 2026-08-31
+
+> **✅ DONE 2026-08-31** (`745435e` names helpers, `29f552e`/`61cb026` prep,
+> `788f07d`/`144a65c` finish, `17d8cf8` mixed-target guard, `09acdf7` picker
+> "already prepped?" fix; docs `59817b5`, `7277548`, `7441443`). Shipped:
+> `names.wbpp_panel_dir`/`parse_wbpp_panel_dir`/`panel_sort_key`/
+> `processed_panel_dir`, one `PANEL_<n>/` tree per panel with the NULL-panel
+> path byte-identical, the two-stage finish (per-panel → `in_progress`,
+> hand-merged target-level `Output/processed/` → `processed`), and
+> `prep._confirm_mixed_panels`. Tests in `tests/test_wbpp.py`,
+> `tests/test_wbpp_finish.py`, `tests/test_names.py`.
+>
+> **One assumption still unconfirmed:** finish reads the hand-merged mosaic
+> from target-level `~/WBPP/<slug>/Output/processed/` — the proposal in
+> "Open question for Jonathan" below, implemented as specified but never
+> confirmed against where PixInsight actually saves the merge. If it lands
+> elsewhere, finish silently finds nothing to file.
 
 Filed 2026-08-31 from Jonathan prepping the (now correctly catalogued) IC 4604
 mosaic; **design settled the hard way after a full WBPP run** — see the
