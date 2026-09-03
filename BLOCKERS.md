@@ -37,6 +37,13 @@ is drained. What is left are judgement calls about your own data.
 5. **Rewrite `SITELAT`/`SITELONG` on 85 frames** (**#15**) — low priority. The
    catalog is right; this only silences a `rescan-archive` warning that will
    otherwise recur on every run forever.
+6. **Is `NGC6960_20250727` really Sh2-103 data?** (**#16**, added 2026-09-03) —
+   30 frames all named `Sh2-103`, filed under `SH2-103/`, but the row says
+   NGC 6960. Worth settling before the next Veil session, since both targets'
+   integration totals are wrong until it is.
+
+> Since that read: **250 sessions** (2026-09-03) — six committed off the
+> `autorun.yaml` manifest, five Sh2-101 nights plus Sun 2026-08-12.
 
 **Closed since the last pass, no action needed:** the `/rescan` queue (worked to
 zero — 53 proposals lifetime), the trap create/delete pair (**#2b**), the
@@ -297,6 +304,44 @@ session is `L-Pro`, and flat matching keys on OTA + camera + filter. The folder
 header, so that value is recorded nowhere. **Only you know whether those flats
 were shot through the L-Pro.** If they were, rename the folder to
 `Canon100mm_Canon6D_L-Pro` and re-run `scan-calibration`.
+
+---
+
+### 16. Is `NGC6960_20250727` actually Sh2-103 data? — decide before the next Veil session
+
+Found 2026-09-03 while counting `SH2-` paths for **B19**. One session row's
+target and its frames disagree:
+
+```
+row:     NGC6960_20250727_FRA400_Canon6D_L-Extreme
+path:    01_Deep Sky Objects/SH2-103/2025-07-28_FRA400_Canon6D_L-Extreme
+frames:  30 × Light_Sh2-103_180.0s_Bin1_ISO1600_20250728-*.fit
+```
+
+Every one of the 30 files is named `Sh2-103`, and the folder sits under the
+`SH2-103` target directory — but the catalog calls the session NGC 6960. There
+is **no** `Sh2-103_20250727` row, and the surrounding nights (`20250726`,
+`20250803`, `20250809`) are all Sh2-103, so this looks like a night in the
+middle of an Sh2-103 run that got the wrong target.
+
+Two readings, and only you can pick:
+
+- **The row is mislabelled** and it is Sh2-103 data — most likely, on the
+  filenames. Fix by editing the target in the web UI (an identity edit, which
+  recomputes `session_id` and `lights_path` and carries the guiding row across
+  — never delete + create, see **#2b**).
+- **A real NGC 6960 session got pointed at the wrong folder** — in which case
+  its actual frames are somewhere else, or were never archived, and the fix is
+  a `lights_path` recompute rather than a rename.
+
+**This will not surface on its own.** `rescan-archive` derives the target from
+the folder and header and would propose the correction, but the row has never
+been re-scanned since, and B19's case-insensitivity means the `SH2-103` path
+still resolves, so nothing errors. It sits there looking fine.
+
+Worth doing before the next Veil session: **NGC 6960 is next up to shoot**, and
+until this is settled the integration totals for both NGC 6960 and Sh2-103 are
+wrong — one is 30 frames / 1.5 h too deep, the other that much too shallow.
 
 ---
 

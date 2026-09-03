@@ -415,6 +415,85 @@ per-session values) — different code, worth its own entry.
 
 ---
 
+### B18. `ingest scan` stores the raw ASIAir target, so an un-normalised name reports a false `new`
+
+Filed 2026-09-03, out of reviewing the 29-entry `autorun.yaml` manifest.
+
+`scanner._scan_lights` takes the target straight off the ASIAir folder name and
+puts it in the `Session` verbatim (`scanner.py:154`, `target=base_target`) —
+note the line directly below it *does* call `_normalize_camera`, so this is an
+omission rather than a policy. Everything downstream then derives from the raw
+string: `make_session_id`, `session_dest_rel`, every file `dst`, and the
+new/existing/topup verdict.
+
+That last one is the bug. `ingest.plan_session_files` decides the status with an
+exact dict lookup (`catalog_sessions.get(session_id)`, `ingest.py:313`), so a
+case-differing id simply misses:
+
+```
+manifest: SH2-101_20260828_FRA400_ZWOASI585MCPro_L-Extreme  -> status: new
+catalog:  Sh2-101_20260828_FRA400_ZWOASI585MCPro_L-Extreme  -> id 238, 73 frames
+```
+
+Six entries in one manifest, every one reported `new`. Re-deriving them through
+`ingest_review.recompute_session_entry` after normalising the target shows what
+they actually are — five genuinely new, and one that is not:
+
+| Session | Manifest | Actual | To copy |
+|---|---|---|---|
+| Sh2-101 2026-08-28 L-Extreme | new | **topup** | 1 of 74 |
+| Sh2-101 2026-08-29 L-Extreme | new | new | 75 |
+| Sh2-101 2026-08-30 L-Synergy | new | new | 90 |
+| Sh2-101 2026-08-31 L-Synergy | new | new | 79 |
+| Sh2-101 2026-09-01 L-Synergy | new | new | 68 |
+| Sh2-101 2026-09-02 L-Synergy | new | new | 66 |
+
+Committing the first one unedited would have written a **second session row**
+for a night already in the catalog — 74 frames next to the existing 73 — and
+forked the target string, so `Sh2-101` (2 rows) and `SH2-101` (6 rows) would
+show as two separate objects with the integration split between them. The
+folder path is the one thing that survives, and only by luck: the archive is
+case-insensitive (see B19), so `SH2-101/` and `Sh2-101/` are the same directory.
+
+**The archive-side scan already gets this right.** `cataloger.analyze_sessions`
+normalises (`cataloger.py:1003`, `"target": _normalize_target(base_target)`), and
+so does `rescan` (`rescan.py:169`). Only the ingest path doesn't — the same
+scan-vs-ingest asymmetry as B16, one field over. A consequence worth stating:
+because rescan normalises both sides, a committed `SH2-101` row would *not*
+surface as drift there. Nothing downstream would ever report it.
+
+Today the only thing standing between this and a duplicate row is the U3 review
+warning (`ingest_review.entry_issues`, "target 'SH2-101' normalizes to
+'Sh2-101'"), which is:
+
+- **advisory** — `suggested_action` lands the cursor on `EDIT_TARGET`, but
+  "accept anyway" is one keystroke away and reads as harmless, since the message
+  describes a naming nicety and says nothing about the duplicate row it causes;
+- **unreachable from the CCC postflight**, which is `scan --manifest` on a
+  machine with no TTY. `commit` never prompts. A manifest that skips review
+  therefore commits the raw name silently.
+
+**Do:** normalise at scan time. `_scan_lights` should build the `Session` with
+`_normalize_target(base_target)` — after `parse_panel`, so `"M 8_1-1"` still
+splits — which makes the manifest's `session_id`, `lights_rel_path` and file
+`dst`s canonical from the moment they are written, and the status verdict
+correct without any human in the loop. Ingest and the archive scan then agree,
+which is the actual invariant.
+
+Keep the review line, demoted to informational ("target 'SH2-101' recorded as
+'Sh2-101'") — it is still worth seeing that the ASIAir name and the catalog name
+differ, and `suggested_action` should no longer default to `EDIT_TARGET` for it.
+
+Do **not** fix this by making the status lookup normalisation-aware instead.
+That repairs the verdict while still writing `SH2-101` into `target` and the
+`session_id`, which is the worse half of the problem.
+
+Test: a scan of a `SH2-101/` ASIAir folder against a catalog holding
+`Sh2-101_...` emits `target: Sh2-101`, the canonical `session_id`, and
+`status: topup` — not `new`.
+
+---
+
 ## P2 — Minor / docs
 
 ### B6. Stale `04_Deep Sky Objects` in help/docstrings — ✅ FIXED
@@ -535,6 +614,67 @@ new side table; prefer the numeric `sessions.id` as the foreign key.
 > folder was redundant rather than something to commit. `.gitignore` now
 > covers `tmp/` and manifest filenames (`ingest.yaml`, `manifest.yaml`,
 > `*.manifest.yaml`) so future working artifacts don't land in the tree again.
+
+---
+
+### B19. Four archive folders are still spelled `SH2-*`, and the case-insensitive volume hides it
+
+Filed 2026-09-03, alongside B18. Sharpless canonicalised to `Sh2-<n>` in
+79e94d9 (`names._normalize_target`, pinned by `tests/test_names.py:23-31`), and
+the live catalog is fully converted — all 19 Sharpless rows hold `Sh2-`. The
+archive was never renamed to match. Of 46 target folders under
+`01_Deep Sky Objects/`, exactly four disagree with `_normalize_target`:
+
+```
+SH2-101  ->  Sh2-101
+SH2-103  ->  Sh2-103
+SH2-220  ->  Sh2-220
+SH2-273  ->  Sh2-273
+```
+
+Ten session rows still carry the old spelling in `lights_path`
+(`01_Deep Sky Objects/SH2-103/...`), while ten carry the new one — including
+every row written since, which `session_dest_rel` builds from the normalised
+target.
+
+**Nothing is broken, and that is exactly why this is worth filing.** The archive
+is APFS on the Thunderbolt SSD, so `SH2-103/` and `Sh2-103/` resolve to the same
+directory: both spellings of `lights_path` open the same frames, `wbpp` symlinks
+work, `finish` writes to the right place. The divergence is invisible until
+something compares the strings — and B18 is the first thing that did, where it
+turned a `topup` into a false `new`. A future move of this archive onto a
+case-sensitive filesystem (or any comparison of `lights_path` against a real
+directory listing) turns ten rows into dangling paths at once.
+
+**Do:** rename the four folders on disk, then recompute the ten `lights_path`
+values. This is a rename-ledger job — `pending_renames` + `darkroom catalog
+apply-renames`, run **on the Mac**, since the LXC has no archive mount. Two
+wrinkles specific to case-only renames on a case-insensitive volume:
+
+- `mv SH2-103 Sh2-103` is a no-op or an error depending on the tool, because
+  source and destination are the same inode. It needs the two-step
+  (`mv SH2-103 Sh2-103.tmp && mv Sh2-103.tmp Sh2-103`), and `apply-renames`
+  almost certainly does not do that today — check before running it, or do the
+  four by hand and recompute the rows through the UI.
+- The ledger has already met this once. BLOCKERS records "the two `Sh2-101`
+  case-only conflicts" being cleared on 2026-09-02 by *deleting the ledger
+  rows*, not by applying them — which is why `SH2-101/` is still on disk. That
+  was the right call for draining the queue, but it left this behind.
+
+Low priority: correctness today rests on a filesystem property rather than on
+the data being right, which is the kind of thing that stays fine until the day
+it isn't.
+
+> **Spotted alongside, and unrelated — needs a decision.**
+> `NGC6960_20250727_FRA400_Canon6D_L-Extreme` has
+> `lights_path = 01_Deep Sky Objects/SH2-103/2025-07-28_FRA400_Canon6D_L-Extreme`,
+> and that folder holds **30 frames all named `Light_Sh2-103_...`**. There is no
+> `Sh2-103_20250727` row. So either the row's target is wrong (it is Sh2-103
+> data), or a real NGC 6960 session got pointed at the wrong folder. Note this
+> will *not* show up in `rescan`: it reads the target from the folder/header and
+> would propose the fix, but the row has never been re-scanned. Resolve before
+> the next NGC 6960 session lands, or the integration totals for both objects
+> are wrong.
 
 ---
 
