@@ -2461,6 +2461,100 @@ is probably the answer, not an exception to the rule.
 
 ---
 
+### F12. ASIAir `.avi` videos (solar / lunar / planetary) have no ingest path
+
+Filed 2026-09-03. ASIAir writes lucky-imaging video captures — solar, lunar,
+planetary — as `.avi` beside the FITS trees, and `darkroom ingest` cannot see
+them: `parse.fits_files` only ever yields `.fit`/`.fits`, so the entire
+`ASIAIR/Video/` tree is invisible to every scanner. CCC copies it to the Mac on
+SD mount and it then sits there forever, unarchived and unnamed.
+
+**What is actually on disk.** Measured in
+`~/02_Astrophotography/01_ASIAir/ASIAIR/Video/` on 2026-09-03: 8 captures, each
+a **pair** of files, ~450 MB per video.
+
+```
+2026-08-05-175021-Sun-Bin1 31.5C.avi
+2026-08-05-175021-Sun-Bin1 31.5C.avi.txt
+2026-08-28-051159-Moon-Bin1 -10.0C.avi
+2026-08-28-051159-Moon-Bin1 -10.0C.avi.txt
+```
+
+Filename: `YYYY-MM-DD-HHMMSS-<Target>-Bin<N> <Temp>C.avi`. Note the **space**
+before the temperature and the negative sign on cooled captures — quote paths,
+and do not assume the existing session-folder regexes will parse this.
+
+The sidecar is INI-ish, keyed to the video purely by filename:
+
+```
+[ZWO ASI585MC Pro]
+Bin = 1
+Capture Area Size = 1920 * 1080
+Colour Format = RAW8
+Exposure = 0.365 Sec
+Flip = None
+Gain = 190
+StartX = 960
+StartY = 540
+Temperature = -10 C
+Bayer = RG
+Debayer Type = RGGB
+White Balance (B) = 61
+White Balance (R) = 69
+Duration=60 Sec
+```
+
+(`Duration` has no spaces around its `=` while every other key does — parse
+leniently.)
+
+**This is not a catalog problem.** B9 settled it: non-DSO capture lives in its
+own top-level archive folder and stays **out of `astro_catalog.db`**. Videos are
+solar/lunar/planetary by definition, so F12 is a *file-movement* feature —
+copy the pairs into the archive under a canonical name — with no session rows,
+no calibration matching, and no WBPP involvement. Resist the pull to reuse the
+session model here; the processing flow (AutoStakkert/Registax on a video, not
+WBPP on subs) shares nothing with it.
+
+**What the metadata does and does not give us.**
+
+- **Camera** — the sidecar's section header, `ZWO ASI585MC Pro`. Needs mapping
+  to the canonical `ZWOASI585MCPro`; there is no `INSTRUME` header to reuse.
+- **Gain, exposure, temperature, binning, duration** — all present, and the
+  temperature is in the filename too.
+- **OTA — absent entirely.** No `FOCALLEN`, so `parse_ota` cannot run, and the
+  existing archive name proves focal length alone would not be enough anyway:
+  `07_Sun/2026-07-08_FRA400-07x_ZWOASI585MCPro` encodes a 0.7x reducer that
+  nothing in the file can derive. OTA has to be asked for interactively (the
+  U3 `ingest review` pattern) or configured; it cannot be inferred.
+- **Target** — the filename's `Sun`/`Moon` label is enough to route to a
+  top-level folder, but it is ASIAir-typed free text, with the same
+  trust problem as the guide logs' target names.
+
+**Open decisions, before any code.**
+
+1. **Destination layout.** `07_Sun` uses `<date>_<OTA>_<Camera>/Lights/`;
+   `03_Moon` is legacy free-form dated folders. Planetary has **no** top-level
+   folder at all yet. Pick one convention (and a `08_Planets`, or fold planets
+   into an existing one) first — this is the same decision B9 made for stills,
+   and it should come out the same way.
+2. **Is the filename time local?** The `2026-08-05-175021` capture has a file
+   mtime an hour earlier. Confirm the ASIAir's timezone handling before using
+   the timestamp for anything, exactly as `guidelog.LOCAL_TZ` had to be pinned
+   down for F4.
+3. **After-midnight events.** `2026-08-28-051159-Moon` is the lunar eclipse —
+   by the session-date rule it belongs to the night of **2026-08-27**. Same
+   note as F11: correct by rule, surprising for a named event.
+4. **Does the `.avi` stay the archived form?** 450 MB per 23–60 s capture; the
+   long-term keep may be the video, the stacked output, or both. Affects
+   nothing about the ingest path, but decide before the archive fills.
+
+**Non-negotiable once built:** the `.avi` and its `.avi.txt` move as a pair and
+are never renamed independently — the sidecar has no internal reference to its
+video other than its own filename. Safest is to keep the ASIAir name verbatim
+inside a canonically-named folder, rather than renaming the files at all.
+
+---
+
 ## S — Observation sites & conditions
 
 ### S1. Observation-site tracking + SQM-weighted depth — ✅ DONE
