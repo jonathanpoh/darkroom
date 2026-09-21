@@ -2693,6 +2693,92 @@ are never renamed independently — the sidecar has no internal reference to its
 video other than its own filename. Safest is to keep the ASIAir name verbatim
 inside a canonically-named folder, rather than renaming the files at all.
 
+### F13. AstroBin acquisition CSV from the WBPP log
+
+Filed 2026-09-04. Publishing an image to AstroBin means re-typing the
+acquisition table by hand, and the numbers that go in it are *not* the numbers
+darkroom already knows. The catalog stores what was **shot**; AstroBin wants
+what was **stacked** — and WBPP throws frames away at two separate stages. The
+run's log is the only record of which ones survived, and `finish` already
+archives it (`finish.py:277` copies `logs/` alongside `master/` and
+`processed/`; 120 logs are in the archive today, 43 of them containing a light
+integration).
+
+**Goal:** `darkroom astrobin <target> [--date YYYY-MM-DD]` → a CSV on stdout
+(or `-o`), one row per (date, filter, exposure, gain), with `number` = frames
+that actually reached the master light.
+
+#### The count is not one number — it is three
+
+Measured on `NGC 7380/_Processed/2025-09-13/logs/20250913180111.log`:
+
+| Number | Where it appears | Meaning |
+|---:|---|---|
+| **153** | `Group of 153 Light frames (148 active)` | every frame WBPP was handed |
+| **148** | the `(N active)` in the same line | survived **BAD FRAMES REJECTION** (5 named in `[Frames rejection] … \| rejected` lines, `0.046 0.050`-style score vs threshold) |
+| **147** | `Integration of 147 images:` | survived again — `** Warning: Excluded 1 image(s) with weight 0.050000001 - 147 images available for integration.` |
+
+`number` for AstroBin is **147**. Taking the group header (153) overstates
+integration time by 30 minutes here; taking `(N active)` (148) still overstates
+it by one sub. Both are the obvious wrong answers, and neither is flagged.
+
+Note the drizzle pass then reports `Group of 153 Light frames (147 active)` —
+the same run's *own* header changes number between stages. Do not key on the
+header.
+
+#### Where to read each field
+
+- **Per-frame truth = the `Pixel rejection counts:` list** in the `IMAGE
+  INTEGRATION` section — one path + numbered line per frame that was integrated,
+  and its length is exactly the 147. The `II.images = [` block above it is
+  **not** authoritative: all 148 of its rows say `[true, …]` even though 147
+  integrated. Parse the rejection-count list; use `II.images` only to
+  cross-check.
+- **Date / exposure / gain / temperature** — from the frame *basenames* in that
+  list (`Light_NGC 7380_180.0s_Bin1_585MC_gain252_20250828-041618_-10.0C_0001_c_d_r.xisf`),
+  via `parse.py`, then `cataloger.compute_imaging_night` for the row's `date`.
+  **A single stack routinely mixes parameters** — this one integrates both
+  `gain252` and `gain200` frames — so one integration produces *several* CSV
+  rows, split by night and by (exposure, gain). This is F11's problem seen from
+  the export side; the split is on the frames, not on the session row.
+- **Filter / binning** — the `Filter   :` and `BINNING  :` lines of the section
+  header (`NoFilter` here → AstroBin wants the field empty, not the literal).
+- **darks / flats / flatDarks / bias** — the `Smart report result` block at the
+  end of the log: `MASTER DARK GENERATION` / `MASTER FLAT GENERATION` sections,
+  each with its own `Group of 20 … frames (20 active)`. These are **per
+  `NIGHT` keyword** (three master flats here, `NIGHT-1/2/3`), while AstroBin
+  wants one count per row — decide the rule (per-night attribution vs. the
+  count of the master that calibrated that night's frames) before building.
+- **sensorCooling** — the `-10.0C` in the filename.
+- **bortle / meanSqm** — from the catalog's site rows (S1/S2), not the log.
+
+#### Gotchas
+
+- **A log holds more than one light integration.** This one has three:
+  a 20-frame group, the 153-frame group, and a drizzle re-integration of the
+  same 153-frame group. Section-scan on `* Begin integration of Light frames`
+  … `* End integration of Light frames` and `* Begin drizzle integration of
+  Light frames`, and do not double-count the drizzle pass — it restacks frames
+  already counted, and would double every `number`.
+- **The paths are Windows staging paths** (`C:/Users/me/PixInsight/…`), from
+  the PixInsight box. They resolve nowhere on the Mac. Match on **basename
+  only**, exactly as F2 does — `wbpplog.py` already established this and its
+  `parse_log_nights` is the piece to extend rather than re-parse from scratch.
+- **A log is a run, not an edit.** An image published to AstroBin may combine
+  several runs (and, for M3 mosaics, one run per panel). The command needs to
+  accept more than one log and merge rows before writing the CSV.
+- **The CSV column set is AstroBin's, and it changes.** Last known long-exposure
+  header is `date,filter,number,duration,binning,gain,sensorCooling,fNumber,
+  darks,flats,flatDarks,bias,bortle,meanSqm,meanFwhm,temperature`, and `filter`
+  takes an AstroBin **filter ID**, not a name. Verify against AstroBin's own
+  import help before writing the header, and keep the mapping (our filter name
+  → AstroBin ID) in config, not in code.
+
+**Open question:** should the row also be reconcilable against the catalog —
+i.e. print "session 2026-08-28 shot 60, stacked 57" so culling is visible? That
+is the same per-frame windowing that F4 deferred for guiding stats. Worth
+having; not required for the CSV.
+
 ---
 
 ## S — Observation sites & conditions
